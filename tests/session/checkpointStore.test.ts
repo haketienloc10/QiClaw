@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { CheckpointStore } from '../../src/session/checkpointStore.js';
+import { createInteractiveCheckpointJson } from '../../src/session/session.js';
 
 describe('CheckpointStore', () => {
   const tempDirs: string[] = [];
@@ -68,6 +69,96 @@ describe('CheckpointStore', () => {
       taskId: 't2',
       status: 'completed',
       checkpointJson: '{"step":2}'
+    });
+  });
+
+  it('returns the latest checkpoint across sessions ordered by updatedAt', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'checkpoint-store-'));
+    tempDirs.push(tempDir);
+
+    const filename = join(tempDir, 'checkpoint.sqlite');
+    const store = new CheckpointStore(filename);
+
+    store.save({
+      sessionId: 'older-session',
+      taskId: 't1',
+      status: 'completed',
+      checkpointJson: createInteractiveCheckpointJson({
+        version: 1,
+        history: [],
+        historySummary: 'older summary'
+      }),
+      updatedAt: '2026-03-30T10:00:00.000Z'
+    });
+
+    store.save({
+      sessionId: 'newer-session',
+      taskId: 't2',
+      status: 'completed',
+      checkpointJson: createInteractiveCheckpointJson({
+        version: 1,
+        history: [],
+        historySummary: 'newer summary'
+      }),
+      updatedAt: '2026-03-30T11:00:00.000Z'
+    });
+
+    const checkpoint = store.getLatest();
+
+    expect(checkpoint).toMatchObject({
+      sessionId: 'newer-session',
+      taskId: 't2',
+      status: 'completed',
+      checkpointJson: createInteractiveCheckpointJson({
+        version: 1,
+        history: [],
+        historySummary: 'newer summary'
+      }),
+      updatedAt: '2026-03-30T11:00:00.000Z'
+    });
+  });
+
+  it('returns the same latest checkpoint when updatedAt ties by using session id as a secondary sort key', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'checkpoint-store-'));
+    tempDirs.push(tempDir);
+
+    const filename = join(tempDir, 'checkpoint.sqlite');
+    const store = new CheckpointStore(filename);
+
+    store.save({
+      sessionId: 'alpha-session',
+      taskId: 't1',
+      status: 'completed',
+      checkpointJson: createInteractiveCheckpointJson({
+        version: 1,
+        history: [],
+        historySummary: 'alpha summary'
+      }),
+      updatedAt: '2026-03-30T11:00:00.000Z'
+    });
+
+    store.save({
+      sessionId: 'omega-session',
+      taskId: 't2',
+      status: 'completed',
+      checkpointJson: createInteractiveCheckpointJson({
+        version: 1,
+        history: [],
+        historySummary: 'omega summary'
+      }),
+      updatedAt: '2026-03-30T11:00:00.000Z'
+    });
+
+    expect(store.getLatest()).toMatchObject({
+      sessionId: 'omega-session',
+      taskId: 't2',
+      status: 'completed',
+      checkpointJson: createInteractiveCheckpointJson({
+        version: 1,
+        history: [],
+        historySummary: 'omega summary'
+      }),
+      updatedAt: '2026-03-30T11:00:00.000Z'
     });
   });
 

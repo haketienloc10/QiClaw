@@ -1,5 +1,14 @@
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { createAgentRuntime, type AgentRuntime } from '../agent/runtime.js';
 import { runAgentTurn, type RunAgentTurnInput, type RunAgentTurnResult } from '../agent/loop.js';
+import { CheckpointStore } from '../session/checkpointStore.js';
+import {
+  createInteractiveCheckpointJson,
+  createSessionId,
+  getCheckpointStorePath,
+  parseInteractiveCheckpointJson
+} from '../session/session.js';
 import { createInMemoryMetricsObserver } from '../telemetry/metrics.js';
 import { createRepl } from './repl.js';
 
@@ -7,13 +16,24 @@ export type Cli = {
   run(): Promise<number>;
 };
 
+type CliRunTurnInput = RunAgentTurnInput & {
+  sessionId?: string;
+};
+
+export type CliRunTurnResult = RunAgentTurnResult & {
+  historySummary?: string;
+};
+
 export interface BuildCliOptions {
   argv?: string[];
   cwd?: string;
   stdout?: Pick<NodeJS.WriteStream, 'write'>;
   stderr?: Pick<NodeJS.WriteStream, 'write'>;
+  readLine?: (promptLabel: string) => Promise<string | undefined>;
   createRuntime?: (options: { model: string; cwd: string; observer?: AgentRuntime['observer'] }) => AgentRuntime;
-  runTurn?: (input: RunAgentTurnInput) => Promise<RunAgentTurnResult>;
+  createCheckpointStore?: (filename: string) => CheckpointStore;
+  createSessionId?: () => string;
+  runTurn?: (input: CliRunTurnInput) => Promise<CliRunTurnResult>;
 }
 
 export function buildCli(options: BuildCliOptions = {}): Cli {
@@ -23,7 +43,11 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
   const stderr = options.stderr ?? process.stderr;
   const metrics = createInMemoryMetricsObserver();
   const createRuntime = options.createRuntime ?? ((runtimeOptions) => createAgentRuntime(runtimeOptions));
-  const executeTurn = options.runTurn ?? runAgentTurn;
+  const checkpointStoreFactory = options.createCheckpointStore ?? ((filename) => new CheckpointStore(filename));
+  const sessionIdFactory = options.createSessionId ?? createSessionId;
+  const executeTurn: (input: CliRunTurnInput) => Promise<CliRunTurnResult> = options.runTurn
+    ? options.runTurn
+    : async ({ sessionId: _sessionId, ...input }) => runAgentTurn(input);
 
   return {
     async run() {
@@ -35,29 +59,81 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
           observer: metrics
         });
         const observer = runtime.observer;
+
+        if (parsed.prompt) {
+          const repl = createRepl({
+            promptLabel: 'qiclaw> ',
+            readLine: options.readLine,
+            async runTurn(userInput) {
+              return executeTurn({
+                provider: runtime.provider,
+                availableTools: runtime.availableTools,
+                baseSystemPrompt: 'You are a minimal single-agent CLI runtime.',
+                userInput,
+                cwd: runtime.cwd,
+                maxToolRounds: 3,
+                observer
+              });
+            },
+            writeLine(text) {
+              stdout.write(`${text}\n`);
+            }
+          });
+          const result = await repl.runOnce(parsed.prompt);
+          stdout.write(`${result.finalAnswer}\n`);
+          return 0;
+        }
+
+        const checkpointStorePath = getCheckpointStorePath(runtime.cwd);
+        mkdirSync(dirname(checkpointStorePath), { recursive: true });
+        const checkpointStore = checkpointStoreFactory(checkpointStorePath);
+        const latestCheckpoint = checkpointStore.getLatest();
+        const restored = latestCheckpoint
+          ? parseInteractiveCheckpointJson(latestCheckpoint.checkpointJson)
+          : undefined;
+
+        let sessionId = restored ? latestCheckpoint?.sessionId ?? sessionIdFactory() : sessionIdFactory();
+        let history = restored?.history ?? [];
+        let historySummary = restored?.historySummary;
+
         const repl = createRepl({
           promptLabel: 'qiclaw> ',
+          readLine: options.readLine,
           async runTurn(userInput) {
-            return executeTurn({
+            const result = await executeTurn({
               provider: runtime.provider,
               availableTools: runtime.availableTools,
               baseSystemPrompt: 'You are a minimal single-agent CLI runtime.',
               userInput,
               cwd: runtime.cwd,
               maxToolRounds: 3,
-              observer
+              observer,
+              history,
+              historySummary,
+              sessionId
             });
+
+            if (result.stopReason === 'completed' || result.stopReason === 'max_tool_rounds_reached') {
+              history = result.history;
+              historySummary = readTurnHistorySummary(result) ?? historySummary;
+              checkpointStore.save({
+                sessionId,
+                taskId: 'interactive',
+                status: result.stopReason === 'completed' ? 'completed' : 'running',
+                checkpointJson: createInteractiveCheckpointJson({
+                  version: 1,
+                  history,
+                  historySummary
+                })
+              });
+            }
+
+            return result;
           },
           writeLine(text) {
             stdout.write(`${text}\n`);
           }
         });
-
-        if (parsed.prompt) {
-          const result = await repl.runOnce(parsed.prompt);
-          stdout.write(`${result.finalAnswer}\n`);
-          return 0;
-        }
 
         return repl.runInteractive();
       } catch (error) {
@@ -66,6 +142,11 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
       }
     }
   };
+}
+
+function readTurnHistorySummary(result: RunAgentTurnResult): string | undefined {
+  const maybeResult = result as RunAgentTurnResult & { historySummary?: string };
+  return maybeResult.historySummary;
 }
 
 function parseArgs(argv: string[]): { prompt?: string; model: string } {

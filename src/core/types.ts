@@ -4,6 +4,8 @@ export interface Message {
   role: MessageRole;
   content: string;
   name?: string;
+  toolCallId?: string;
+  isError?: boolean;
 }
 
 export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed';

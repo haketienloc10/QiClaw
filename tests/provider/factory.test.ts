@@ -14,13 +14,17 @@ describe('createProvider', () => {
   it('resolves provider config from env with provider-specific defaults and overrides', () => {
     const previousAnthropicBaseUrl = process.env.ANTHROPIC_BASE_URL;
     const previousAnthropicApiKey = process.env.ANTHROPIC_API_KEY;
+    const previousAnthropicModel = process.env.ANTHROPIC_MODEL;
     const previousOpenAIBaseUrl = process.env.OPENAI_BASE_URL;
     const previousOpenAIApiKey = process.env.OPENAI_API_KEY;
+    const previousOpenAIModel = process.env.OPENAI_MODEL;
 
     process.env.ANTHROPIC_BASE_URL = 'https://anthropic.example/v1';
     process.env.ANTHROPIC_API_KEY = 'anthropic-env-key';
+    process.env.ANTHROPIC_MODEL = 'claude-env-model';
     process.env.OPENAI_BASE_URL = 'https://openai.example/v1';
     process.env.OPENAI_API_KEY = 'openai-env-key';
+    process.env.OPENAI_MODEL = 'gpt-env-model';
 
     expect(parseProviderId('anthropic')).toBe('anthropic');
     expect(parseProviderId('openai')).toBe('openai');
@@ -30,14 +34,14 @@ describe('createProvider', () => {
 
     expect(resolveProviderConfig({ provider: 'anthropic' })).toEqual({
       provider: 'anthropic',
-      model: 'claude-opus-4-6',
+      model: 'claude-env-model',
       baseUrl: 'https://anthropic.example/v1',
       apiKey: 'anthropic-env-key'
     });
 
     expect(resolveProviderConfig({ provider: 'openai' })).toEqual({
       provider: 'openai',
-      model: 'gpt-4.1',
+      model: 'gpt-env-model',
       baseUrl: 'https://openai.example/v1',
       apiKey: 'openai-env-key'
     });
@@ -66,6 +70,12 @@ describe('createProvider', () => {
       process.env.ANTHROPIC_API_KEY = previousAnthropicApiKey;
     }
 
+    if (previousAnthropicModel === undefined) {
+      delete process.env.ANTHROPIC_MODEL;
+    } else {
+      process.env.ANTHROPIC_MODEL = previousAnthropicModel;
+    }
+
     if (previousOpenAIBaseUrl === undefined) {
       delete process.env.OPENAI_BASE_URL;
     } else {
@@ -76,6 +86,12 @@ describe('createProvider', () => {
       delete process.env.OPENAI_API_KEY;
     } else {
       process.env.OPENAI_API_KEY = previousOpenAIApiKey;
+    }
+
+    if (previousOpenAIModel === undefined) {
+      delete process.env.OPENAI_MODEL;
+    } else {
+      process.env.OPENAI_MODEL = previousOpenAIModel;
     }
   });
 });

@@ -27,10 +27,21 @@ export function getDefaultModelForProvider(provider: ProviderId): string {
 export function resolveProviderConfig(input: ResolveProviderConfigInput): ResolvedProviderConfig {
   return {
     provider: input.provider,
-    model: input.model ?? getDefaultModelForProvider(input.provider),
+    model: input.model ?? getProviderModelFromEnv(input.provider) ?? getDefaultModelForProvider(input.provider),
     baseUrl: input.baseUrl ?? getProviderBaseUrlFromEnv(input.provider),
     apiKey: input.apiKey ?? getProviderApiKeyFromEnv(input.provider)
   };
+}
+
+function getProviderModelFromEnv(provider: ProviderId): string | undefined {
+  switch (provider) {
+    case 'anthropic':
+      return process.env.ANTHROPIC_MODEL;
+    case 'openai':
+      return process.env.OPENAI_MODEL;
+    default:
+      return undefined;
+  }
 }
 
 function getProviderBaseUrlFromEnv(provider: ProviderId): string | undefined {

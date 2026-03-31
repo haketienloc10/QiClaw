@@ -12,19 +12,30 @@ import { createInMemoryMetricsObserver } from '../../src/telemetry/metrics.js';
 import { createTelemetryEvent } from '../../src/telemetry/observer.js';
 
 const tempDirs: string[] = [];
-const openAIEnvKeys = ['OPENAI_BASE_URL', 'OPENAI_API_KEY'] as const;
+const providerEnvKeys = [
+  'OPENAI_BASE_URL',
+  'OPENAI_API_KEY',
+  'OPENAI_MODEL',
+  'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_MODEL'
+] as const;
 
-type OpenAIEnvSnapshot = Partial<Record<(typeof openAIEnvKeys)[number], string>>;
+type ProviderEnvSnapshot = Partial<Record<(typeof providerEnvKeys)[number], string>>;
 
-function snapshotOpenAIEnv(): OpenAIEnvSnapshot {
+function snapshotProviderEnv(): ProviderEnvSnapshot {
   return {
     OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
-    OPENAI_API_KEY: process.env.OPENAI_API_KEY
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    OPENAI_MODEL: process.env.OPENAI_MODEL,
+    ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL,
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    ANTHROPIC_MODEL: process.env.ANTHROPIC_MODEL
   };
 }
 
-function restoreOpenAIEnv(snapshot: OpenAIEnvSnapshot): void {
-  for (const key of openAIEnvKeys) {
+function restoreProviderEnv(snapshot: ProviderEnvSnapshot): void {
+  for (const key of providerEnvKeys) {
     const value = snapshot[key];
     if (value === undefined) {
       delete process.env[key];
@@ -34,13 +45,13 @@ function restoreOpenAIEnv(snapshot: OpenAIEnvSnapshot): void {
   }
 }
 
-async function withOpenAIEnvSnapshot(run: () => Promise<void> | void): Promise<void> {
-  const snapshot = snapshotOpenAIEnv();
+async function withProviderEnvSnapshot(run: () => Promise<void> | void): Promise<void> {
+  const snapshot = snapshotProviderEnv();
 
   try {
     await run();
   } finally {
-    restoreOpenAIEnv(snapshot);
+    restoreProviderEnv(snapshot);
   }
 }
 
@@ -158,50 +169,56 @@ describe('buildCli', () => {
   });
 
   it('runs a prompt through the runtime turn runner and prints the final answer', async () => {
-    const writes: string[] = [];
-    const cli = buildCli({
-      argv: ['--prompt', 'inspect package.json'],
-      cwd: '/tmp/qiclaw-test',
-      stdout: {
-        write(chunk) {
-          writes.push(String(chunk));
-          return true;
-        }
-      },
-      createRuntime: (runtimeOptions) => {
-        expect(runtimeOptions.provider).toBe('anthropic');
-        expect(runtimeOptions.model).toBe('claude-opus-4-6');
+    await withProviderEnvSnapshot(async () => {
+      delete process.env.ANTHROPIC_BASE_URL;
+      delete process.env.ANTHROPIC_API_KEY;
+      delete process.env.ANTHROPIC_MODEL;
 
-        return {
-          provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
-          availableTools: [],
-          cwd: '/tmp/qiclaw-test',
-          observer: runtimeOptions.observer ?? { record() {} }
-        };
-      },
-      runTurn: async (input) => ({
-        stopReason: 'completed',
-        finalAnswer: `handled: ${input.userInput}`,
-        history: [],
-        toolRoundsUsed: 0,
-        doneCriteria: {
-          goal: input.userInput,
-          checklist: [input.userInput],
-          requiresNonEmptyFinalAnswer: true,
-          requiresToolEvidence: false
+      const writes: string[] = [];
+      const cli = buildCli({
+        argv: ['--prompt', 'inspect package.json'],
+        cwd: '/tmp/qiclaw-test',
+        stdout: {
+          write(chunk) {
+            writes.push(String(chunk));
+            return true;
+          }
         },
-        verification: {
-          isVerified: true,
-          finalAnswerIsNonEmpty: true,
-          toolEvidenceSatisfied: true,
-          toolMessagesCount: 0,
-          checks: []
-        }
-      })
-    });
+        createRuntime: (runtimeOptions) => {
+          expect(runtimeOptions.provider).toBe('anthropic');
+          expect(runtimeOptions.model).toBe('claude-opus-4-6');
 
-    await expect(cli.run()).resolves.toBe(0);
-    expect(writes).toEqual(['handled: inspect package.json\n']);
+          return {
+            provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+            availableTools: [],
+            cwd: '/tmp/qiclaw-test',
+            observer: runtimeOptions.observer ?? { record() {} }
+          };
+        },
+        runTurn: async (input) => ({
+          stopReason: 'completed',
+          finalAnswer: `handled: ${input.userInput}`,
+          history: [],
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            toolEvidenceSatisfied: true,
+            toolMessagesCount: 0,
+            checks: []
+          }
+        })
+      });
+
+      await expect(cli.run()).resolves.toBe(0);
+      expect(writes).toEqual(['handled: inspect package.json\n']);
+    });
   });
 
   it('passes the selected provider and model to runtime creation in prompt mode', async () => {
@@ -445,7 +462,7 @@ describe('buildCli', () => {
   });
 
   it('lets CLI overrides win over provider-specific env vars', async () => {
-    await withOpenAIEnvSnapshot(async () => {
+    await withProviderEnvSnapshot(async () => {
       process.env.OPENAI_BASE_URL = 'https://openai-env.example/v1';
       process.env.OPENAI_API_KEY = 'openai-env-key';
 
@@ -464,17 +481,19 @@ describe('buildCli', () => {
   });
 
   it('loads provider config from a cwd .env file before creating the runtime', async () => {
-    await withOpenAIEnvSnapshot(async () => {
+    await withProviderEnvSnapshot(async () => {
       const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-env-'));
       tempDirs.push(tempDir);
 
       await writeFile(join(tempDir, '.env'), [
         'OPENAI_BASE_URL=https://openai-from-dotenv.example/v1',
-        'OPENAI_API_KEY=openai-dotenv-key'
+        'OPENAI_API_KEY=openai-dotenv-key',
+        'OPENAI_MODEL=gpt-from-dotenv'
       ].join('\n'), 'utf8');
 
       delete process.env.OPENAI_BASE_URL;
       delete process.env.OPENAI_API_KEY;
+      delete process.env.OPENAI_MODEL;
 
       const cli = buildCli({
         argv: ['--provider', 'openai', '--prompt', 'inspect package.json'],
@@ -482,7 +501,7 @@ describe('buildCli', () => {
         createRuntime: (runtimeOptions) => {
           expect(runtimeOptions).toMatchObject({
             provider: 'openai',
-            model: 'gpt-4.1',
+            model: 'gpt-from-dotenv',
             baseUrl: 'https://openai-from-dotenv.example/v1',
             apiKey: 'openai-dotenv-key',
             cwd: tempDir
@@ -504,21 +523,24 @@ describe('buildCli', () => {
   });
 
   it('prefers .env.local values over .env values from the same cwd', async () => {
-    await withOpenAIEnvSnapshot(async () => {
+    await withProviderEnvSnapshot(async () => {
       const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-env-local-'));
       tempDirs.push(tempDir);
 
       await writeFile(join(tempDir, '.env'), [
         'OPENAI_BASE_URL=https://openai-from-dotenv.example/v1',
-        'OPENAI_API_KEY=openai-dotenv-key'
+        'OPENAI_API_KEY=openai-dotenv-key',
+        'OPENAI_MODEL=gpt-from-dotenv'
       ].join('\n'), 'utf8');
       await writeFile(join(tempDir, '.env.local'), [
         'OPENAI_BASE_URL=https://openai-from-dotenv-local.example/v1',
-        'OPENAI_API_KEY=openai-dotenv-local-key'
+        'OPENAI_API_KEY=openai-dotenv-local-key',
+        'OPENAI_MODEL=gpt-from-dotenv-local'
       ].join('\n'), 'utf8');
 
       delete process.env.OPENAI_BASE_URL;
       delete process.env.OPENAI_API_KEY;
+      delete process.env.OPENAI_MODEL;
 
       const cli = buildCli({
         argv: ['--provider', 'openai', '--prompt', 'inspect package.json'],
@@ -526,7 +548,7 @@ describe('buildCli', () => {
         createRuntime: (runtimeOptions) => {
           expect(runtimeOptions).toMatchObject({
             provider: 'openai',
-            model: 'gpt-4.1',
+            model: 'gpt-from-dotenv-local',
             baseUrl: 'https://openai-from-dotenv-local.example/v1',
             apiKey: 'openai-dotenv-local-key',
             cwd: tempDir
@@ -548,27 +570,31 @@ describe('buildCli', () => {
   });
 
   it('does not let env files overwrite variables already present in process.env', async () => {
-    await withOpenAIEnvSnapshot(async () => {
+    await withProviderEnvSnapshot(async () => {
       const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-env-shell-'));
       tempDirs.push(tempDir);
 
       await writeFile(join(tempDir, '.env'), [
         'OPENAI_BASE_URL=https://openai-from-dotenv.example/v1',
-        'OPENAI_API_KEY=openai-dotenv-key'
+        'OPENAI_API_KEY=openai-dotenv-key',
+        'OPENAI_MODEL=gpt-from-dotenv'
       ].join('\n'), 'utf8');
       await writeFile(join(tempDir, '.env.local'), [
         'OPENAI_BASE_URL=https://openai-from-dotenv-local.example/v1',
-        'OPENAI_API_KEY=openai-dotenv-local-key'
+        'OPENAI_API_KEY=openai-dotenv-local-key',
+        'OPENAI_MODEL=gpt-from-dotenv-local'
       ].join('\n'), 'utf8');
 
       process.env.OPENAI_BASE_URL = 'https://openai-from-shell.example/v1';
       process.env.OPENAI_API_KEY = 'openai-shell-key';
+      process.env.OPENAI_MODEL = 'gpt-from-shell';
 
       const cli = buildCli({
         argv: ['--provider', 'openai', '--prompt', 'inspect package.json'],
         cwd: tempDir,
         createRuntime: (runtimeOptions) => {
           expect(runtimeOptions).toMatchObject({
+            model: 'gpt-from-shell',
             baseUrl: 'https://openai-from-shell.example/v1',
             apiKey: 'openai-shell-key'
           });
@@ -589,21 +615,24 @@ describe('buildCli', () => {
   });
 
   it('lets CLI flags override env file values before creating the runtime', async () => {
-    await withOpenAIEnvSnapshot(async () => {
+    await withProviderEnvSnapshot(async () => {
       const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-env-override-'));
       tempDirs.push(tempDir);
 
       await writeFile(join(tempDir, '.env'), [
         'OPENAI_BASE_URL=https://openai-from-dotenv.example/v1',
-        'OPENAI_API_KEY=openai-dotenv-key'
+        'OPENAI_API_KEY=openai-dotenv-key',
+        'OPENAI_MODEL=gpt-from-dotenv'
       ].join('\n'), 'utf8');
       await writeFile(join(tempDir, '.env.local'), [
         'OPENAI_BASE_URL=https://openai-from-dotenv-local.example/v1',
-        'OPENAI_API_KEY=openai-dotenv-local-key'
+        'OPENAI_API_KEY=openai-dotenv-local-key',
+        'OPENAI_MODEL=gpt-from-dotenv-local'
       ].join('\n'), 'utf8');
 
       delete process.env.OPENAI_BASE_URL;
       delete process.env.OPENAI_API_KEY;
+      delete process.env.OPENAI_MODEL;
 
       const cli = buildCli({
         argv: [
@@ -620,7 +649,7 @@ describe('buildCli', () => {
         createRuntime: (runtimeOptions) => {
           expect(runtimeOptions).toMatchObject({
             provider: 'openai',
-            model: 'gpt-4.1',
+            model: 'gpt-from-dotenv-local',
             baseUrl: 'https://openai-from-cli.example/v1',
             apiKey: 'openai-cli-key',
             cwd: tempDir

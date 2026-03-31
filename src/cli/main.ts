@@ -211,7 +211,7 @@ function parseArgs(argv: string[]): {
   debugLogPath?: string;
 } {
   let prompt: string | undefined;
-  let provider: ProviderId = 'anthropic';
+  let provider = resolveDefaultProviderFromEnv();
   let model: string | undefined;
   let baseUrl: string | undefined;
   let apiKey: string | undefined;
@@ -307,6 +307,16 @@ function parseArgs(argv: string[]): {
     apiKey,
     debugLogPath
   };
+}
+
+function resolveDefaultProviderFromEnv(): ProviderId {
+  const providerFromEnv = process.env.MODEL?.trim();
+
+  if (!providerFromEnv) {
+    return 'anthropic';
+  }
+
+  return parseProviderId(providerFromEnv);
 }
 
 function loadCliEnvFiles(cwd: string): void {

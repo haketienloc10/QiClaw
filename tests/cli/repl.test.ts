@@ -13,6 +13,7 @@ import { createTelemetryEvent } from '../../src/telemetry/observer.js';
 
 const tempDirs: string[] = [];
 const providerEnvKeys = [
+  'MODEL',
   'OPENAI_BASE_URL',
   'OPENAI_API_KEY',
   'OPENAI_MODEL',
@@ -26,6 +27,7 @@ type ProviderEnvSnapshot = Partial<Record<(typeof providerEnvKeys)[number], stri
 
 function snapshotProviderEnv(): ProviderEnvSnapshot {
   return {
+    MODEL: process.env.MODEL,
     OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
     OPENAI_API_KEY: process.env.OPENAI_API_KEY,
     OPENAI_MODEL: process.env.OPENAI_MODEL,
@@ -482,6 +484,7 @@ describe('buildCli', () => {
 
   it('runs a prompt through the runtime turn runner and prints the final answer', async () => {
     await withProviderEnvSnapshot(async () => {
+      delete process.env.MODEL;
       delete process.env.ANTHROPIC_BASE_URL;
       delete process.env.ANTHROPIC_API_KEY;
       delete process.env.ANTHROPIC_MODEL;
@@ -991,6 +994,165 @@ describe('buildCli', () => {
       });
 
       await expect(cli.run()).resolves.toBe(0);
+    });
+  });
+
+  it('uses MODEL from .env.local to select the provider when --provider is omitted', async () => {
+    await withProviderEnvSnapshot(async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-provider-from-env-local-'));
+      tempDirs.push(tempDir);
+
+      await writeFile(join(tempDir, '.env'), [
+        'MODEL=anthropic',
+        'OPENAI_MODEL=gpt-from-dotenv',
+        'ANTHROPIC_MODEL=claude-from-dotenv'
+      ].join('\n'), 'utf8');
+      await writeFile(join(tempDir, '.env.local'), [
+        'MODEL=openai',
+        'OPENAI_MODEL=gpt-from-dotenv-local'
+      ].join('\n'), 'utf8');
+
+      delete process.env.MODEL;
+      delete process.env.OPENAI_MODEL;
+      delete process.env.ANTHROPIC_MODEL;
+
+      const cli = buildCli({
+        argv: ['--prompt', 'inspect package.json'],
+        cwd: tempDir,
+        createRuntime: (runtimeOptions) => {
+          expect(runtimeOptions).toMatchObject({
+            provider: 'openai',
+            model: 'gpt-from-dotenv-local',
+            cwd: tempDir
+          });
+
+          return {
+            provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
+            availableTools: [],
+            cwd: runtimeOptions.cwd,
+            observer: runtimeOptions.observer ?? { record() {} }
+          };
+        },
+        stdout: { write() { return true; } },
+        runTurn: createSuccessfulRunTurn()
+      });
+
+      await expect(cli.run()).resolves.toBe(0);
+    });
+  });
+
+  it('lets --provider override MODEL from env files', async () => {
+    await withProviderEnvSnapshot(async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-provider-flag-over-env-'));
+      tempDirs.push(tempDir);
+
+      await writeFile(join(tempDir, '.env'), [
+        'MODEL=openai',
+        'OPENAI_MODEL=gpt-from-dotenv',
+        'ANTHROPIC_MODEL=claude-from-dotenv'
+      ].join('\n'), 'utf8');
+      await writeFile(join(tempDir, '.env.local'), [
+        'MODEL=openai',
+        'ANTHROPIC_MODEL=claude-from-dotenv-local'
+      ].join('\n'), 'utf8');
+
+      delete process.env.MODEL;
+      delete process.env.OPENAI_MODEL;
+      delete process.env.ANTHROPIC_MODEL;
+
+      const cli = buildCli({
+        argv: ['--provider', 'anthropic', '--prompt', 'inspect package.json'],
+        cwd: tempDir,
+        createRuntime: (runtimeOptions) => {
+          expect(runtimeOptions).toMatchObject({
+            provider: 'anthropic',
+            model: 'claude-from-dotenv-local',
+            cwd: tempDir
+          });
+
+          return {
+            provider: { name: 'anthropic', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
+            availableTools: [],
+            cwd: runtimeOptions.cwd,
+            observer: runtimeOptions.observer ?? { record() {} }
+          };
+        },
+        stdout: { write() { return true; } },
+        runTurn: createSuccessfulRunTurn()
+      });
+
+      await expect(cli.run()).resolves.toBe(0);
+    });
+  });
+
+  it('keeps anthropic as the default provider when MODEL is absent', async () => {
+    await withProviderEnvSnapshot(async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-provider-default-'));
+      tempDirs.push(tempDir);
+
+      await writeFile(join(tempDir, '.env'), [
+        'OPENAI_MODEL=gpt-from-dotenv',
+        'ANTHROPIC_MODEL=claude-from-dotenv'
+      ].join('\n'), 'utf8');
+
+      delete process.env.MODEL;
+      delete process.env.OPENAI_MODEL;
+      delete process.env.ANTHROPIC_MODEL;
+
+      const cli = buildCli({
+        argv: ['--prompt', 'inspect package.json'],
+        cwd: tempDir,
+        createRuntime: (runtimeOptions) => {
+          expect(runtimeOptions).toMatchObject({
+            provider: 'anthropic',
+            model: 'claude-from-dotenv',
+            cwd: tempDir
+          });
+
+          return {
+            provider: { name: 'anthropic', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
+            availableTools: [],
+            cwd: runtimeOptions.cwd,
+            observer: runtimeOptions.observer ?? { record() {} }
+          };
+        },
+        stdout: { write() { return true; } },
+        runTurn: createSuccessfulRunTurn()
+      });
+
+      await expect(cli.run()).resolves.toBe(0);
+    });
+  });
+
+  it('returns exit code 1 when MODEL from env is not a supported provider', async () => {
+    await withProviderEnvSnapshot(async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-provider-invalid-env-'));
+      tempDirs.push(tempDir);
+
+      await writeFile(join(tempDir, '.env.local'), [
+        'MODEL=bedrock'
+      ].join('\n'), 'utf8');
+
+      delete process.env.MODEL;
+
+      const stderrWrites: string[] = [];
+      const cli = buildCli({
+        argv: ['--prompt', 'inspect package.json'],
+        cwd: tempDir,
+        stderr: {
+          write(chunk) {
+            stderrWrites.push(String(chunk));
+            return true;
+          }
+        },
+        createRuntime() {
+          throw new Error('runtime should not be created for an invalid provider env');
+        },
+        readLine: async () => '/exit'
+      });
+
+      await expect(cli.run()).resolves.toBe(1);
+      expect(stderrWrites).toEqual(['Unknown provider: bedrock\n']);
     });
   });
 

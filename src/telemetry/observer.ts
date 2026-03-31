@@ -109,7 +109,7 @@ export function createNoopObserver(): TelemetryObserver {
 
 export function createTelemetryEvent<TType extends TelemetryEventType>(
   type: TType,
-  data: TelemetryEventDataMap[TType] = {}
+  data: TelemetryEventDataMap[TType]
 ): TelemetryEvent<TType> {
   return {
     type,

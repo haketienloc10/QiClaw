@@ -29,12 +29,41 @@ import {
   type ProviderResponse,
   type ToolCallRequest
 } from '../../src/provider/model.js';
-import type { TelemetryEvent } from '../../src/telemetry/observer.js';
+import { createTelemetryEvent, type TelemetryEvent } from '../../src/telemetry/observer.js';
 import { editFileTool } from '../../src/tools/editFile.js';
 import { getBuiltinToolNames, getBuiltinTools, getTool, hasTool, type Tool, type ToolContext } from '../../src/tools/registry.js';
 import { readFileTool } from '../../src/tools/readFile.js';
 import { searchTool } from '../../src/tools/search.js';
 import { shellTool } from '../../src/tools/shell.js';
+
+describe('telemetry typing', () => {
+  it('requires payloads for events whose contracts need data', () => {
+    // @ts-expect-error provider_called requires telemetry payload data
+    createTelemetryEvent('provider_called');
+    // @ts-expect-error provider_responded requires telemetry payload data
+    createTelemetryEvent('provider_responded');
+  });
+
+  it('accepts payloads for required-data events', () => {
+    const providerCalledEvent = createTelemetryEvent('provider_called', {
+      messageCount: 1,
+      promptRawChars: 1,
+      toolNames: [],
+      messageSummaries: [],
+      totalContentBlockCount: 0,
+      hasSystemPrompt: false,
+      promptRawPreviewRedacted: '{}'
+    });
+    const providerRespondedEvent = createTelemetryEvent('provider_responded', {
+      responseContentBlockCount: 0,
+      toolCallCount: 0,
+      hasTextOutput: false
+    });
+
+    expect(providerCalledEvent.data.messageCount).toBe(1);
+    expect(providerRespondedEvent.data.toolCallCount).toBe(0);
+  });
+});
 
 describe('tool registry', () => {
   it('registers the built-in tool names in a stable order', () => {

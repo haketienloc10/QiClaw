@@ -29,7 +29,7 @@ import {
   type ProviderResponse,
   type ToolCallRequest
 } from '../../src/provider/model.js';
-import { createTelemetryEvent, type TelemetryEvent, type TelemetryEventType } from '../../src/telemetry/observer.js';
+import { createTelemetryEvent, type TelemetryEvent } from '../../src/telemetry/observer.js';
 import { editFileTool } from '../../src/tools/editFile.js';
 import { getBuiltinToolNames, getBuiltinTools, getTool, hasTool, type Tool, type ToolContext } from '../../src/tools/registry.js';
 import { readFileTool } from '../../src/tools/readFile.js';
@@ -63,15 +63,24 @@ describe('telemetry typing', () => {
     expect(providerCalledEvent.data.messageCount).toBe(1);
     expect(providerRespondedEvent.data.toolCallCount).toBe(0);
   });
-});
 
-function expectTelemetryEvent<TType extends TelemetryEventType>(
-  event: TelemetryEvent | undefined,
-  type: TType
-): TelemetryEvent<TType> {
-  expect(event?.type).toBe(type);
-  return event as TelemetryEvent<TType>;
-}
+  it('narrows telemetry payloads from event.type without helper casts', () => {
+    const event: TelemetryEvent = createTelemetryEvent('tool_call_completed', {
+      toolName: 'json_tool',
+      toolCallId: 'call-json-telemetry',
+      isError: false,
+      resultPreview: '{}',
+      resultRawRedacted: {}
+    });
+
+    if (event.type !== 'tool_call_completed') {
+      throw new Error('expected tool_call_completed event');
+    }
+
+    expect(event.data.toolName).toBe('json_tool');
+    expect(event.data.resultRawRedacted).toEqual({});
+  });
+});
 
 describe('tool registry', () => {
   it('registers the built-in tool names in a stable order', () => {
@@ -1403,8 +1412,12 @@ describe('agent loop', () => {
       }
     });
 
-    const toolCallStartedEvent = expectTelemetryEvent(observedEvents[3], 'tool_call_started');
+    const toolCallStartedEvent = observedEvents[3];
 
+    expect(toolCallStartedEvent?.type).toBe('tool_call_started');
+    if (!toolCallStartedEvent || toolCallStartedEvent.type !== 'tool_call_started') {
+      throw new Error('expected tool_call_started event');
+    }
     expect(toolCallStartedEvent).toMatchObject({
       type: 'tool_call_started',
       data: {
@@ -1479,8 +1492,12 @@ describe('agent loop', () => {
       }
     });
 
-    const toolCallCompletedEvent = expectTelemetryEvent(observedEvents[4], 'tool_call_completed');
+    const toolCallCompletedEvent = observedEvents[4];
 
+    expect(toolCallCompletedEvent?.type).toBe('tool_call_completed');
+    if (!toolCallCompletedEvent || toolCallCompletedEvent.type !== 'tool_call_completed') {
+      throw new Error('expected tool_call_completed event');
+    }
     expect(toolCallCompletedEvent).toMatchObject({
       type: 'tool_call_completed',
       data: {

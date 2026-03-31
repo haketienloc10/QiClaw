@@ -91,11 +91,13 @@ export interface TelemetryEventDataMap {
   turn_failed: TurnFailedTelemetryData;
 }
 
-export interface TelemetryEvent<TType extends TelemetryEventType = TelemetryEventType> {
-  type: TType;
-  timestamp: string;
-  data: TelemetryEventDataMap[TType];
-}
+export type TelemetryEvent<TType extends TelemetryEventType = TelemetryEventType> = {
+  [Type in TType]: {
+    type: Type;
+    timestamp: string;
+    data: TelemetryEventDataMap[Type];
+  };
+}[TType];
 
 export interface TelemetryObserver {
   record(event: TelemetryEvent): void;

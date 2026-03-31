@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { createAgentRuntime, type AgentRuntime } from '../agent/runtime.js';
 import { runAgentTurn, type RunAgentTurnInput, type RunAgentTurnResult } from '../agent/loop.js';
 import { parseProviderId, resolveProviderConfig } from '../provider/config.js';
@@ -11,7 +11,11 @@ import {
   getCheckpointStorePath,
   parseInteractiveCheckpointJson
 } from '../session/session.js';
+import { createCompositeObserver } from '../telemetry/composite.js';
+import { createCompactCliTelemetryObserver } from '../telemetry/display.js';
+import { createFileJsonLineWriter, createJsonLineLogger } from '../telemetry/logger.js';
 import { createInMemoryMetricsObserver } from '../telemetry/metrics.js';
+import type { TelemetryObserver } from '../telemetry/observer.js';
 import { createRepl } from './repl.js';
 
 export type Cli = {
@@ -62,12 +66,18 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
           baseUrl: parsed.baseUrl,
           apiKey: parsed.apiKey
         });
+        const observer = createCliObserver({
+          cwd,
+          stdout,
+          metrics,
+          debugLogPath: parsed.debugLogPath,
+          envDebugLogPath: process.env.QICLAW_DEBUG_LOG
+        });
         const runtime = createRuntime({
           ...providerConfig,
           cwd,
-          observer: metrics
+          observer
         });
-        const observer = runtime.observer;
 
         if (parsed.prompt) {
           const repl = createRepl({
@@ -81,7 +91,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
                 userInput,
                 cwd: runtime.cwd,
                 maxToolRounds: 3,
-                observer
+                observer: observer
               });
             },
             writeLine(text) {
@@ -116,7 +126,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
               userInput,
               cwd: runtime.cwd,
               maxToolRounds: 3,
-              observer,
+              observer: observer,
               history,
               historySummary,
               sessionId
@@ -158,12 +168,50 @@ function readTurnHistorySummary(result: RunAgentTurnResult): string | undefined 
   return maybeResult.historySummary;
 }
 
-function parseArgs(argv: string[]): { prompt?: string; provider: ProviderId; model?: string; baseUrl?: string; apiKey?: string } {
+function createCliObserver(options: {
+  cwd: string;
+  stdout: Pick<NodeJS.WriteStream, 'write'>;
+  metrics: TelemetryObserver;
+  debugLogPath?: string;
+  envDebugLogPath?: string;
+}): TelemetryObserver {
+  const observers: TelemetryObserver[] = [
+    options.metrics,
+    createCompactCliTelemetryObserver({
+      writeLine(text) {
+        options.stdout.write(`${text}\n`);
+      }
+    })
+  ];
+  const selectedDebugLogPath = options.debugLogPath ?? options.envDebugLogPath;
+
+  if (selectedDebugLogPath) {
+    const resolvedDebugLogPath = resolveCliPath(options.cwd, selectedDebugLogPath);
+    mkdirSync(dirname(resolvedDebugLogPath), { recursive: true });
+    observers.push(createJsonLineLogger(createFileJsonLineWriter(resolvedDebugLogPath)));
+  }
+
+  return createCompositeObserver(observers);
+}
+
+function resolveCliPath(cwd: string, filePath: string): string {
+  return isAbsolute(filePath) ? filePath : join(cwd, filePath);
+}
+
+function parseArgs(argv: string[]): {
+  prompt?: string;
+  provider: ProviderId;
+  model?: string;
+  baseUrl?: string;
+  apiKey?: string;
+  debugLogPath?: string;
+} {
   let prompt: string | undefined;
   let provider: ProviderId = 'anthropic';
   let model: string | undefined;
   let baseUrl: string | undefined;
   let apiKey: string | undefined;
+  let debugLogPath: string | undefined;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -228,6 +276,18 @@ function parseArgs(argv: string[]): { prompt?: string; provider: ProviderId; mod
       continue;
     }
 
+    if (token === '--debug-log') {
+      const value = argv[index + 1];
+
+      if (!value || value.startsWith('--')) {
+        throw new Error('Missing value for --debug-log');
+      }
+
+      debugLogPath = value;
+      index += 1;
+      continue;
+    }
+
     if (token.startsWith('--')) {
       throw new Error(`Unknown argument: ${token}`);
     }
@@ -240,7 +300,8 @@ function parseArgs(argv: string[]): { prompt?: string; provider: ProviderId; mod
     provider,
     model,
     baseUrl,
-    apiKey
+    apiKey,
+    debugLogPath
   };
 }
 

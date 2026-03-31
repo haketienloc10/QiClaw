@@ -9,10 +9,22 @@ export type TelemetryEventType =
   | 'turn_stopped'
   | 'turn_failed';
 
-export interface TelemetryEvent {
-  type: TelemetryEventType;
+export interface TelemetryEventDataMap {
+  turn_started: Record<string, unknown>;
+  provider_called: Record<string, unknown>;
+  provider_responded: Record<string, unknown>;
+  tool_call_started: Record<string, unknown>;
+  tool_call_completed: Record<string, unknown>;
+  verification_completed: Record<string, unknown>;
+  turn_completed: Record<string, unknown>;
+  turn_stopped: Record<string, unknown>;
+  turn_failed: Record<string, unknown>;
+}
+
+export interface TelemetryEvent<TType extends TelemetryEventType = TelemetryEventType> {
+  type: TType;
   timestamp: string;
-  data: Record<string, unknown>;
+  data: TelemetryEventDataMap[TType];
 }
 
 export interface TelemetryObserver {
@@ -25,10 +37,10 @@ export function createNoopObserver(): TelemetryObserver {
   };
 }
 
-export function createTelemetryEvent(
-  type: TelemetryEventType,
-  data: Record<string, unknown> = {}
-): TelemetryEvent {
+export function createTelemetryEvent<TType extends TelemetryEventType>(
+  type: TType,
+  data: TelemetryEventDataMap[TType] = {}
+): TelemetryEvent<TType> {
   return {
     type,
     timestamp: new Date().toISOString(),

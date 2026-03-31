@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -18,7 +18,8 @@ const providerEnvKeys = [
   'OPENAI_MODEL',
   'ANTHROPIC_BASE_URL',
   'ANTHROPIC_API_KEY',
-  'ANTHROPIC_MODEL'
+  'ANTHROPIC_MODEL',
+  'QICLAW_DEBUG_LOG'
 ] as const;
 
 type ProviderEnvSnapshot = Partial<Record<(typeof providerEnvKeys)[number], string>>;
@@ -161,6 +162,190 @@ describe('createRepl', () => {
 });
 
 describe('buildCli', () => {
+  it('keeps prompt mode stdout limited to the final answer even when tool telemetry events are recorded', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-telemetry-'));
+    tempDirs.push(tempDir);
+
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: ['--prompt', 'inspect package.json'],
+      cwd: tempDir,
+      stdout: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: tempDir,
+        observer: runtimeOptions.observer ?? { record() {} }
+      }),
+      runTurn: async (input) => {
+        input.observer?.record(createTelemetryEvent('tool_call_started', {
+          toolName: 'Read',
+          toolCallId: 'toolu_1',
+          payload: { path: '/tmp/package.json', raw: 'secret payload' }
+        }));
+        input.observer?.record(createTelemetryEvent('tool_call_completed', {
+          toolName: 'Read',
+          toolCallId: 'toolu_1',
+          isError: false,
+          payload: { content: '{"name":"secret"}' }
+        }));
+
+        return {
+          stopReason: 'completed',
+          finalAnswer: `handled: ${input.userInput}`,
+          history: [],
+          toolRoundsUsed: 1,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            toolEvidenceSatisfied: true,
+            toolMessagesCount: 1,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+    expect(writes).toEqual(['handled: inspect package.json\n']);
+    expect(writes.join('')).not.toContain('Tool: Read');
+    expect(writes.join('')).not.toContain('secret payload');
+    expect(writes.join('')).not.toContain('{"name":"secret"}');
+  });
+
+  it('prefers --debug-log over QICLAW_DEBUG_LOG and writes JSONL events to the selected file', async () => {
+    await withProviderEnvSnapshot(async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-debug-log-'));
+      tempDirs.push(tempDir);
+
+      const envLogPath = join(tempDir, 'from-env', 'telemetry.jsonl');
+      const flagLogPath = join(tempDir, 'from-flag', 'telemetry.jsonl');
+      process.env.QICLAW_DEBUG_LOG = envLogPath;
+
+      const cli = buildCli({
+        argv: ['--debug-log', flagLogPath, '--prompt', 'inspect package.json'],
+        cwd: tempDir,
+        stdout: { write() { return true; } },
+        createRuntime: (runtimeOptions) => ({
+          provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+          availableTools: [],
+          cwd: tempDir,
+          observer: runtimeOptions.observer ?? { record() {} }
+        }),
+        runTurn: async (input) => {
+          input.observer?.record(createTelemetryEvent('tool_call_started', {
+            toolName: 'Read',
+            toolCallId: 'toolu_1'
+          }));
+
+          return {
+            stopReason: 'completed',
+            finalAnswer: `handled: ${input.userInput}`,
+            history: [],
+            toolRoundsUsed: 1,
+            doneCriteria: {
+              goal: input.userInput,
+              checklist: [input.userInput],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false
+            },
+            verification: {
+              isVerified: true,
+              finalAnswerIsNonEmpty: true,
+              toolEvidenceSatisfied: true,
+              toolMessagesCount: 1,
+              checks: []
+            }
+          };
+        }
+      });
+
+      await expect(cli.run()).resolves.toBe(0);
+
+      const selectedLog = await readFile(flagLogPath, 'utf8');
+      expect(selectedLog).toContain('"type":"tool_call_started"');
+      await expect(readFile(envLogPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
+  it('falls back to QICLAW_DEBUG_LOG when --debug-log is not provided', async () => {
+    await withProviderEnvSnapshot(async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-debug-log-env-'));
+      tempDirs.push(tempDir);
+
+      const envLogPath = join(tempDir, 'from-env', 'telemetry.jsonl');
+      process.env.QICLAW_DEBUG_LOG = envLogPath;
+
+      const cli = buildCli({
+        argv: ['--prompt', 'inspect package.json'],
+        cwd: tempDir,
+        stdout: { write() { return true; } },
+        createRuntime: (runtimeOptions) => ({
+          provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+          availableTools: [],
+          cwd: tempDir,
+          observer: runtimeOptions.observer ?? { record() {} }
+        }),
+        runTurn: async (input) => {
+          input.observer?.record(createTelemetryEvent('turn_started', {
+            userInput: input.userInput
+          }));
+
+          return {
+            stopReason: 'completed',
+            finalAnswer: `handled: ${input.userInput}`,
+            history: [],
+            toolRoundsUsed: 0,
+            doneCriteria: {
+              goal: input.userInput,
+              checklist: [input.userInput],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false
+            },
+            verification: {
+              isVerified: true,
+              finalAnswerIsNonEmpty: true,
+              toolEvidenceSatisfied: true,
+              toolMessagesCount: 0,
+              checks: []
+            }
+          };
+        }
+      });
+
+      await expect(cli.run()).resolves.toBe(0);
+
+      const selectedLog = await readFile(envLogPath, 'utf8');
+      expect(selectedLog).toContain('"type":"turn_started"');
+    });
+  });
+
+  it('returns exit code 1 and prints an error when --debug-log is missing a value', async () => {
+    const stderrWrites: string[] = [];
+    const cli = buildCli({
+      argv: ['--debug-log'],
+      stderr: {
+        write(chunk) {
+          stderrWrites.push(String(chunk));
+          return true;
+        }
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(1);
+    expect(stderrWrites).toEqual(['Missing value for --debug-log\n']);
+  });
   it('returns an object with a run method', () => {
     const cli = buildCli();
 

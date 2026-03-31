@@ -8,6 +8,8 @@ import {
   type ToolResultMessage
 } from '../provider/model.js';
 import { createNoopObserver, createTelemetryEvent, type TelemetryObserver } from '../telemetry/observer.js';
+import { buildTelemetryPreview } from '../telemetry/preview.js';
+import { redactSensitiveTelemetryValue } from '../telemetry/redaction.js';
 import type { Tool } from '../tools/registry.js';
 
 import { buildDoneCriteria, type DoneCriteria } from './doneCriteria.js';
@@ -98,21 +100,27 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTu
       toolRoundsUsed += 1;
 
       for (const toolCall of response.toolCalls) {
+        const redactedToolInput = redactSensitiveTelemetryValue(toolCall.input);
         observer.record(
           createTelemetryEvent('tool_call_started', {
             toolName: toolCall.name,
-            toolCallId: toolCall.id
+            toolCallId: toolCall.id,
+            inputPreview: buildTelemetryPreview(redactedToolInput),
+            inputRawRedacted: redactedToolInput
           })
         );
 
         const toolResult = await dispatchAllowedToolCall(toolCall, input.availableTools, input.cwd);
         history.push(toolResult);
 
+        const redactedToolResultPayload = buildRedactedToolResultPayload(toolResult);
         observer.record(
           createTelemetryEvent('tool_call_completed', {
             toolName: toolCall.name,
             toolCallId: toolCall.id,
-            isError: toolResult.isError
+            isError: toolResult.isError,
+            resultPreview: buildTelemetryPreview({ content: redactedToolResultPayload.content }),
+            resultRawRedacted: redactedToolResultPayload
           })
         );
       }
@@ -171,6 +179,21 @@ function buildResult(
     doneCriteria,
     verification
   };
+}
+
+function buildRedactedToolResultPayload(toolResult: ToolResultMessage): Record<string, unknown> {
+  return {
+    ...toolResult,
+    content: redactSensitiveTelemetryValue(parseToolResultContent(toolResult.content))
+  };
+}
+
+function parseToolResultContent(content: string): unknown {
+  try {
+    return JSON.parse(content);
+  } catch {
+    return content;
+  }
 }
 
 async function dispatchAllowedToolCall(

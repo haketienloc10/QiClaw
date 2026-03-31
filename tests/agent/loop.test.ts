@@ -1135,7 +1135,9 @@ describe('agent loop', () => {
       }
     });
     expect(observedEvents[1]?.data).not.toHaveProperty('providerName');
+    expect(observedEvents[1]?.data).not.toHaveProperty('providerModel');
     expect(observedEvents[1]?.data).not.toHaveProperty('promptPreview');
+    expect(observedEvents[1]?.data).not.toHaveProperty('contentBlockCount');
     expect(observedEvents[2]).toMatchObject({
       type: 'provider_responded',
       data: {
@@ -1168,8 +1170,10 @@ describe('agent loop', () => {
         responsePreviewRedacted: '[{"type":"text","text":"I will read the file first."},{"type":"tool_use","name":"read_file"}]'
       }
     });
+    expect(observedEvents[2]?.data).not.toHaveProperty('assistantContentLength');
     expect(observedEvents[2]?.data).not.toHaveProperty('finish');
     expect(observedEvents[2]?.data).not.toHaveProperty('responseMetrics');
+    expect(observedEvents[2]?.data).not.toHaveProperty('debug');
     expect(observedEvents[3]).toMatchObject({
       type: 'tool_call_started',
       data: {
@@ -1197,6 +1201,52 @@ describe('agent loop', () => {
         }
       }
     });
+    expect(observedEvents[5]).toMatchObject({
+      type: 'provider_called',
+      data: {
+        messageCount: 4,
+        promptRawChars:
+          'You are helpful.'.length +
+          'Read note.txt and summarize it.'.length +
+          'I will read the file first.'.length +
+          'agent note'.length,
+        toolNames: ['read_file', 'edit_file', 'search', 'shell'],
+        messageSummaries: [
+          {
+            role: 'system',
+            contentPreviewRedacted: '"You are helpful."',
+            contentBlockCount: 1,
+            hasToolCalls: false
+          },
+          {
+            role: 'user',
+            contentPreviewRedacted: '"Read note.txt and summarize it."',
+            contentBlockCount: 1,
+            hasToolCalls: false
+          },
+          {
+            role: 'assistant',
+            contentPreviewRedacted: '"I will read the file first."',
+            contentBlockCount: 1,
+            hasToolCalls: true
+          },
+          {
+            role: 'tool',
+            contentPreviewRedacted: '"agent note"',
+            contentBlockCount: 1,
+            hasToolCalls: false
+          }
+        ],
+        totalContentBlockCount: 4,
+        hasSystemPrompt: true,
+        promptRawPreviewRedacted:
+          '{"messages":[{"content":"You are helpful.","role":"system"},{"content":"Read note.txt and summarize it.","role":"user"},{"content":"I will read the file first.","role":"assistant"},{"content":"agent note","role":"tool"}]}'
+      }
+    });
+    expect(observedEvents[5]?.data).not.toHaveProperty('providerName');
+    expect(observedEvents[5]?.data).not.toHaveProperty('providerModel');
+    expect(observedEvents[5]?.data).not.toHaveProperty('promptPreview');
+    expect(observedEvents[5]?.data).not.toHaveProperty('contentBlockCount');
     expect(observedEvents[6]).toMatchObject({
       type: 'provider_responded',
       data: {
@@ -1223,6 +1273,10 @@ describe('agent loop', () => {
         responsePreviewRedacted: '[{"type":"text","text":"The note says: agent note"}]'
       }
     });
+    expect(observedEvents[6]?.data).not.toHaveProperty('assistantContentLength');
+    expect(observedEvents[6]?.data).not.toHaveProperty('finish');
+    expect(observedEvents[6]?.data).not.toHaveProperty('responseMetrics');
+    expect(observedEvents[6]?.data).not.toHaveProperty('debug');
     expect(observedEvents[7]).toMatchObject({
       type: 'verification_completed',
       data: {

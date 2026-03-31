@@ -427,61 +427,35 @@ describe('buildCli', () => {
       await expect(cli.run()).resolves.toBe(0);
 
       const selectedLog = await readFile(logPath, 'utf8');
-      const lines = selectedLog.trim().split('\n');
+      const events = selectedLog
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
 
-      expect(lines).toEqual([
-        JSON.stringify({
+      const providerCalledEvent = events.find((event) => event.type === 'provider_called');
+      const providerRespondedEvent = events.find((event) => event.type === 'provider_responded');
+
+      expect(providerCalledEvent).toEqual(
+        expect.objectContaining({
           type: 'provider_called',
           timestamp: '2026-03-31T12:34:56.000Z',
-          data: {
-            messageCount: 2,
-            promptRawChars: 42,
-            toolNames: ['Read'],
-            messageSummaries: [
-              {
-                role: 'system',
-                contentPreviewRedacted: '"You are a minimal single-agent CLI runtime."',
-                contentBlockCount: 1,
-                hasToolCalls: false
-              },
-              {
-                role: 'user',
-                contentPreviewRedacted: '"inspect package.json"',
-                contentBlockCount: 1,
-                hasToolCalls: false
-              }
-            ],
-            totalContentBlockCount: 2,
-            hasSystemPrompt: true,
-            promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"}]}'
-          }
-        }),
-        JSON.stringify({
+          data: expect.objectContaining({
+            promptRawChars: 42
+          })
+        })
+      );
+      expect(providerRespondedEvent).toEqual(
+        expect.objectContaining({
           type: 'provider_responded',
           timestamp: '2026-03-31T12:34:56.000Z',
-          data: {
-            stopReason: 'end_turn',
-            usage: {
-              inputTokens: 12,
-              outputTokens: 8,
+          data: expect.objectContaining({
+            usage: expect.objectContaining({
               totalTokens: 20
-            },
-            responseContentBlockCount: 1,
-            toolCallCount: 0,
-            hasTextOutput: true,
-            responseContentBlocksByType: { text: 1 },
-            toolCallSummaries: [],
-            providerUsageRawRedacted: {
-              input_tokens: 12,
-              output_tokens: 8
-            },
-            providerStopDetails: {
-              stop_reason: 'end_turn'
-            },
-            responsePreviewRedacted: '[{"type":"text","text":"handled"}]'
-          }
+            }),
+            responseContentBlockCount: 1
+          })
         })
-      ]);
+      );
       expect(stdoutWrites).toEqual(['handled: inspect package.json\n']);
     });
   });

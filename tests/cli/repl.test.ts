@@ -162,7 +162,7 @@ describe('createRepl', () => {
 });
 
 describe('buildCli', () => {
-  it('prints compact tool status lines to stdout without leaking raw payloads', async () => {
+  it('keeps prompt mode stdout limited to the final answer even when tool telemetry events are recorded', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-telemetry-'));
     tempDirs.push(tempDir);
 
@@ -218,11 +218,8 @@ describe('buildCli', () => {
     });
 
     await expect(cli.run()).resolves.toBe(0);
-    expect(writes).toEqual([
-      'Tool: Read\n',
-      'Tool: Read done\n',
-      'handled: inspect package.json\n'
-    ]);
+    expect(writes).toEqual(['handled: inspect package.json\n']);
+    expect(writes.join('')).not.toContain('Tool: Read');
     expect(writes.join('')).not.toContain('secret payload');
     expect(writes.join('')).not.toContain('{"name":"secret"}');
   });

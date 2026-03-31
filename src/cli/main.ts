@@ -66,12 +66,14 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
           baseUrl: parsed.baseUrl,
           apiKey: parsed.apiKey
         });
+        const shouldShowCompactToolStatus = parsed.prompt === undefined;
         const observer = createCliObserver({
           cwd,
           stdout,
           metrics,
           debugLogPath: parsed.debugLogPath,
-          envDebugLogPath: process.env.QICLAW_DEBUG_LOG
+          envDebugLogPath: process.env.QICLAW_DEBUG_LOG,
+          showCompactToolStatus: shouldShowCompactToolStatus
         });
         const runtime = createRuntime({
           ...providerConfig,
@@ -174,15 +176,17 @@ function createCliObserver(options: {
   metrics: TelemetryObserver;
   debugLogPath?: string;
   envDebugLogPath?: string;
+  showCompactToolStatus?: boolean;
 }): TelemetryObserver {
-  const observers: TelemetryObserver[] = [
-    options.metrics,
-    createCompactCliTelemetryObserver({
+  const observers: TelemetryObserver[] = [options.metrics];
+
+  if (options.showCompactToolStatus) {
+    observers.push(createCompactCliTelemetryObserver({
       writeLine(text) {
         options.stdout.write(`${text}\n`);
       }
-    })
-  ];
+    }));
+  }
   const selectedDebugLogPath = options.debugLogPath ?? options.envDebugLogPath;
 
   if (selectedDebugLogPath) {

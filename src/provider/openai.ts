@@ -104,6 +104,24 @@ function countOpenAIOutputBlocksByType(output: unknown[]): Record<string, number
   }, {});
 }
 
+function redactOpenAIOutputForPreview(output: unknown[]): unknown[] {
+  return output.map((item) => {
+    if (!isOpenAIFunctionCall(item) || typeof item.arguments !== 'string') {
+      return redactSensitiveTelemetryValue(item);
+    }
+
+    const redactedItem = redactSensitiveTelemetryValue(item) as Record<string, unknown>;
+
+    try {
+      redactedItem.arguments = JSON.stringify(redactSensitiveTelemetryValue(JSON.parse(item.arguments)));
+    } catch {
+      redactedItem.arguments = item.arguments;
+    }
+
+    return redactedItem;
+  });
+}
+
 export function normalizeOpenAIResponseMetadata(response: {
   id: string;
   model: string;
@@ -143,15 +161,14 @@ export function normalizeOpenAIResponseMetadata(response: {
     },
     debug: {
       providerUsageRawRedacted: response.usage ? redactSensitiveTelemetryValue(response.usage) : undefined,
-      providerStopDetails: response.incomplete_details || response.status === 'incomplete'
+      providerStopDetails: response.incomplete_details
         ? {
-            status: response.status ?? undefined,
-            incomplete_details: response.incomplete_details ?? undefined
+            incomplete_details: response.incomplete_details
           }
         : undefined,
       toolCallSummaries: toolCalls.map((toolCall) => ({ id: toolCall.id, name: toolCall.name })),
       responseContentBlocksByType: contentBlocksByType,
-      responsePreviewRedacted: buildTelemetryPreview(response.output, 400)
+      responsePreviewRedacted: buildTelemetryPreview(redactOpenAIOutputForPreview(response.output), 400)
     }
   };
 }

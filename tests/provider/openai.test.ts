@@ -63,7 +63,6 @@ describe('normalizeOpenAIResponseMetadata', () => {
           total_tokens: '[REDACTED]'
         },
         providerStopDetails: {
-          status: 'incomplete',
           incomplete_details: {
             reason: 'max_output_tokens'
           }
@@ -80,7 +79,7 @@ describe('normalizeOpenAIResponseMetadata', () => {
           output_text: 1
         },
         responsePreviewRedacted:
-          '[{"content":[{"text":"I will inspect it.","type":"output_text"}],"role":"assistant","type":"message"},{"arguments":"{\\"path\\":\\"note.txt\\",\\"authorization\\":\\"Bearer secret\\"}","call_id":"call_1","name":"read_file","type":"function_call"}]'
+          '[{"content":[{"text":"I will inspect it.","type":"output_text"}],"role":"assistant","type":"message"},{"arguments":"{\\"path\\":\\"note.txt\\",\\"authorization\\":\\"[REDACTED]\\"}","call_id":"call_1","name":"read_file","type":"function_call"}]'
       }
     });
 

@@ -31,9 +31,7 @@ describe('normalizeAnthropicResponseMetadata', () => {
       usage: {
         inputTokens: 120,
         outputTokens: 24,
-        totalTokens: 144,
-        cacheCreationInputTokens: 30,
-        cacheReadInputTokens: 10
+        totalTokens: 144
       },
       responseMetrics: {
         contentBlockCount: 2,

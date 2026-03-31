@@ -109,8 +109,6 @@ export function normalizeAnthropicResponseMetadata(response: {
   const contentBlocksByType = countAnthropicContentBlocksByType(response.content);
   const inputTokens = response.usage?.input_tokens ?? undefined;
   const outputTokens = response.usage?.output_tokens ?? undefined;
-  const cacheCreationInputTokens = response.usage?.cache_creation_input_tokens ?? undefined;
-  const cacheReadInputTokens = response.usage?.cache_read_input_tokens ?? undefined;
   const totalTokens = typeof inputTokens === 'number' && typeof outputTokens === 'number'
     ? inputTokens + outputTokens
     : undefined;
@@ -122,9 +120,7 @@ export function normalizeAnthropicResponseMetadata(response: {
     usage: {
       inputTokens,
       outputTokens,
-      totalTokens,
-      cacheCreationInputTokens,
-      cacheReadInputTokens
+      totalTokens
     },
     responseMetrics: {
       contentBlockCount: response.content.length,

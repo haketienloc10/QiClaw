@@ -8,8 +8,27 @@ import { dispatchToolCall } from '../../src/agent/dispatcher.js';
 import { runAgentTurn } from '../../src/agent/loop.js';
 import { createAgentRuntime } from '../../src/agent/runtime.js';
 import { createInMemoryMetricsObserver } from '../../src/telemetry/metrics.js';
-import { createAnthropicProvider } from '../../src/provider/anthropic.js';
-import type { ModelProvider, ProviderResponse, ToolCallRequest } from '../../src/provider/model.js';
+import {
+  buildAnthropicMessagesRequest,
+  createAnthropicProvider,
+  extractAnthropicToolCalls,
+  getAnthropicApiKey,
+  readAnthropicTextContent
+} from '../../src/provider/anthropic.js';
+import { createProvider } from '../../src/provider/factory.js';
+import {
+  buildOpenAIResponsesRequest,
+  createOpenAIProvider,
+  extractOpenAIToolCalls,
+  getOpenAIApiKey,
+  readOpenAITextContent
+} from '../../src/provider/openai.js';
+import {
+  normalizeProviderResponse,
+  type ModelProvider,
+  type ProviderResponse,
+  type ToolCallRequest
+} from '../../src/provider/model.js';
 import type { TelemetryEvent } from '../../src/telemetry/observer.js';
 import { editFileTool } from '../../src/tools/editFile.js';
 import { getBuiltinToolNames, getBuiltinTools, getTool, hasTool, type Tool, type ToolContext } from '../../src/tools/registry.js';
@@ -88,25 +107,320 @@ describe('tool contract', () => {
   });
 });
 
-describe('provider and dispatcher', () => {
-  it('exposes a minimal provider contract with a stable name and model id', async () => {
-    const provider = createAnthropicProvider({ model: 'claude-sonnet-4-20250514' });
+describe('provider normalization, provider, and dispatcher', () => {
+  it('keeps assistant text in message.content while returning tool calls separately', () => {
+    expect(
+      normalizeProviderResponse({
+        content: 'I will inspect the file first.',
+        toolCalls: [
+          {
+            id: 'call-read-1',
+            name: 'read_file',
+            input: { path: 'note.txt' }
+          }
+        ]
+      })
+    ).toEqual({
+      message: {
+        role: 'assistant',
+        content: 'I will inspect the file first.'
+      },
+      toolCalls: [
+        {
+          id: 'call-read-1',
+          name: 'read_file',
+          input: { path: 'note.txt' }
+        }
+      ]
+    } satisfies ProviderResponse);
+  });
 
-    expect(provider.name).toBe('anthropic');
-    expect(provider.model).toBe('claude-sonnet-4-20250514');
+  it('uses an empty message.content only when the vendor returned no text', () => {
+    expect(
+      normalizeProviderResponse({
+        toolCalls: [
+          {
+            id: 'call-read-1',
+            name: 'read_file',
+            input: { path: 'note.txt' }
+          }
+        ]
+      })
+    ).toEqual({
+      message: {
+        role: 'assistant',
+        content: ''
+      },
+      toolCalls: [
+        {
+          id: 'call-read-1',
+          name: 'read_file',
+          input: { path: 'note.txt' }
+        }
+      ]
+    } satisfies ProviderResponse);
+  });
 
-    const response = await provider.generate({
-      messages: [{ role: 'user', content: 'Read README.md' }],
+  it('reads Anthropic API key from override first, then environment, and errors when missing', () => {
+    const previous = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+
+    expect(() => getAnthropicApiKey()).toThrow(/ANTHROPIC_API_KEY/i);
+    expect(getAnthropicApiKey('anthropic-override-key')).toBe('anthropic-override-key');
+
+    process.env.ANTHROPIC_API_KEY = 'anthropic-test-key';
+    expect(getAnthropicApiKey()).toBe('anthropic-test-key');
+
+    if (previous === undefined) {
+      delete process.env.ANTHROPIC_API_KEY;
+    } else {
+      process.env.ANTHROPIC_API_KEY = previous;
+    }
+  });
+
+  it('reads OpenAI API key from override first, then environment, and errors when missing', () => {
+    const previous = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+
+    expect(() => getOpenAIApiKey()).toThrow(/OPENAI_API_KEY/i);
+    expect(getOpenAIApiKey('openai-override-key')).toBe('openai-override-key');
+
+    process.env.OPENAI_API_KEY = 'openai-test-key';
+    expect(getOpenAIApiKey()).toBe('openai-test-key');
+
+    if (previous === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = previous;
+    }
+  });
+
+  it('builds an Anthropic messages request from system, conversation, and tools', () => {
+    const request = buildAnthropicMessagesRequest({
+      model: 'claude-opus-4-6',
+      messages: [
+        { role: 'system', content: 'System prompt' },
+        { role: 'user', content: 'Inspect note.txt' },
+        { role: 'assistant', content: 'I will inspect it.' },
+        {
+          role: 'tool',
+          name: 'read_file',
+          toolCallId: 'toolu_123',
+          content: 'note contents',
+          isError: false
+        }
+      ],
       availableTools: getBuiltinTools()
     });
 
-    expect(response).toEqual({
-      message: {
-        role: 'assistant',
-        content: 'Anthropic provider stub: no live API call configured.'
+    expect(request.system).toBe('System prompt');
+    expect(request.messages).toEqual([
+      { role: 'user', content: 'Inspect note.txt' },
+      { role: 'assistant', content: 'I will inspect it.' },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_123',
+            content: 'note contents',
+            is_error: false
+          }
+        ]
+      }
+    ]);
+    expect(request.tools?.map((tool) => tool.name)).toEqual(['read_file', 'edit_file', 'search', 'shell']);
+  });
+
+  it('rejects Anthropic tool messages without a toolCallId', () => {
+    expect(() => buildAnthropicMessagesRequest({
+      model: 'claude-opus-4-6',
+      messages: [
+        { role: 'user', content: 'Inspect note.txt' },
+        {
+          role: 'tool',
+          name: 'read_file',
+          content: 'note contents',
+          isError: false
+        }
+      ],
+      availableTools: getBuiltinTools()
+    })).toThrow(/Tool message for read_file is missing toolCallId\./);
+  });
+
+  it('extracts Anthropic text content and tool calls from mixed content blocks', () => {
+    const text = readAnthropicTextContent([
+      { type: 'text', text: 'I will inspect the file.' },
+      { type: 'tool_use', id: 'toolu_1', name: 'read_file', input: { path: 'note.txt' } },
+      { type: 'text', text: ' Then I will summarize it.' }
+    ]);
+
+    const toolCalls = extractAnthropicToolCalls([
+      { type: 'text', text: 'ignore me' },
+      { type: 'tool_use', id: 'toolu_1', name: 'read_file', input: { path: 'note.txt' } }
+    ]);
+
+    expect(text).toBe('I will inspect the file. Then I will summarize it.');
+    expect(toolCalls).toEqual([
+      {
+        id: 'toolu_1',
+        name: 'read_file',
+        input: { path: 'note.txt' }
+      }
+    ]);
+  });
+
+  it('builds an OpenAI responses request from system, conversation, and tools', () => {
+    const request = buildOpenAIResponsesRequest({
+      model: 'gpt-4.1',
+      messages: [
+        { role: 'system', content: 'System prompt' },
+        { role: 'user', content: 'Inspect note.txt' },
+        { role: 'assistant', content: 'I will inspect it.' },
+        {
+          role: 'tool',
+          name: 'read_file',
+          toolCallId: 'call_123',
+          content: 'note contents',
+          isError: true
+        }
+      ],
+      availableTools: getBuiltinTools()
+    });
+
+    expect(request.instructions).toBe('System prompt');
+    expect(request.input).toEqual([
+      {
+        type: 'message',
+        role: 'user',
+        content: [
+          {
+            type: 'input_text',
+            text: 'Inspect note.txt'
+          }
+        ]
       },
-      toolCalls: []
-    } satisfies ProviderResponse);
+      {
+        type: 'message',
+        role: 'assistant',
+        content: [
+          {
+            type: 'input_text',
+            text: 'I will inspect it.'
+          }
+        ]
+      },
+      {
+        type: 'function_call_output',
+        call_id: 'call_123',
+        output: 'note contents'
+      }
+    ]);
+    expect(request.tools).toHaveLength(4);
+    expect(request.tools?.[0]).toMatchObject({
+      type: 'function',
+      name: 'read_file'
+    });
+  });
+
+  it('rejects OpenAI tool messages without a toolCallId', () => {
+    expect(() => buildOpenAIResponsesRequest({
+      model: 'gpt-4.1',
+      messages: [
+        { role: 'user', content: 'Inspect note.txt' },
+        {
+          role: 'tool',
+          name: 'read_file',
+          content: 'note contents',
+          isError: false
+        }
+      ],
+      availableTools: getBuiltinTools()
+    })).toThrow(/Tool message for read_file is missing toolCallId\./);
+  });
+
+  it('extracts OpenAI text content and tool calls from responses output items', () => {
+    const text = readOpenAITextContent([
+      {
+        type: 'message',
+        role: 'assistant',
+        content: [
+          { type: 'output_text', text: 'I will inspect the file.', annotations: [] },
+          { type: 'output_text', text: ' Then I will summarize it.', annotations: [] }
+        ]
+      }
+    ]);
+
+    const toolCalls = extractOpenAIToolCalls([
+      {
+        type: 'function_call',
+        call_id: 'call_1',
+        name: 'read_file',
+        arguments: '{"path":"note.txt"}'
+      },
+      {
+        type: 'function_call',
+        call_id: 'call_2',
+        name: 'search',
+        arguments: '{"pattern":"needle"}'
+      }
+    ]);
+
+    expect(text).toBe('I will inspect the file. Then I will summarize it.');
+    expect(toolCalls).toEqual([
+      {
+        id: 'call_1',
+        name: 'read_file',
+        input: { path: 'note.txt' }
+      },
+      {
+        id: 'call_2',
+        name: 'search',
+        input: { pattern: 'needle' }
+      }
+    ]);
+  });
+
+  it('rejects invalid OpenAI function_call.arguments JSON', () => {
+    expect(() => extractOpenAIToolCalls([
+      {
+        type: 'function_call',
+        call_id: 'call_1',
+        name: 'read_file',
+        arguments: '{"path":"note.txt"'
+      }
+    ])).toThrow(/OpenAI function_call arguments for read_file must be valid JSON\./);
+  });
+
+  it('rejects OpenAI function_call.arguments JSON that does not parse to an object', () => {
+    expect(() => extractOpenAIToolCalls([
+      {
+        type: 'function_call',
+        call_id: 'call_1',
+        name: 'read_file',
+        arguments: '[]'
+      }
+    ])).toThrow(/OpenAI function_call arguments for read_file must parse to a non-null object\./);
+  });
+
+  it('creates the requested provider implementation from the provider factory', () => {
+    const anthropicProvider = createProvider({
+      provider: 'anthropic',
+      model: 'claude-opus-4-6',
+      baseUrl: 'https://anthropic.example/v1',
+      apiKey: 'anthropic-cli-key'
+    });
+    const openaiProvider = createProvider({
+      provider: 'openai',
+      model: 'gpt-4.1',
+      baseUrl: 'https://openai.example/v1',
+      apiKey: 'openai-cli-key'
+    });
+
+    expect(anthropicProvider.name).toBe('anthropic');
+    expect(anthropicProvider.model).toBe('claude-opus-4-6');
+    expect(openaiProvider.name).toBe('openai');
+    expect(openaiProvider.model).toBe('gpt-4.1');
   });
 
   it('dispatches a successful tool call into a normalized tool result message', async () => {
@@ -489,9 +803,12 @@ describe('agent loop', () => {
     ]);
   });
 
-  it('creates a runtime with the stub anthropic provider, builtin tools, cwd, and observer', async () => {
+  it('creates a runtime with the selected anthropic provider, builtin tools, cwd, and observer', async () => {
     const runtime = createAgentRuntime({
+      provider: 'anthropic',
       model: 'claude-sonnet-4-20250514',
+      baseUrl: 'https://anthropic.example/v1',
+      apiKey: 'anthropic-runtime-key',
       cwd: '/tmp/runtime-compose'
     });
 
@@ -499,6 +816,22 @@ describe('agent loop', () => {
     expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['read_file', 'edit_file', 'search', 'shell']);
     expect(runtime.provider.name).toBe('anthropic');
     expect(runtime.provider.model).toBe('claude-sonnet-4-20250514');
+    expect(runtime.observer.record).toBeTypeOf('function');
+  });
+
+  it('creates a runtime with the selected openai provider and requested model', async () => {
+    const runtime = createAgentRuntime({
+      provider: 'openai',
+      model: 'gpt-4.1',
+      baseUrl: 'https://openai.example/v1',
+      apiKey: 'openai-runtime-key',
+      cwd: '/tmp/runtime-openai'
+    });
+
+    expect(runtime.cwd).toBe('/tmp/runtime-openai');
+    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['read_file', 'edit_file', 'search', 'shell']);
+    expect(runtime.provider.name).toBe('openai');
+    expect(runtime.provider.model).toBe('gpt-4.1');
     expect(runtime.observer.record).toBeTypeOf('function');
   });
 

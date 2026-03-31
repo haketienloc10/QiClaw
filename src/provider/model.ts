@@ -15,6 +15,15 @@ export interface ToolResultMessage extends Message {
   isError: boolean;
 }
 
+export type ProviderId = 'anthropic' | 'openai';
+
+export interface ResolvedProviderConfig {
+  provider: ProviderId;
+  model: string;
+  baseUrl?: string;
+  apiKey?: string;
+}
+
 export interface ProviderRequest {
   messages: Message[];
   availableTools: Tool[];
@@ -25,10 +34,25 @@ export interface ProviderResponse {
   toolCalls: ToolCallRequest[];
 }
 
+export interface ProviderResponseNormalizationInput {
+  content?: string | null;
+  toolCalls?: ToolCallRequest[];
+}
+
 export interface ModelProvider {
   name: string;
   model: string;
   generate(request: ProviderRequest): Promise<ProviderResponse>;
+}
+
+export function normalizeProviderResponse(input: ProviderResponseNormalizationInput): ProviderResponse {
+  return {
+    message: {
+      role: 'assistant',
+      content: input.content ?? ''
+    },
+    toolCalls: input.toolCalls ?? []
+  };
 }
 
 export function toToolResultMessage(toolCall: ToolCallRequest, result: ToolResult): ToolResultMessage {

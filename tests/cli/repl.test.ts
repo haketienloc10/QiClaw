@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { buildCli } from '../../src/cli/main.js';
 import { createRepl } from '../../src/cli/repl.js';
+import { getDefaultModelForProvider, parseProviderId, resolveProviderConfig } from '../../src/provider/config.js';
 import { createJsonLineLogger } from '../../src/telemetry/logger.js';
 import { createInMemoryMetricsObserver } from '../../src/telemetry/metrics.js';
 import { createTelemetryEvent } from '../../src/telemetry/observer.js';
@@ -105,12 +106,117 @@ describe('buildCli', () => {
           return true;
         }
       },
-      createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
-        availableTools: [],
-        cwd: '/tmp/qiclaw-test',
-        observer: runtimeOptions.observer ?? { record() {} }
-      }),
+      createRuntime: (runtimeOptions) => {
+        expect(runtimeOptions.provider).toBe('anthropic');
+        expect(runtimeOptions.model).toBe('claude-opus-4-6');
+
+        return {
+          provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+          availableTools: [],
+          cwd: '/tmp/qiclaw-test',
+          observer: runtimeOptions.observer ?? { record() {} }
+        };
+      },
+      runTurn: async (input) => ({
+        stopReason: 'completed',
+        finalAnswer: `handled: ${input.userInput}`,
+        history: [],
+        toolRoundsUsed: 0,
+        doneCriteria: {
+          goal: input.userInput,
+          checklist: [input.userInput],
+          requiresNonEmptyFinalAnswer: true,
+          requiresToolEvidence: false
+        },
+        verification: {
+          isVerified: true,
+          finalAnswerIsNonEmpty: true,
+          toolEvidenceSatisfied: true,
+          toolMessagesCount: 0,
+          checks: []
+        }
+      })
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+    expect(writes).toEqual(['handled: inspect package.json\n']);
+  });
+
+  it('passes the selected provider and model to runtime creation in prompt mode', async () => {
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: ['--provider', 'openai', '--model', 'gpt-4.1', '--prompt', 'inspect package.json'],
+      cwd: '/tmp/qiclaw-provider-test',
+      stdout: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      createRuntime: (runtimeOptions) => {
+        expect(runtimeOptions.provider).toBe('openai');
+        expect(runtimeOptions.model).toBe('gpt-4.1');
+        expect(runtimeOptions.baseUrl).toBeUndefined();
+        expect(runtimeOptions.apiKey).toBeUndefined();
+        expect(runtimeOptions.cwd).toBe('/tmp/qiclaw-provider-test');
+
+        return {
+          provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
+          availableTools: [],
+          cwd: runtimeOptions.cwd,
+          observer: runtimeOptions.observer ?? { record() {} }
+        };
+      },
+      runTurn: async (input) => ({
+        stopReason: 'completed',
+        finalAnswer: `handled: ${input.userInput}`,
+        history: [],
+        toolRoundsUsed: 0,
+        doneCriteria: {
+          goal: input.userInput,
+          checklist: [input.userInput],
+          requiresNonEmptyFinalAnswer: true,
+          requiresToolEvidence: false
+        },
+        verification: {
+          isVerified: true,
+          finalAnswerIsNonEmpty: true,
+          toolEvidenceSatisfied: true,
+          toolMessagesCount: 0,
+          checks: []
+        }
+      })
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+    expect(writes).toEqual(['handled: inspect package.json\n']);
+  });
+
+  it('uses the provider default model when --provider is passed without --model', async () => {
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: ['--provider', 'openai', '--prompt', 'inspect package.json'],
+      cwd: '/tmp/qiclaw-provider-default-test',
+      stdout: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      createRuntime: (runtimeOptions) => {
+        expect(runtimeOptions.provider).toBe('openai');
+        expect(runtimeOptions.model).toBe('gpt-4.1');
+        expect(runtimeOptions.baseUrl).toBeUndefined();
+        expect(runtimeOptions.apiKey).toBeUndefined();
+        expect(runtimeOptions.cwd).toBe('/tmp/qiclaw-provider-default-test');
+
+        return {
+          provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
+          availableTools: [],
+          cwd: runtimeOptions.cwd,
+          observer: runtimeOptions.observer ?? { record() {} }
+        };
+      },
       runTurn: async (input) => ({
         stopReason: 'completed',
         finalAnswer: `handled: ${input.userInput}`,
@@ -150,6 +256,162 @@ describe('buildCli', () => {
 
     await expect(cli.run()).resolves.toBe(1);
     expect(stderrWrites).toEqual(['Missing value for --prompt\n']);
+  });
+
+  it('returns exit code 1 and prints an error when --provider is missing a value', async () => {
+    const stderrWrites: string[] = [];
+    const cli = buildCli({
+      argv: ['--provider'],
+      stderr: {
+        write(chunk) {
+          stderrWrites.push(String(chunk));
+          return true;
+        }
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(1);
+    expect(stderrWrites).toEqual(['Missing value for --provider\n']);
+  });
+
+  it('returns exit code 1 and prints an error when --base-url is missing a value', async () => {
+    const stderrWrites: string[] = [];
+    const cli = buildCli({
+      argv: ['--base-url'],
+      stderr: {
+        write(chunk) {
+          stderrWrites.push(String(chunk));
+          return true;
+        }
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(1);
+    expect(stderrWrites).toEqual(['Missing value for --base-url\n']);
+  });
+
+  it('returns exit code 1 and prints an error when --api-key is missing a value', async () => {
+    const stderrWrites: string[] = [];
+    const cli = buildCli({
+      argv: ['--api-key'],
+      stderr: {
+        write(chunk) {
+          stderrWrites.push(String(chunk));
+          return true;
+        }
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(1);
+    expect(stderrWrites).toEqual(['Missing value for --api-key\n']);
+  });
+
+  it('returns exit code 1 and prints an error when an unknown provider is provided', async () => {
+    const stderrWrites: string[] = [];
+    const cli = buildCli({
+      argv: ['--provider', 'bedrock'],
+      stderr: {
+        write(chunk) {
+          stderrWrites.push(String(chunk));
+          return true;
+        }
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(1);
+    expect(stderrWrites).toEqual(['Unknown provider: bedrock\n']);
+  });
+
+  it('uses shared provider config helpers for provider parsing and default models', () => {
+    expect(parseProviderId('openai')).toBe('openai');
+    expect(parseProviderId('anthropic')).toBe('anthropic');
+    expect(() => parseProviderId('bedrock')).toThrow('Unknown provider: bedrock');
+    expect(getDefaultModelForProvider('openai')).toBe('gpt-4.1');
+    expect(getDefaultModelForProvider('anthropic')).toBe('claude-opus-4-6');
+  });
+
+  it('passes custom endpoint and api key overrides to runtime creation in prompt mode', async () => {
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: ['--provider', 'openai', '--model', 'gpt-4.1', '--base-url', 'https://openai.example/v1', '--api-key', 'openai-cli-key', '--prompt', 'inspect package.json'],
+      cwd: '/tmp/qiclaw-custom-provider-test',
+      stdout: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      createRuntime: (runtimeOptions) => {
+        expect(runtimeOptions).toMatchObject({
+          provider: 'openai',
+          model: 'gpt-4.1',
+          baseUrl: 'https://openai.example/v1',
+          apiKey: 'openai-cli-key',
+          cwd: '/tmp/qiclaw-custom-provider-test'
+        });
+
+        return {
+          provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
+          availableTools: [],
+          cwd: runtimeOptions.cwd,
+          observer: runtimeOptions.observer ?? { record() {} }
+        };
+      },
+      runTurn: async (input) => ({
+        stopReason: 'completed',
+        finalAnswer: `handled: ${input.userInput}`,
+        history: [],
+        toolRoundsUsed: 0,
+        doneCriteria: {
+          goal: input.userInput,
+          checklist: [input.userInput],
+          requiresNonEmptyFinalAnswer: true,
+          requiresToolEvidence: false
+        },
+        verification: {
+          isVerified: true,
+          finalAnswerIsNonEmpty: true,
+          toolEvidenceSatisfied: true,
+          toolMessagesCount: 0,
+          checks: []
+        }
+      })
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+    expect(writes).toEqual(['handled: inspect package.json\n']);
+  });
+
+  it('lets CLI overrides win over provider-specific env vars', () => {
+    const previousOpenAIBaseUrl = process.env.OPENAI_BASE_URL;
+    const previousOpenAIApiKey = process.env.OPENAI_API_KEY;
+
+    process.env.OPENAI_BASE_URL = 'https://openai-env.example/v1';
+    process.env.OPENAI_API_KEY = 'openai-env-key';
+
+    expect(resolveProviderConfig({
+      provider: 'openai',
+      baseUrl: 'https://openai-cli.example/v1',
+      apiKey: 'openai-cli-key',
+      model: 'gpt-4.1-mini'
+    })).toEqual({
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      baseUrl: 'https://openai-cli.example/v1',
+      apiKey: 'openai-cli-key'
+    });
+
+    if (previousOpenAIBaseUrl === undefined) {
+      delete process.env.OPENAI_BASE_URL;
+    } else {
+      process.env.OPENAI_BASE_URL = previousOpenAIBaseUrl;
+    }
+
+    if (previousOpenAIApiKey === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = previousOpenAIApiKey;
+    }
   });
 
   it('returns exit code 1 and prints an error when an unknown flag is provided', async () => {

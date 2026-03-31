@@ -2,6 +2,8 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createAgentRuntime, type AgentRuntime } from '../agent/runtime.js';
 import { runAgentTurn, type RunAgentTurnInput, type RunAgentTurnResult } from '../agent/loop.js';
+import { parseProviderId, resolveProviderConfig } from '../provider/config.js';
+import type { ProviderId, ResolvedProviderConfig } from '../provider/model.js';
 import { CheckpointStore } from '../session/checkpointStore.js';
 import {
   createInteractiveCheckpointJson,
@@ -30,7 +32,7 @@ export interface BuildCliOptions {
   stdout?: Pick<NodeJS.WriteStream, 'write'>;
   stderr?: Pick<NodeJS.WriteStream, 'write'>;
   readLine?: (promptLabel: string) => Promise<string | undefined>;
-  createRuntime?: (options: { model: string; cwd: string; observer?: AgentRuntime['observer'] }) => AgentRuntime;
+  createRuntime?: (options: ResolvedProviderConfig & { cwd: string; observer?: AgentRuntime['observer'] }) => AgentRuntime;
   createCheckpointStore?: (filename: string) => CheckpointStore;
   createSessionId?: () => string;
   runTurn?: (input: CliRunTurnInput) => Promise<CliRunTurnResult>;
@@ -53,8 +55,14 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
     async run() {
       try {
         const parsed = parseArgs(argv);
-        const runtime = createRuntime({
+        const providerConfig = resolveProviderConfig({
+          provider: parsed.provider,
           model: parsed.model,
+          baseUrl: parsed.baseUrl,
+          apiKey: parsed.apiKey
+        });
+        const runtime = createRuntime({
+          ...providerConfig,
           cwd,
           observer: metrics
         });
@@ -149,9 +157,12 @@ function readTurnHistorySummary(result: RunAgentTurnResult): string | undefined 
   return maybeResult.historySummary;
 }
 
-function parseArgs(argv: string[]): { prompt?: string; model: string } {
+function parseArgs(argv: string[]): { prompt?: string; provider: ProviderId; model?: string; baseUrl?: string; apiKey?: string } {
   let prompt: string | undefined;
-  let model = 'claude-sonnet-4-20250514';
+  let provider: ProviderId = 'anthropic';
+  let model: string | undefined;
+  let baseUrl: string | undefined;
+  let apiKey: string | undefined;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -168,6 +179,18 @@ function parseArgs(argv: string[]): { prompt?: string; model: string } {
       continue;
     }
 
+    if (token === '--provider') {
+      const value = argv[index + 1];
+
+      if (!value || value.startsWith('--')) {
+        throw new Error('Missing value for --provider');
+      }
+
+      provider = parseProviderId(value);
+      index += 1;
+      continue;
+    }
+
     if (token === '--model') {
       const value = argv[index + 1];
 
@@ -176,6 +199,30 @@ function parseArgs(argv: string[]): { prompt?: string; model: string } {
       }
 
       model = value;
+      index += 1;
+      continue;
+    }
+
+    if (token === '--base-url') {
+      const value = argv[index + 1];
+
+      if (!value || value.startsWith('--')) {
+        throw new Error('Missing value for --base-url');
+      }
+
+      baseUrl = value;
+      index += 1;
+      continue;
+    }
+
+    if (token === '--api-key') {
+      const value = argv[index + 1];
+
+      if (!value || value.startsWith('--')) {
+        throw new Error('Missing value for --api-key');
+      }
+
+      apiKey = value;
       index += 1;
       continue;
     }
@@ -189,7 +236,10 @@ function parseArgs(argv: string[]): { prompt?: string; model: string } {
 
   return {
     prompt,
-    model
+    provider,
+    model,
+    baseUrl,
+    apiKey
   };
 }
 

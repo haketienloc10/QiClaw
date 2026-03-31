@@ -1,5 +1,15 @@
 const REDACTED_VALUE = '[REDACTED]';
 const SENSITIVE_KEY_PATTERN = /(key|token|secret|authorization|cookie|password)/i;
+const SAFE_USAGE_COUNTER_KEYS = new Set([
+  'input_tokens',
+  'output_tokens',
+  'total_tokens',
+  'cache_creation_input_tokens',
+  'cache_read_input_tokens',
+  'inputTokens',
+  'outputTokens',
+  'totalTokens'
+]);
 const SENSITIVE_TEXT_PATTERNS = [
   /(authorization\s*:\s*)([^\r\n]+)/gi,
   /(cookie\s*:\s*)([^\r\n]+)/gi,
@@ -17,7 +27,9 @@ export function redactSensitiveTelemetryValue(value: unknown): unknown {
 
   const entries = Object.entries(value as Record<string, unknown>).map(([key, entryValue]) => [
     key,
-    SENSITIVE_KEY_PATTERN.test(key) ? REDACTED_VALUE : redactSensitiveTelemetryValue(entryValue)
+    SENSITIVE_KEY_PATTERN.test(key) && !SAFE_USAGE_COUNTER_KEYS.has(key)
+      ? REDACTED_VALUE
+      : redactSensitiveTelemetryValue(entryValue)
   ]);
 
   return Object.fromEntries(entries);
@@ -38,7 +50,9 @@ export function redactSensitiveTelemetryPreviewValue(value: unknown): unknown {
 
   const entries = Object.entries(value as Record<string, unknown>).map(([key, entryValue]) => [
     key,
-    SENSITIVE_KEY_PATTERN.test(key) ? REDACTED_VALUE : redactSensitiveTelemetryPreviewValue(entryValue)
+    SENSITIVE_KEY_PATTERN.test(key) && !SAFE_USAGE_COUNTER_KEYS.has(key)
+      ? REDACTED_VALUE
+      : redactSensitiveTelemetryPreviewValue(entryValue)
   ]);
 
   return Object.fromEntries(entries);

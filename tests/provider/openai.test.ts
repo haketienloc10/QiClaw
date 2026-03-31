@@ -61,9 +61,9 @@ describe('normalizeOpenAIResponseMetadata', () => {
       },
       debug: {
         providerUsageRawRedacted: {
-          input_tokens: '[REDACTED]',
-          output_tokens: '[REDACTED]',
-          total_tokens: '[REDACTED]'
+          input_tokens: 80,
+          output_tokens: 20,
+          total_tokens: 100
         },
         providerStopDetails: {
           incomplete_details: {

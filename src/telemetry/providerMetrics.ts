@@ -1,58 +1,29 @@
 import type { Message } from '../core/types.js';
+import type { ProviderCalledMessageSummary } from './observer.js';
 import { buildTelemetryPreview } from './preview.js';
+import { redactSensitiveTelemetryPreviewValue } from './redaction.js';
 
-const REDACTED_VALUE = '[REDACTED]';
 const PREVIEW_MAX_LENGTH = 512;
-const SENSITIVE_KEY_PATTERN = /(key|token|secret|authorization|cookie|password)/i;
-const SENSITIVE_STRING_PATTERN = /(authorization\s*:|bearer\s+|api[_-]?key|token|secret|password|cookie)/i;
 
 export interface PromptTelemetry {
-  messageCount: number;
-  contentBlockCount: number;
-  preview: string;
+  promptRawChars: number;
+  messageSummaries: ProviderCalledMessageSummary[];
+  totalContentBlockCount: number;
+  hasSystemPrompt: boolean;
+  promptRawPreviewRedacted: string;
 }
 
-function countContentBlocks(content: unknown): number {
-  if (typeof content === 'string') {
-    return content.length > 0 ? 1 : 0;
-  }
+function countContentBlocks(message: Message): number {
+  const contentBlockCount = message.content.length > 0 ? 1 : 0;
+  const toolCallCount = Array.isArray(message.toolCalls) ? message.toolCalls.length : 0;
 
-  if (Array.isArray(content)) {
-    return content.length;
-  }
-
-  if (content == null) {
-    return 0;
-  }
-
-  return 1;
+  return contentBlockCount + toolCallCount;
 }
 
-function redactTelemetryPreviewValue(value: unknown): unknown {
-  if (typeof value === 'string') {
-    return SENSITIVE_STRING_PATTERN.test(value) ? REDACTED_VALUE : value;
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((entry) => redactTelemetryPreviewValue(entry));
-  }
-
-  if (!value || typeof value !== 'object') {
-    return value;
-  }
-
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>).map(([key, entryValue]) => [
-      key,
-      SENSITIVE_KEY_PATTERN.test(key) ? REDACTED_VALUE : redactTelemetryPreviewValue(entryValue)
-    ])
-  );
-}
-
-function toPreviewMessage(message: Message): Record<string, unknown> {
+function buildPromptPreviewMessage(message: Message): Record<string, unknown> {
   const previewMessage: Record<string, unknown> = {
     role: message.role,
-    content: redactTelemetryPreviewValue(message.content)
+    content: redactSensitiveTelemetryPreviewValue(message.content)
   };
 
   if (message.name) {
@@ -68,19 +39,31 @@ function toPreviewMessage(message: Message): Record<string, unknown> {
   }
 
   if (Array.isArray(message.toolCalls) && message.toolCalls.length > 0) {
-    previewMessage.toolCalls = redactTelemetryPreviewValue(message.toolCalls);
+    previewMessage.toolCalls = redactSensitiveTelemetryPreviewValue(message.toolCalls);
   }
 
   return previewMessage;
 }
 
-export function measurePromptTelemetry(messages: Message[]): PromptTelemetry {
+function measurePromptMessage(message: Message): ProviderCalledMessageSummary {
   return {
-    messageCount: messages.length,
-    contentBlockCount: messages.reduce((total, message) => total + countContentBlocks(message.content), 0),
-    preview: buildTelemetryPreview(
+    role: message.role,
+    rawChars: JSON.stringify(message).length,
+    contentBlockCount: countContentBlocks(message)
+  };
+}
+
+export function measurePromptTelemetry(messages: Message[]): PromptTelemetry {
+  const messageSummaries = messages.map((message) => measurePromptMessage(message));
+
+  return {
+    promptRawChars: JSON.stringify(messages).length,
+    messageSummaries,
+    totalContentBlockCount: messageSummaries.reduce((total, message) => total + message.contentBlockCount, 0),
+    hasSystemPrompt: messages.some((message) => message.role === 'system' && message.content.trim().length > 0),
+    promptRawPreviewRedacted: buildTelemetryPreview(
       {
-        messages: messages.map((message) => toPreviewMessage(message))
+        messages: messages.map((message) => buildPromptPreviewMessage(message))
       },
       PREVIEW_MAX_LENGTH
     )

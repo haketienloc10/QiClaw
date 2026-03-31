@@ -4,7 +4,7 @@ import type { Message } from '../../src/core/types.js';
 import { measurePromptTelemetry } from '../../src/telemetry/providerMetrics.js';
 
 describe('measurePromptTelemetry', () => {
-  it('reports prompt message count, content block count, and a redacted string preview for provider telemetry', () => {
+  it('reports provider_called metrics using deterministic full-payload chars and spec message summaries', () => {
     const messages: Message[] = [
       { role: 'system', content: 'You are a helpful assistant.' },
       { role: 'user', content: 'Authorization: Bearer top-secret' },
@@ -23,40 +23,55 @@ describe('measurePromptTelemetry', () => {
 
     const telemetry = measurePromptTelemetry(messages);
 
-    expect(telemetry.messageCount).toBe(3);
-    expect(telemetry.contentBlockCount).toBe(3);
-    expect(typeof telemetry.preview).toBe('string');
-    expect(telemetry.preview.length).toBeGreaterThan(0);
-    expect(() => JSON.parse(telemetry.preview)).not.toThrow();
-
-    const parsedPreview = JSON.parse(telemetry.preview) as {
-      messages: Array<{ role: string; content: string; toolCalls?: Array<{ id: string; input: unknown; name: string }> }>;
-    };
-
-    expect(parsedPreview.messages).toHaveLength(3);
-    expect(parsedPreview.messages[0]).toEqual({
-      role: 'system',
-      content: 'You are a helpful assistant.'
-    });
-    expect(parsedPreview.messages[1]).toEqual({
-      role: 'user',
-      content: '[REDACTED]'
-    });
-    expect(parsedPreview.messages[2]).toEqual({
-      role: 'assistant',
-      content: 'I can help with that.',
-      toolCalls: [
+    expect(telemetry).toMatchObject({
+      promptRawChars: JSON.stringify(messages).length,
+      messageSummaries: [
         {
-          id: 'tool-1',
-          name: 'lookupWeather',
-          input: { location: 'Hanoi' }
+          role: 'system',
+          rawChars: JSON.stringify(messages[0]).length,
+          contentBlockCount: 1
+        },
+        {
+          role: 'user',
+          rawChars: JSON.stringify(messages[1]).length,
+          contentBlockCount: 1
+        },
+        {
+          role: 'assistant',
+          rawChars: JSON.stringify(messages[2]).length,
+          contentBlockCount: 2
         }
-      ]
+      ],
+      totalContentBlockCount: 4,
+      hasSystemPrompt: true
     });
-    expect(telemetry.preview).not.toContain('top-secret');
   });
 
-  it('truncates preview output instead of serializing the full payload', () => {
+  it('redacts free-text secrets in prompt previews without dropping the message structure', () => {
+    const messages: Message[] = [
+      { role: 'system', content: 'You are a helpful assistant.' },
+      { role: 'user', content: 'Authorization: Bearer top-secret' }
+    ];
+
+    const telemetry = measurePromptTelemetry(messages);
+    const parsedPreview = JSON.parse((telemetry as { promptRawPreviewRedacted: string }).promptRawPreviewRedacted) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+
+    expect(parsedPreview.messages).toEqual([
+      {
+        role: 'system',
+        content: 'You are a helpful assistant.'
+      },
+      {
+        role: 'user',
+        content: 'Authorization: [REDACTED]'
+      }
+    ]);
+    expect((telemetry as { promptRawPreviewRedacted: string }).promptRawPreviewRedacted).not.toContain('top-secret');
+  });
+
+  it('truncates prompt preview output instead of serializing the full payload', () => {
     const messages: Message[] = [
       {
         role: 'user',
@@ -64,54 +79,9 @@ describe('measurePromptTelemetry', () => {
       }
     ];
 
-    const telemetry = measurePromptTelemetry(messages);
+    const telemetry = measurePromptTelemetry(messages) as { promptRawPreviewRedacted: string };
 
-    expect(telemetry.preview.endsWith('...')).toBe(true);
-    expect(telemetry.preview.length).toBeLessThan(1200);
-  });
-
-  it('redacts nested structured string values that contain secrets', () => {
-    const messages: Message[] = [
-      {
-        role: 'user',
-        content: JSON.stringify({ note: 'safe' })
-      },
-      {
-        role: 'assistant',
-        content: [
-          {
-            type: 'tool_result',
-            output: {
-              message: 'Bearer nested-secret',
-              metadata: {
-                details: 'password: open-sesame'
-              }
-            }
-          }
-        ] as unknown as string
-      }
-    ];
-
-    const telemetry = measurePromptTelemetry(messages);
-    const parsedPreview = JSON.parse(telemetry.preview) as {
-      messages: Array<{ content: unknown }>;
-    };
-
-    expect(parsedPreview.messages[1]).toEqual({
-      role: 'assistant',
-      content: [
-        {
-          output: {
-            message: '[REDACTED]',
-            metadata: {
-              details: '[REDACTED]'
-            }
-          },
-          type: 'tool_result'
-        }
-      ]
-    });
-    expect(telemetry.preview).not.toContain('nested-secret');
-    expect(telemetry.preview).not.toContain('open-sesame');
+    expect(telemetry.promptRawPreviewRedacted.endsWith('...')).toBe(true);
+    expect(telemetry.promptRawPreviewRedacted.length).toBeLessThan(1200);
   });
 });

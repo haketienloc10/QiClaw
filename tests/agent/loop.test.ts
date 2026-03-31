@@ -1159,20 +1159,21 @@ describe('agent loop', () => {
       type: 'provider_called',
       data: {
         messageCount: 2,
-        promptRawChars: 'You are helpful.'.length + 'Read note.txt and summarize it.'.length,
+        promptRawChars: JSON.stringify([
+          { role: 'system', content: 'You are helpful.' },
+          { role: 'user', content: 'Read note.txt and summarize it.' }
+        ]).length,
         toolNames: ['read_file', 'edit_file', 'search', 'shell'],
         messageSummaries: [
           {
             role: 'system',
-            contentPreviewRedacted: '"You are helpful."',
-            contentBlockCount: 1,
-            hasToolCalls: false
+            rawChars: JSON.stringify({ role: 'system', content: 'You are helpful.' }).length,
+            contentBlockCount: 1
           },
           {
             role: 'user',
-            contentPreviewRedacted: '"Read note.txt and summarize it."',
-            contentBlockCount: 1,
-            hasToolCalls: false
+            rawChars: JSON.stringify({ role: 'user', content: 'Read note.txt and summarize it.' }).length,
+            contentBlockCount: 1
           }
         ],
         totalContentBlockCount: 2,
@@ -1251,42 +1252,71 @@ describe('agent loop', () => {
       type: 'provider_called',
       data: {
         messageCount: 4,
-        promptRawChars:
-          'You are helpful.'.length +
-          'Read note.txt and summarize it.'.length +
-          'I will read the file first.'.length +
-          'agent note'.length,
+        promptRawChars: JSON.stringify([
+          { role: 'system', content: 'You are helpful.' },
+          { role: 'user', content: 'Read note.txt and summarize it.' },
+          {
+            role: 'assistant',
+            content: 'I will read the file first.',
+            toolCalls: [
+              {
+                id: 'call-read-telemetry',
+                name: 'read_file',
+                input: { path: 'note.txt' }
+              }
+            ]
+          },
+          {
+            role: 'tool',
+            name: 'read_file',
+            toolCallId: 'call-read-telemetry',
+            content: 'agent note',
+            isError: false
+          }
+        ]).length,
         toolNames: ['read_file', 'edit_file', 'search', 'shell'],
         messageSummaries: [
           {
             role: 'system',
-            contentPreviewRedacted: '"You are helpful."',
-            contentBlockCount: 1,
-            hasToolCalls: false
+            rawChars: JSON.stringify({ role: 'system', content: 'You are helpful.' }).length,
+            contentBlockCount: 1
           },
           {
             role: 'user',
-            contentPreviewRedacted: '"Read note.txt and summarize it."',
-            contentBlockCount: 1,
-            hasToolCalls: false
+            rawChars: JSON.stringify({ role: 'user', content: 'Read note.txt and summarize it.' }).length,
+            contentBlockCount: 1
           },
           {
             role: 'assistant',
-            contentPreviewRedacted: '"I will read the file first."',
-            contentBlockCount: 1,
-            hasToolCalls: true
+            rawChars: JSON.stringify({
+              role: 'assistant',
+              content: 'I will read the file first.',
+              toolCalls: [
+                {
+                  id: 'call-read-telemetry',
+                  name: 'read_file',
+                  input: { path: 'note.txt' }
+                }
+              ]
+            }).length,
+            contentBlockCount: 2
           },
           {
             role: 'tool',
-            contentPreviewRedacted: '"agent note"',
-            contentBlockCount: 1,
-            hasToolCalls: false
+            rawChars: JSON.stringify({
+              role: 'tool',
+              name: 'read_file',
+              toolCallId: 'call-read-telemetry',
+              content: 'agent note',
+              isError: false
+            }).length,
+            contentBlockCount: 1
           }
         ],
-        totalContentBlockCount: 4,
+        totalContentBlockCount: 5,
         hasSystemPrompt: true,
         promptRawPreviewRedacted:
-          '{"messages":[{"content":"You are helpful.","role":"system"},{"content":"Read note.txt and summarize it.","role":"user"},{"content":"I will read the file first.","role":"assistant"},{"content":"agent note","role":"tool"}]}'
+          '{"messages":[{"content":"You are helpful.","role":"system"},{"content":"Read note.txt and summarize it.","role":"user"},{"content":"I will read the file first.","role":"assistant","toolCalls":[{"id":"call-read-telemetry","input":{"path":"note.txt"},"name":"read_file"}]},{"content":"agent note","isError":false,"name":"read_file","role":"tool","toolCallId":"call-read-telemetry"}]}'
       }
     });
     expect(observedEvents[5]?.data).not.toHaveProperty('providerName');

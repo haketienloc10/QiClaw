@@ -24,6 +24,22 @@ describe('redactSensitiveTelemetryValue', () => {
       safe: 'visible'
     });
   });
+
+  it('keeps provider usage token counters visible while still redacting actual secrets', () => {
+    expect(redactSensitiveTelemetryValue({
+      input_tokens: 12,
+      output_tokens: 8,
+      total_tokens: 20,
+      api_key: 'top-secret',
+      authorization: 'Bearer abc'
+    })).toEqual({
+      input_tokens: 12,
+      output_tokens: 8,
+      total_tokens: 20,
+      api_key: '[REDACTED]',
+      authorization: '[REDACTED]'
+    });
+  });
 });
 
 describe('redactSensitiveTelemetryText', () => {

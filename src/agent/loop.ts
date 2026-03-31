@@ -8,14 +8,10 @@ import {
   type ToolCallRequest,
   type ToolResultMessage
 } from '../provider/model.js';
-import {
-  createNoopObserver,
-  createTelemetryEvent,
-  type ProviderCalledMessageSummary,
-  type TelemetryObserver
-} from '../telemetry/observer.js';
+import { createNoopObserver, createTelemetryEvent, type TelemetryObserver } from '../telemetry/observer.js';
 import { buildTelemetryPreview } from '../telemetry/preview.js';
 import { redactSensitiveTelemetryValue } from '../telemetry/redaction.js';
+import { measurePromptTelemetry } from '../telemetry/providerMetrics.js';
 import type { Tool } from '../tools/registry.js';
 
 import { buildDoneCriteria, type DoneCriteria } from './doneCriteria.js';
@@ -180,34 +176,12 @@ function buildResult(
 }
 
 function buildProviderCalledTelemetry(messages: Message[], toolNames: string[]) {
-  const messageSummaries = messages.map((message) => summarizePromptMessage(message));
-  const promptRawPreviewRedacted = buildTelemetryPreview(
-    {
-      messages: messages.map((message) => ({
-        role: message.role,
-        content: redactSensitiveTelemetryValue(message.content)
-      }))
-    },
-    512
-  );
+  const promptTelemetry = measurePromptTelemetry(messages);
 
   return {
     messageCount: messages.length,
-    promptRawChars: messages.reduce((total, message) => total + message.content.length, 0),
     toolNames,
-    messageSummaries,
-    totalContentBlockCount: messageSummaries.reduce((total, message) => total + message.contentBlockCount, 0),
-    hasSystemPrompt: messages.some((message) => message.role === 'system' && message.content.trim().length > 0),
-    promptRawPreviewRedacted
-  };
-}
-
-function summarizePromptMessage(message: Message): ProviderCalledMessageSummary {
-  return {
-    role: message.role,
-    contentPreviewRedacted: buildTelemetryPreview(redactSensitiveTelemetryValue(message.content)),
-    contentBlockCount: countContentBlocks(message.content),
-    hasToolCalls: Array.isArray(message.toolCalls) && message.toolCalls.length > 0
+    ...promptTelemetry
   };
 }
 

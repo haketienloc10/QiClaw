@@ -365,15 +365,13 @@ describe('buildCli', () => {
             messageSummaries: [
               {
                 role: 'system',
-                contentPreviewRedacted: '"You are a minimal single-agent CLI runtime."',
-                contentBlockCount: 1,
-                hasToolCalls: false
+                rawChars: 67,
+                contentBlockCount: 1
               },
               {
                 role: 'user',
-                contentPreviewRedacted: '"inspect package.json"',
-                contentBlockCount: 1,
-                hasToolCalls: false
+                rawChars: 40,
+                contentBlockCount: 1
               }
             ],
             totalContentBlockCount: 2,

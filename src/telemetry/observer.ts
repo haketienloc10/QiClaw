@@ -20,9 +20,8 @@ export interface TurnStartedTelemetryData {
 
 export interface ProviderCalledMessageSummary {
   role: string;
-  contentPreviewRedacted: string;
+  rawChars: number;
   contentBlockCount: number;
-  hasToolCalls: boolean;
 }
 
 export interface ProviderCalledTelemetryData {

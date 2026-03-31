@@ -47,10 +47,10 @@ describe('normalizeAnthropicResponseMetadata', () => {
       },
       debug: {
         providerUsageRawRedacted: {
-          input_tokens: '[REDACTED]',
-          output_tokens: '[REDACTED]',
-          cache_creation_input_tokens: '[REDACTED]',
-          cache_read_input_tokens: '[REDACTED]'
+          input_tokens: 120,
+          output_tokens: 24,
+          cache_creation_input_tokens: 30,
+          cache_read_input_tokens: 10
         },
         providerStopDetails: {
           stop_reason: 'tool_use'

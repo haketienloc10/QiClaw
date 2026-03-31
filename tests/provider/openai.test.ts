@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { normalizeOpenAIResponseMetadata } from '../../src/provider/openai.js';
 
 describe('normalizeOpenAIResponseMetadata', () => {
-  it('normalizes OpenAI response usage and status into provider metadata', () => {
+  it('normalizes OpenAI response usage without treating completed lifecycle status as a stop reason', () => {
     expect(normalizeOpenAIResponseMetadata({
       id: 'resp_123',
       model: 'gpt-4.1-mini',
@@ -17,7 +17,7 @@ describe('normalizeOpenAIResponseMetadata', () => {
       provider: 'openai',
       model: 'gpt-4.1-mini',
       requestId: 'resp_123',
-      stopReason: 'completed',
+      stopReason: undefined,
       usage: {
         inputTokens: 80,
         outputTokens: 20,

@@ -4,7 +4,7 @@ import { createCompactCliTelemetryObserver } from '../../src/telemetry/display.j
 import { createTelemetryEvent } from '../../src/telemetry/observer.js';
 
 describe('createCompactCliTelemetryObserver', () => {
-  it('prints only compact tool status lines', () => {
+  it('prints compact tool status lines for a successful tool call', () => {
     const lines: string[] = [];
     const observer = createCompactCliTelemetryObserver({
       writeLine(text) {

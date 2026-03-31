@@ -5,8 +5,17 @@ import { createTelemetryEvent } from '../../src/telemetry/observer.js';
 
 describe('createCompositeObserver', () => {
   it('fans out each event to every observer in order', () => {
-    const first = { record: vi.fn() };
-    const second = { record: vi.fn() };
+    const calls: string[] = [];
+    const first = {
+      record: vi.fn(() => {
+        calls.push('first');
+      })
+    };
+    const second = {
+      record: vi.fn(() => {
+        calls.push('second');
+      })
+    };
     const observer = createCompositeObserver([first, second]);
     const event = createTelemetryEvent('turn_started', { userInput: 'hello' });
 
@@ -14,6 +23,6 @@ describe('createCompositeObserver', () => {
 
     expect(first.record).toHaveBeenCalledWith(event);
     expect(second.record).toHaveBeenCalledWith(event);
-    expect(first.record.mock.invocationCallOrder[0]).toBeLessThan(second.record.mock.invocationCallOrder[0]);
+    expect(calls).toEqual(['first', 'second']);
   });
 });

@@ -17,7 +17,15 @@ describe('createCompositeObserver', () => {
       })
     };
     const observer = createCompositeObserver([first, second]);
-    const event = createTelemetryEvent('turn_started', { userInput: 'hello' });
+    const event = createTelemetryEvent('turn_started', 'input_received', {
+      turnId: 'turn-1',
+      providerRound: 0,
+      toolRound: 0,
+      cwd: '/tmp/workspace',
+      userInput: 'hello',
+      maxToolRounds: 3,
+      toolNames: []
+    });
 
     observer.record(event);
 

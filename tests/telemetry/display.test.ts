@@ -12,18 +12,26 @@ describe('createCompactCliTelemetryObserver', () => {
       }
     });
 
-    observer.record(createTelemetryEvent('tool_call_started', {
+    observer.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
       toolName: 'read_file',
       toolCallId: 'call-1',
       inputPreview: '{"path":"note.txt"}',
       inputRawRedacted: { path: 'note.txt' }
     }));
-    observer.record(createTelemetryEvent('tool_call_completed', {
+    observer.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
       toolName: 'read_file',
       toolCallId: 'call-1',
       isError: false,
       resultPreview: 'agent note',
-      resultRawRedacted: { content: 'agent note' }
+      resultRawRedacted: { content: 'agent note' },
+      durationMs: 5,
+      resultSizeChars: 10
     }));
 
     expect(lines).toEqual(['Tool: read_file', 'Tool: read_file done']);

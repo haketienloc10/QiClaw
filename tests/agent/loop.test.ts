@@ -45,7 +45,10 @@ describe('telemetry typing', () => {
   });
 
   it('accepts payloads for required-data events', () => {
-    const providerCalledEvent = createTelemetryEvent('provider_called', {
+    const providerCalledEvent = createTelemetryEvent('provider_called', 'provider_decision', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 0,
       messageCount: 1,
       promptRawChars: 1,
       toolNames: [],
@@ -54,10 +57,14 @@ describe('telemetry typing', () => {
       hasSystemPrompt: false,
       promptRawPreviewRedacted: '{}'
     });
-    const providerRespondedEvent = createTelemetryEvent('provider_responded', {
+    const providerRespondedEvent = createTelemetryEvent('provider_responded', 'provider_decision', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 0,
       responseContentBlockCount: 0,
       toolCallCount: 0,
-      hasTextOutput: false
+      hasTextOutput: false,
+      durationMs: 0
     });
 
     expect(providerCalledEvent.data.messageCount).toBe(1);
@@ -65,12 +72,17 @@ describe('telemetry typing', () => {
   });
 
   it('narrows telemetry payloads from event.type without helper casts', () => {
-    const event: TelemetryEvent = createTelemetryEvent('tool_call_completed', {
+    const event: TelemetryEvent = createTelemetryEvent('tool_call_completed', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
       toolName: 'json_tool',
       toolCallId: 'call-json-telemetry',
       isError: false,
       resultPreview: '{}',
-      resultRawRedacted: {}
+      resultRawRedacted: {},
+      durationMs: 0,
+      resultSizeChars: 2
     });
 
     if (event.type !== 'tool_call_completed') {
@@ -1136,27 +1148,72 @@ describe('agent loop', () => {
 
     expect(result.finalAnswer).toBe('The note says: agent note');
     expect(observedEvents.map((event) => event.type)).toEqual([
+      'user_input_received',
       'turn_started',
+      'prompt_size_summary',
       'provider_called',
       'provider_responded',
       'tool_call_started',
       'tool_call_completed',
+      'tool_batch_summary',
+      'prompt_size_summary',
       'provider_called',
       'provider_responded',
       'verification_completed',
-      'turn_completed'
+      'completion_check',
+      'turn_completed',
+      'turn_summary'
     ]);
     expect(observedEvents[0]).toMatchObject({
+      type: 'user_input_received',
+      stage: 'input_received',
+      data: {
+        userInput: 'Read note.txt and summarize it.',
+        userInputChars: 'Read note.txt and summarize it.'.length,
+        providerRound: 0,
+        toolRound: 0,
+        turnId: expect.any(String)
+      }
+    });
+    expect(observedEvents[1]).toMatchObject({
       type: 'turn_started',
+      stage: 'input_received',
       data: {
         cwd: workspace,
         maxToolRounds: 3,
         toolNames: ['read_file', 'edit_file', 'search', 'shell'],
-        userInput: 'Read note.txt and summarize it.'
+        userInput: 'Read note.txt and summarize it.',
+        providerRound: 0,
+        toolRound: 0,
+        turnId: expect.any(String)
       }
     });
-    expect(observedEvents[1]).toMatchObject({
+    expect(observedEvents[2]).toMatchObject({
+      type: 'prompt_size_summary',
+      stage: 'provider_decision',
+      data: {
+        messageCount: 2,
+        promptRawChars: JSON.stringify([
+          { role: 'system', content: 'You are helpful.' },
+          { role: 'user', content: 'Read note.txt and summarize it.' }
+        ]).length,
+        toolMessagesCount: 0,
+        assistantToolCallsCount: 0,
+        systemMessageChars: JSON.stringify({ role: 'system', content: 'You are helpful.' }).length,
+        userMessageChars: JSON.stringify({ role: 'user', content: 'Read note.txt and summarize it.' }).length,
+        assistantTextChars: 0,
+        assistantToolCallChars: 0,
+        toolResultChars: 0,
+        promptGrowthSinceLastProviderCallChars: undefined,
+        toolResultContributionSinceLastProviderCallChars: undefined,
+        providerRound: 1,
+        toolRound: 0,
+        turnId: expect.any(String)
+      }
+    });
+    expect(observedEvents[3]).toMatchObject({
       type: 'provider_called',
+      stage: 'provider_decision',
       data: {
         messageCount: 2,
         promptRawChars: JSON.stringify([
@@ -1168,25 +1225,31 @@ describe('agent loop', () => {
           {
             role: 'system',
             rawChars: JSON.stringify({ role: 'system', content: 'You are helpful.' }).length,
-            contentBlockCount: 1
+            contentBlockCount: 1,
+            messageSource: 'system'
           },
           {
             role: 'user',
             rawChars: JSON.stringify({ role: 'user', content: 'Read note.txt and summarize it.' }).length,
-            contentBlockCount: 1
+            contentBlockCount: 1,
+            messageSource: 'user'
           }
         ],
         totalContentBlockCount: 2,
         hasSystemPrompt: true,
-        promptRawPreviewRedacted: '{"messages":[{"content":"You are helpful.","role":"system"},{"content":"Read note.txt and summarize it.","role":"user"}]}'
+        promptRawPreviewRedacted: '{"messages":[{"content":"You are helpful.","role":"system"},{"content":"Read note.txt and summarize it.","role":"user"}]}',
+        providerRound: 1,
+        toolRound: 0,
+        turnId: expect.any(String)
       }
     });
-    expect(observedEvents[1]?.data).not.toHaveProperty('providerName');
-    expect(observedEvents[1]?.data).not.toHaveProperty('providerModel');
-    expect(observedEvents[1]?.data).not.toHaveProperty('promptPreview');
-    expect(observedEvents[1]?.data).not.toHaveProperty('contentBlockCount');
-    expect(observedEvents[2]).toMatchObject({
+    expect(observedEvents[3]?.data).not.toHaveProperty('providerName');
+    expect(observedEvents[3]?.data).not.toHaveProperty('providerModel');
+    expect(observedEvents[3]?.data).not.toHaveProperty('promptPreview');
+    expect(observedEvents[3]?.data).not.toHaveProperty('contentBlockCount');
+    expect(observedEvents[4]).toMatchObject({
       type: 'provider_responded',
+      stage: 'provider_decision',
       data: {
         stopReason: 'tool_use',
         usage: {
@@ -1214,26 +1277,35 @@ describe('agent loop', () => {
         providerStopDetails: {
           stop_reason: 'tool_use'
         },
-        responsePreviewRedacted: '[{"type":"text","text":"I will read the file first."},{"type":"tool_use","name":"read_file"}]'
+        responsePreviewRedacted: '[{"type":"text","text":"I will read the file first."},{"type":"tool_use","name":"read_file"}]',
+        durationMs: expect.any(Number),
+        providerRound: 1,
+        toolRound: 1,
+        turnId: expect.any(String)
       }
     });
-    expect(observedEvents[2]?.data).not.toHaveProperty('assistantContentLength');
-    expect(observedEvents[2]?.data).not.toHaveProperty('finish');
-    expect(observedEvents[2]?.data).not.toHaveProperty('responseMetrics');
-    expect(observedEvents[2]?.data).not.toHaveProperty('debug');
-    expect(observedEvents[3]).toMatchObject({
+    expect(observedEvents[4]?.data).not.toHaveProperty('assistantContentLength');
+    expect(observedEvents[4]?.data).not.toHaveProperty('finish');
+    expect(observedEvents[4]?.data).not.toHaveProperty('responseMetrics');
+    expect(observedEvents[4]?.data).not.toHaveProperty('debug');
+    expect(observedEvents[5]).toMatchObject({
       type: 'tool_call_started',
+      stage: 'tool_execution',
       data: {
         toolName: 'read_file',
         toolCallId: 'call-read-telemetry',
         inputPreview: '{"path":"note.txt"}',
         inputRawRedacted: {
           path: 'note.txt'
-        }
+        },
+        providerRound: 1,
+        toolRound: 1,
+        turnId: expect.any(String)
       }
     });
-    expect(observedEvents[4]).toMatchObject({
+    expect(observedEvents[6]).toMatchObject({
       type: 'tool_call_completed',
+      stage: 'tool_execution',
       data: {
         toolName: 'read_file',
         toolCallId: 'call-read-telemetry',
@@ -1245,11 +1317,82 @@ describe('agent loop', () => {
           toolCallId: 'call-read-telemetry',
           content: 'agent note',
           isError: false
-        }
+        },
+        durationMs: expect.any(Number),
+        resultSizeChars: expect.any(Number),
+        resultSizeBucket: 'small',
+        providerRound: 1,
+        toolRound: 1,
+        turnId: expect.any(String)
       }
     });
-    expect(observedEvents[5]).toMatchObject({
+    expect(observedEvents[7]).toMatchObject({
+      type: 'tool_batch_summary',
+      stage: 'tool_execution',
+      data: {
+        toolCallsTotal: 1,
+        toolCallsByName: {
+          read_file: 1
+        },
+        batchSource: 'single_provider_response',
+        batchIndexWithinTurn: 1,
+        providerResponseToolCallCount: 1,
+        providerResponseHadTextOutput: true,
+        toolCallIds: ['call-read-telemetry'],
+        resultSizeCharsTotal: expect.any(Number),
+        resultSizeCharsMax: expect.any(Number),
+        errorCount: 0,
+        duplicateToolNameCount: 0,
+        sameToolNameRepeated: false,
+        providerRound: 1,
+        toolRound: 1,
+        turnId: expect.any(String)
+      }
+    });
+    expect(observedEvents[8]).toMatchObject({
+      type: 'prompt_size_summary',
+      stage: 'provider_decision',
+      data: {
+        messageCount: 4,
+        toolMessagesCount: 1,
+        assistantToolCallsCount: 1,
+        systemMessageChars: JSON.stringify({ role: 'system', content: 'You are helpful.' }).length,
+        userMessageChars: JSON.stringify({ role: 'user', content: 'Read note.txt and summarize it.' }).length,
+        assistantTextChars: 0,
+        assistantToolCallChars: JSON.stringify({
+          role: 'assistant',
+          content: 'I will read the file first.',
+          toolCalls: [
+            {
+              id: 'call-read-telemetry',
+              name: 'read_file',
+              input: { path: 'note.txt' }
+            }
+          ]
+        }).length,
+        toolResultChars: JSON.stringify({
+          role: 'tool',
+          name: 'read_file',
+          toolCallId: 'call-read-telemetry',
+          content: 'agent note',
+          isError: false
+        }).length,
+        promptGrowthSinceLastProviderCallChars: expect.any(Number),
+        toolResultContributionSinceLastProviderCallChars: JSON.stringify({
+          role: 'tool',
+          name: 'read_file',
+          toolCallId: 'call-read-telemetry',
+          content: 'agent note',
+          isError: false
+        }).length,
+        providerRound: 2,
+        toolRound: 1,
+        turnId: expect.any(String)
+      }
+    });
+    expect(observedEvents[9]).toMatchObject({
       type: 'provider_called',
+      stage: 'provider_decision',
       data: {
         messageCount: 4,
         promptRawChars: JSON.stringify([
@@ -1279,12 +1422,14 @@ describe('agent loop', () => {
           {
             role: 'system',
             rawChars: JSON.stringify({ role: 'system', content: 'You are helpful.' }).length,
-            contentBlockCount: 1
+            contentBlockCount: 1,
+            messageSource: 'system'
           },
           {
             role: 'user',
             rawChars: JSON.stringify({ role: 'user', content: 'Read note.txt and summarize it.' }).length,
-            contentBlockCount: 1
+            contentBlockCount: 1,
+            messageSource: 'user'
           },
           {
             role: 'assistant',
@@ -1299,7 +1444,9 @@ describe('agent loop', () => {
                 }
               ]
             }).length,
-            contentBlockCount: 2
+            contentBlockCount: 2,
+            messageSource: 'assistant_tool_call',
+            toolCallCount: 1
           },
           {
             role: 'tool',
@@ -1310,21 +1457,29 @@ describe('agent loop', () => {
               content: 'agent note',
               isError: false
             }).length,
-            contentBlockCount: 1
+            contentBlockCount: 1,
+            messageSource: 'tool_result',
+            toolName: 'read_file',
+            toolCallId: 'call-read-telemetry',
+            isError: false
           }
         ],
         totalContentBlockCount: 5,
         hasSystemPrompt: true,
         promptRawPreviewRedacted:
-          '{"messages":[{"content":"You are helpful.","role":"system"},{"content":"Read note.txt and summarize it.","role":"user"},{"content":"I will read the file first.","role":"assistant","toolCalls":[{"id":"call-read-telemetry","input":{"path":"note.txt"},"name":"read_file"}]},{"content":"agent note","isError":false,"name":"read_file","role":"tool","toolCallId":"call-read-telemetry"}]}'
+          '{"messages":[{"content":"You are helpful.","role":"system"},{"content":"Read note.txt and summarize it.","role":"user"},{"content":"I will read the file first.","role":"assistant","toolCalls":[{"id":"call-read-telemetry","input":{"path":"note.txt"},"name":"read_file"}]},{"content":"agent note","isError":false,"name":"read_file","role":"tool","toolCallId":"call-read-telemetry"}]}',
+        providerRound: 2,
+        toolRound: 1,
+        turnId: expect.any(String)
       }
     });
-    expect(observedEvents[5]?.data).not.toHaveProperty('providerName');
-    expect(observedEvents[5]?.data).not.toHaveProperty('providerModel');
-    expect(observedEvents[5]?.data).not.toHaveProperty('promptPreview');
-    expect(observedEvents[5]?.data).not.toHaveProperty('contentBlockCount');
-    expect(observedEvents[6]).toMatchObject({
+    expect(observedEvents[9]?.data).not.toHaveProperty('providerName');
+    expect(observedEvents[9]?.data).not.toHaveProperty('providerModel');
+    expect(observedEvents[9]?.data).not.toHaveProperty('promptPreview');
+    expect(observedEvents[9]?.data).not.toHaveProperty('contentBlockCount');
+    expect(observedEvents[10]).toMatchObject({
       type: 'provider_responded',
+      stage: 'provider_decision',
       data: {
         stopReason: 'end_turn',
         usage: {
@@ -1346,25 +1501,123 @@ describe('agent loop', () => {
         providerStopDetails: {
           stop_reason: 'end_turn'
         },
-        responsePreviewRedacted: '[{"type":"text","text":"The note says: agent note"}]'
+        responsePreviewRedacted: '[{"type":"text","text":"The note says: agent note"}]',
+        durationMs: expect.any(Number),
+        providerRound: 2,
+        toolRound: 1,
+        turnId: expect.any(String)
       }
     });
-    expect(observedEvents[6]?.data).not.toHaveProperty('assistantContentLength');
-    expect(observedEvents[6]?.data).not.toHaveProperty('finish');
-    expect(observedEvents[6]?.data).not.toHaveProperty('responseMetrics');
-    expect(observedEvents[6]?.data).not.toHaveProperty('debug');
-    expect(observedEvents[7]).toMatchObject({
+    expect(observedEvents[10]?.data).not.toHaveProperty('assistantContentLength');
+    expect(observedEvents[10]?.data).not.toHaveProperty('finish');
+    expect(observedEvents[10]?.data).not.toHaveProperty('responseMetrics');
+    expect(observedEvents[10]?.data).not.toHaveProperty('debug');
+    expect(observedEvents[11]).toMatchObject({
       type: 'verification_completed',
+      stage: 'completion_check',
       data: {
         isVerified: true,
-        toolMessagesCount: 1
+        toolMessagesCount: 1,
+        providerRound: 2,
+        toolRound: 1,
+        turnId: expect.any(String)
       }
     });
-    expect(observedEvents[8]).toMatchObject({
+    expect(observedEvents[12]).toMatchObject({
+      type: 'completion_check',
+      stage: 'completion_check',
+      data: {
+        hasFinalText: true,
+        hasToolErrors: false,
+        maxToolRoundsReached: false,
+        stoppedNormally: true,
+        providerRound: 2,
+        toolRound: 1,
+        turnId: expect.any(String)
+      }
+    });
+    expect(observedEvents[13]).toMatchObject({
       type: 'turn_completed',
+      stage: 'completion_check',
       data: {
         stopReason: 'completed',
-        toolRoundsUsed: 1
+        toolRoundsUsed: 1,
+        isVerified: true,
+        durationMs: expect.any(Number),
+        providerRound: 2,
+        toolRound: 1,
+        turnId: expect.any(String)
+      }
+    });
+    expect(observedEvents[14]).toMatchObject({
+      type: 'turn_summary',
+      stage: 'completion_check',
+      data: {
+        providerRounds: 2,
+        toolRoundsUsed: 1,
+        toolCallsTotal: 1,
+        toolCallsByName: {
+          read_file: 1
+        },
+        inputTokensTotal: 32,
+        outputTokensTotal: 12,
+        promptCharsMax: JSON.stringify([
+          { role: 'system', content: 'You are helpful.' },
+          { role: 'user', content: 'Read note.txt and summarize it.' },
+          {
+            role: 'assistant',
+            content: 'I will read the file first.',
+            toolCalls: [
+              {
+                id: 'call-read-telemetry',
+                name: 'read_file',
+                input: { path: 'note.txt' }
+              }
+            ]
+          },
+          {
+            role: 'tool',
+            name: 'read_file',
+            toolCallId: 'call-read-telemetry',
+            content: 'agent note',
+            isError: false
+          }
+        ]).length,
+        toolResultCharsInFinalPrompt: JSON.stringify({
+          role: 'tool',
+          name: 'read_file',
+          toolCallId: 'call-read-telemetry',
+          content: 'agent note',
+          isError: false
+        }).length,
+        assistantToolCallCharsInFinalPrompt: JSON.stringify({
+          role: 'assistant',
+          content: 'I will read the file first.',
+          toolCalls: [
+            {
+              id: 'call-read-telemetry',
+              name: 'read_file',
+              input: { path: 'note.txt' }
+            }
+          ]
+        }).length,
+        toolResultPromptGrowthCharsTotal: JSON.stringify({
+          role: 'tool',
+          name: 'read_file',
+          toolCallId: 'call-read-telemetry',
+          content: 'agent note',
+          isError: false
+        }).length,
+        toolResultCharsAddedAcrossTurn: JSON.stringify({
+          role: 'tool',
+          name: 'read_file',
+          toolCallId: 'call-read-telemetry',
+          content: 'agent note',
+          isError: false
+        }).length,
+        turnCompleted: true,
+        stopReason: 'completed',
+        turnId: expect.any(String)
       }
     });
     expect(metrics.snapshot()).toEqual({
@@ -1442,7 +1695,7 @@ describe('agent loop', () => {
       }
     });
 
-    const toolCallStartedEvent = observedEvents[3];
+    const toolCallStartedEvent = observedEvents.find((event) => event.type === 'tool_call_started');
 
     expect(toolCallStartedEvent?.type).toBe('tool_call_started');
     if (!toolCallStartedEvent || toolCallStartedEvent.type !== 'tool_call_started') {
@@ -1522,7 +1775,7 @@ describe('agent loop', () => {
       }
     });
 
-    const toolCallCompletedEvent = observedEvents[4];
+    const toolCallCompletedEvent = observedEvents.find((event) => event.type === 'tool_call_completed');
 
     expect(toolCallCompletedEvent?.type).toBe('tool_call_completed');
     if (!toolCallCompletedEvent || toolCallCompletedEvent.type !== 'tool_call_completed') {
@@ -1597,7 +1850,8 @@ describe('agent loop', () => {
     });
 
     expect(result.stopReason).toBe('max_tool_rounds_reached');
-    expect(observedEvents.at(-1)).toMatchObject({
+    const turnStoppedEvent = observedEvents.find((event) => event.type === 'turn_stopped');
+    expect(turnStoppedEvent).toMatchObject({
       type: 'turn_stopped',
       data: {
         stopReason: 'max_tool_rounds_reached',
@@ -1605,12 +1859,96 @@ describe('agent loop', () => {
         isVerified: false
       }
     });
+    expect(observedEvents.at(-1)?.type).toBe('turn_summary');
     expect(metrics.snapshot()).toEqual({
       turnsStarted: 1,
       turnsCompleted: 0,
       turnsFailed: 0,
       totalToolCallsCompleted: 1,
       lastTurnDurationMs: 0
+    });
+  });
+
+  it('records batch-level diagnostics for multi-call tool responses', async () => {
+    const observedEvents: TelemetryEvent[] = [];
+    const provider = createScriptedProvider([
+      {
+        message: {
+          role: 'assistant',
+          content: 'I will inspect two files.'
+        },
+        toolCalls: [
+          {
+            id: 'call-read-a',
+            name: 'read_file',
+            input: { path: 'A.txt' }
+          },
+          {
+            id: 'call-read-b',
+            name: 'read_file',
+            input: { path: 'B.txt' }
+          }
+        ]
+      },
+      {
+        message: { role: 'assistant', content: 'Done.' },
+        toolCalls: []
+      }
+    ]);
+
+    const readTool: Tool<{ path: string }> = {
+      name: 'read_file',
+      description: 'Reads a fake file',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' }
+        },
+        required: ['path'],
+        additionalProperties: false
+      },
+      async execute(input) {
+        return {
+          content: input.path === 'A.txt' ? 'A'.repeat(120) : 'ok'
+        };
+      }
+    };
+
+    await runAgentTurn({
+      provider,
+      availableTools: [readTool],
+      baseSystemPrompt: 'You are helpful.',
+      userInput: 'Inspect both files.',
+      cwd: '/tmp/multi-tool-batch',
+      maxToolRounds: 2,
+      observer: {
+        record(event) {
+          observedEvents.push(event);
+        }
+      }
+    });
+
+    const batchSummaryEvent = observedEvents.find((event) => event.type === 'tool_batch_summary');
+    const completedEvents = observedEvents.filter((event) => event.type === 'tool_call_completed');
+
+    expect(completedEvents).toHaveLength(2);
+    expect(batchSummaryEvent).toMatchObject({
+      type: 'tool_batch_summary',
+      stage: 'tool_execution',
+      data: {
+        toolCallsTotal: 2,
+        toolCallsByName: { read_file: 2 },
+        batchSource: 'single_provider_response',
+        batchIndexWithinTurn: 1,
+        providerResponseToolCallCount: 2,
+        providerResponseHadTextOutput: true,
+        toolCallIds: ['call-read-a', 'call-read-b'],
+        duplicateToolNameCount: 1,
+        sameToolNameRepeated: true,
+        batchLengthHint: 'multi_call_batch',
+        largeResultHint: 'single_result_large',
+        oversizedToolCallIds: ['call-read-a']
+      }
     });
   });
 
@@ -1642,9 +1980,16 @@ describe('agent loop', () => {
       })
     ).rejects.toThrow('provider boom');
 
-    expect(observedEvents.map((event) => event.type)).toEqual(['turn_started', 'provider_called', 'turn_failed']);
-    expect(observedEvents[2]).toMatchObject({
+    expect(observedEvents.map((event) => event.type)).toEqual([
+      'user_input_received',
+      'turn_started',
+      'prompt_size_summary',
+      'provider_called',
+      'turn_failed'
+    ]);
+    expect(observedEvents[4]).toMatchObject({
       type: 'turn_failed',
+      stage: 'completion_check',
       data: {
         message: 'provider boom'
       }

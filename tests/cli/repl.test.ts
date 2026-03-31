@@ -123,9 +123,36 @@ describe('createRepl', () => {
   it('tracks telemetry metrics deterministically from loop-level events', () => {
     const metrics = createInMemoryMetricsObserver();
 
-    metrics.record(createTelemetryEvent('turn_started'));
-    metrics.record(createTelemetryEvent('tool_call_completed', { toolName: 'read_file' }));
-    metrics.record(createTelemetryEvent('turn_completed'));
+    metrics.record(createTelemetryEvent('turn_started', 'input_received', {
+      turnId: 'turn-1',
+      providerRound: 0,
+      toolRound: 0,
+      cwd: '/tmp/workspace',
+      userInput: 'hello',
+      maxToolRounds: 3,
+      toolNames: []
+    }));
+    metrics.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      toolName: 'read_file',
+      toolCallId: 'call-1',
+      isError: false,
+      resultPreview: '{}',
+      resultRawRedacted: {},
+      durationMs: 1,
+      resultSizeChars: 2
+    }));
+    metrics.record(createTelemetryEvent('turn_completed', 'completion_check', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      stopReason: 'completed',
+      toolRoundsUsed: 1,
+      isVerified: true,
+      durationMs: 5
+    }));
 
     expect(metrics.snapshot()).toEqual({
       turnsStarted: 1,
@@ -360,7 +387,10 @@ describe('buildCli', () => {
           observer: runtimeOptions.observer ?? { record() {} }
         }),
         runTurn: async (input) => {
-          input.observer?.record(createTelemetryEvent('provider_called', {
+          input.observer?.record(createTelemetryEvent('provider_called', 'provider_decision', {
+            turnId: 'turn-1',
+            providerRound: 1,
+            toolRound: 0,
             messageCount: 2,
             promptRawChars: 42,
             toolNames: ['Read'],
@@ -380,7 +410,10 @@ describe('buildCli', () => {
             hasSystemPrompt: true,
             promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"}]}'
           }));
-          input.observer?.record(createTelemetryEvent('provider_responded', {
+          input.observer?.record(createTelemetryEvent('provider_responded', 'provider_decision', {
+            turnId: 'turn-1',
+            providerRound: 1,
+            toolRound: 0,
             stopReason: 'end_turn',
             usage: {
               inputTokens: 12,
@@ -399,7 +432,8 @@ describe('buildCli', () => {
             providerStopDetails: {
               stop_reason: 'end_turn'
             },
-            responsePreviewRedacted: '[{"type":"text","text":"handled"}]'
+            responsePreviewRedacted: '[{"type":"text","text":"handled"}]',
+            durationMs: 20
           }));
 
           return {
@@ -438,21 +472,25 @@ describe('buildCli', () => {
       expect(providerCalledEvent).toEqual(
         expect.objectContaining({
           type: 'provider_called',
+          stage: 'provider_decision',
           timestamp: '2026-03-31T12:34:56.000Z',
           data: expect.objectContaining({
-            promptRawChars: 42
+            promptRawChars: 42,
+            turnId: 'turn-1'
           })
         })
       );
       expect(providerRespondedEvent).toEqual(
         expect.objectContaining({
           type: 'provider_responded',
+          stage: 'provider_decision',
           timestamp: '2026-03-31T12:34:56.000Z',
           data: expect.objectContaining({
             usage: expect.objectContaining({
               totalTokens: 20
             }),
-            responseContentBlockCount: 1
+            responseContentBlockCount: 1,
+            durationMs: 20
           })
         })
       );
@@ -1648,12 +1686,13 @@ describe('createJsonLineLogger', () => {
       }
     });
 
-    logger.record(createTelemetryEvent('turn_started', { userInput: 'hello' }));
+    logger.record(createTelemetryEvent('turn_started', 'input_received', { userInput: 'hello' }));
 
     expect(lines).toHaveLength(1);
     expect(lines[0].endsWith('\n')).toBe(true);
     expect(JSON.parse(lines[0])).toMatchObject({
       type: 'turn_started',
+      stage: 'input_received',
       data: {
         userInput: 'hello'
       }

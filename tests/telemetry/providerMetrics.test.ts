@@ -4,7 +4,7 @@ import type { Message } from '../../src/core/types.js';
 import { measurePromptTelemetry } from '../../src/telemetry/providerMetrics.js';
 
 describe('measurePromptTelemetry', () => {
-  it('reports provider_called metrics using deterministic full-payload chars and spec message summaries', () => {
+  it('reports provider_called metrics using deterministic full-payload chars and classifies message sources', () => {
     const messages: Message[] = [
       { role: 'system', content: 'You are a helpful assistant.' },
       { role: 'user', content: 'Authorization: Bearer top-secret' },
@@ -18,6 +18,13 @@ describe('measurePromptTelemetry', () => {
             input: { location: 'Hanoi' }
           }
         ]
+      },
+      {
+        role: 'tool',
+        name: 'lookupWeather',
+        toolCallId: 'tool-1',
+        content: 'Sunny in Hanoi',
+        isError: false
       }
     ];
 
@@ -29,22 +36,70 @@ describe('measurePromptTelemetry', () => {
         {
           role: 'system',
           rawChars: JSON.stringify(messages[0]).length,
-          contentBlockCount: 1
+          contentBlockCount: 1,
+          messageSource: 'system'
         },
         {
           role: 'user',
           rawChars: JSON.stringify(messages[1]).length,
-          contentBlockCount: 1
+          contentBlockCount: 1,
+          messageSource: 'user'
         },
         {
           role: 'assistant',
           rawChars: JSON.stringify(messages[2]).length,
-          contentBlockCount: 2
+          contentBlockCount: 2,
+          messageSource: 'assistant_tool_call',
+          toolCallCount: 1
+        },
+        {
+          role: 'tool',
+          rawChars: JSON.stringify(messages[3]).length,
+          contentBlockCount: 1,
+          messageSource: 'tool_result',
+          toolName: 'lookupWeather',
+          toolCallId: 'tool-1',
+          isError: false
         }
       ],
-      totalContentBlockCount: 4,
-      hasSystemPrompt: true
+      totalContentBlockCount: 5,
+      hasSystemPrompt: true,
+      toolMessagesCount: 1,
+      assistantToolCallsCount: 1,
+      systemMessageChars: JSON.stringify(messages[0]).length,
+      userMessageChars: JSON.stringify(messages[1]).length,
+      assistantTextChars: 0,
+      assistantToolCallChars: JSON.stringify(messages[2]).length,
+      toolResultChars: JSON.stringify(messages[3]).length
     });
+  });
+
+  it('separates assistant text chars from assistant tool call chars', () => {
+    const messages: Message[] = [
+      { role: 'assistant', content: 'Plain assistant text.' },
+      {
+        role: 'assistant',
+        content: 'Calling tool now.',
+        toolCalls: [{ id: 'tool-2', name: 'search', input: { pattern: 'needle' } }]
+      }
+    ];
+
+    const telemetry = measurePromptTelemetry(messages);
+
+    expect(telemetry.messageSummaries).toMatchObject([
+      {
+        role: 'assistant',
+        messageSource: 'assistant_text'
+      },
+      {
+        role: 'assistant',
+        messageSource: 'assistant_tool_call',
+        toolCallCount: 1
+      }
+    ]);
+    expect(telemetry.assistantTextChars).toBe(JSON.stringify(messages[0]).length);
+    expect(telemetry.assistantToolCallChars).toBe(JSON.stringify(messages[1]).length);
+    expect(telemetry.toolResultChars).toBe(0);
   });
 
   it('redacts free-text secrets in prompt previews without dropping the message structure', () => {

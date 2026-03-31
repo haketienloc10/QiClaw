@@ -1092,7 +1092,90 @@ describe('agent loop', () => {
     });
   });
 
-  it('redacts sensitive values in JSON string tool results before recording telemetry', async () => {
+  it('builds tool input previews from redacted values before recording telemetry', async () => {
+    const observedEvents: TelemetryEvent[] = [];
+    const provider = createScriptedProvider([
+      {
+        message: { role: 'assistant', content: 'I will call the auth tool.' },
+        toolCalls: [
+          {
+            id: 'call-input-telemetry',
+            name: 'auth_tool',
+            input: {
+              apiKey: 'super-secret-key',
+              nested: {
+                password: 'p@ssw0rd'
+              },
+              query: 'show status'
+            }
+          }
+        ]
+      },
+      {
+        message: { role: 'assistant', content: 'Done.' },
+        toolCalls: []
+      }
+    ]);
+
+    const authTool: Tool<{ apiKey: string; nested: { password: string }; query: string }> = {
+      name: 'auth_tool',
+      description: 'Consumes auth-flavored inputs',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          apiKey: { type: 'string' },
+          nested: {
+            type: 'object',
+            properties: {
+              password: { type: 'string' }
+            },
+            required: ['password'],
+            additionalProperties: false
+          },
+          query: { type: 'string' }
+        },
+        required: ['apiKey', 'nested', 'query'],
+        additionalProperties: false
+      },
+      async execute() {
+        return {
+          content: 'ok'
+        };
+      }
+    };
+
+    await runAgentTurn({
+      provider,
+      availableTools: [authTool],
+      baseSystemPrompt: 'You are helpful.',
+      userInput: 'Run the tool.',
+      cwd: '/tmp/input-telemetry-runtime',
+      maxToolRounds: 2,
+      observer: {
+        record(event) {
+          observedEvents.push(event);
+        }
+      }
+    });
+
+    expect(observedEvents[3]).toMatchObject({
+      type: 'tool_call_started',
+      data: {
+        toolName: 'auth_tool',
+        toolCallId: 'call-input-telemetry',
+        inputPreview: '{"apiKey":"[REDACTED]","nested":{"password":"[REDACTED]"},"query":"show status"}'
+      }
+    });
+    expect(observedEvents[3]?.data.inputRawRedacted).toEqual({
+      apiKey: '[REDACTED]',
+      nested: {
+        password: '[REDACTED]'
+      },
+      query: 'show status'
+    });
+  });
+
+  it('builds tool result previews from redacted JSON string values before recording telemetry', async () => {
     const observedEvents: TelemetryEvent[] = [];
     const provider = createScriptedProvider([
       {
@@ -1155,7 +1238,7 @@ describe('agent loop', () => {
         toolName: 'json_tool',
         toolCallId: 'call-json-telemetry',
         isError: false,
-        resultPreview: '{"content":"{\\"token\\":\\"secret-token-value\\",\\"nested\\":{\\"authorization\\":\\"Bearer abc\\"},\\"query\\":\\"show token\\"}"}'
+        resultPreview: '{"content":{"nested":{"authorization":"[REDACTED]"},"query":"show token","token":"[REDACTED]"}}'
       }
     });
     expect(observedEvents[4]?.data.resultRawRedacted).toEqual({

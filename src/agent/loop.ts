@@ -100,25 +100,27 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTu
       toolRoundsUsed += 1;
 
       for (const toolCall of response.toolCalls) {
+        const redactedToolInput = redactSensitiveTelemetryValue(toolCall.input);
         observer.record(
           createTelemetryEvent('tool_call_started', {
             toolName: toolCall.name,
             toolCallId: toolCall.id,
-            inputPreview: buildTelemetryPreview(toolCall.input),
-            inputRawRedacted: redactSensitiveTelemetryValue(toolCall.input)
+            inputPreview: buildTelemetryPreview(redactedToolInput),
+            inputRawRedacted: redactedToolInput
           })
         );
 
         const toolResult = await dispatchAllowedToolCall(toolCall, input.availableTools, input.cwd);
         history.push(toolResult);
 
+        const redactedToolResultPayload = buildRedactedToolResultPayload(toolResult);
         observer.record(
           createTelemetryEvent('tool_call_completed', {
             toolName: toolCall.name,
             toolCallId: toolCall.id,
             isError: toolResult.isError,
-            resultPreview: buildTelemetryPreview({ content: toolResult.content }),
-            resultRawRedacted: buildRedactedToolResultPayload(toolResult)
+            resultPreview: buildTelemetryPreview({ content: redactedToolResultPayload.content }),
+            resultRawRedacted: redactedToolResultPayload
           })
         );
       }

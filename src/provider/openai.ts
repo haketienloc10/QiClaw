@@ -8,7 +8,10 @@ import type {
 
 import type { Message } from '../core/types.js';
 import { buildTelemetryPreview } from '../telemetry/preview.js';
-import { redactSensitiveTelemetryValue } from '../telemetry/redaction.js';
+import {
+  redactSensitiveTelemetryPreviewValue,
+  redactSensitiveTelemetryValue
+} from '../telemetry/redaction.js';
 import type { Tool } from '../tools/registry.js';
 
 import {
@@ -107,13 +110,13 @@ function countOpenAIOutputBlocksByType(output: unknown[]): Record<string, number
 function redactOpenAIOutputForPreview(output: unknown[]): unknown[] {
   return output.map((item) => {
     if (!isOpenAIFunctionCall(item) || typeof item.arguments !== 'string') {
-      return redactSensitiveTelemetryValue(item);
+      return redactSensitiveTelemetryPreviewValue(item);
     }
 
-    const redactedItem = redactSensitiveTelemetryValue(item) as Record<string, unknown>;
+    const redactedItem = redactSensitiveTelemetryPreviewValue(item) as Record<string, unknown>;
 
     try {
-      redactedItem.arguments = JSON.stringify(redactSensitiveTelemetryValue(JSON.parse(item.arguments)));
+      redactedItem.arguments = JSON.stringify(redactSensitiveTelemetryPreviewValue(JSON.parse(item.arguments)));
     } catch {
       redactedItem.arguments = item.arguments;
     }

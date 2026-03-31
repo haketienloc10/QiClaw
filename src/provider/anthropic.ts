@@ -8,7 +8,10 @@ import type {
 
 import type { Message as RuntimeMessage } from '../core/types.js';
 import { buildTelemetryPreview } from '../telemetry/preview.js';
-import { redactSensitiveTelemetryValue } from '../telemetry/redaction.js';
+import {
+  redactSensitiveTelemetryPreviewValue,
+  redactSensitiveTelemetryValue
+} from '../telemetry/redaction.js';
 import type { Tool } from '../tools/registry.js';
 
 import {
@@ -133,7 +136,7 @@ export function normalizeAnthropicResponseMetadata(response: {
       providerStopDetails: response.stop_reason ? { stop_reason: response.stop_reason } : undefined,
       toolCallSummaries: toolCalls.map((toolCall) => ({ id: toolCall.id, name: toolCall.name })),
       responseContentBlocksByType: contentBlocksByType,
-      responsePreviewRedacted: buildTelemetryPreview(redactSensitiveTelemetryValue(response.content), 400)
+      responsePreviewRedacted: buildTelemetryPreview(redactSensitiveTelemetryPreviewValue(response.content), 400)
     }
   };
 }

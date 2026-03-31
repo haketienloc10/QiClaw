@@ -13,7 +13,10 @@ describe('normalizeOpenAIResponseMetadata', () => {
         type: 'message',
         role: 'assistant',
         content: [
-          { type: 'output_text', text: 'I will inspect it.' }
+          {
+            type: 'output_text',
+            text: 'I will inspect it. Authorization: Bearer secret-token\napi_key=secret-key\ncookie: session=abc123'
+          }
         ]
       },
       {
@@ -79,11 +82,13 @@ describe('normalizeOpenAIResponseMetadata', () => {
           output_text: 1
         },
         responsePreviewRedacted:
-          '[{"content":[{"text":"I will inspect it.","type":"output_text"}],"role":"assistant","type":"message"},{"arguments":"{\\"path\\":\\"note.txt\\",\\"authorization\\":\\"[REDACTED]\\"}","call_id":"call_1","name":"read_file","type":"function_call"}]'
+          '[{"content":[{"text":"I will inspect it. Authorization: [REDACTED]\\napi_key=[REDACTED]\\ncookie: [REDACTED]","type":"output_text"}],"role":"assistant","type":"message"},{"arguments":"{\\"path\\":\\"note.txt\\",\\"authorization\\":\\"[REDACTED]\\"}","call_id":"call_1","name":"read_file","type":"function_call"}]'
       }
     });
 
-    expect(readOpenAITextContent(output)).toBe('I will inspect it.');
+    expect(readOpenAITextContent(output)).toBe(
+      'I will inspect it. Authorization: Bearer secret-token\napi_key=secret-key\ncookie: session=abc123'
+    );
     expect(extractOpenAIToolCalls(output)).toEqual([
       {
         id: 'call_1',

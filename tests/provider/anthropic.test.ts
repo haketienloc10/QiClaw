@@ -9,7 +9,10 @@ import {
 describe('normalizeAnthropicResponseMetadata', () => {
   it('normalizes finish, usage, response metrics, and debug metadata for Task 3', () => {
     const content = [
-      { type: 'text', text: 'I will inspect it.' },
+      {
+        type: 'text',
+        text: 'I will inspect it. Authorization: Bearer secret-token\napi_key=secret-key\ncookie: session=abc123'
+      },
       { type: 'tool_use', id: 'toolu_1', name: 'read_file', input: { path: 'note.txt', apiKey: 'secret-key' } }
     ];
 
@@ -63,11 +66,13 @@ describe('normalizeAnthropicResponseMetadata', () => {
           tool_use: 1
         },
         responsePreviewRedacted:
-          '[{"text":"I will inspect it.","type":"text"},{"id":"toolu_1","input":{"apiKey":"[REDACTED]","path":"note.txt"},"name":"read_file","type":"tool_use"}]'
+          '[{"text":"I will inspect it. Authorization: [REDACTED]\\napi_key=[REDACTED]\\ncookie: [REDACTED]","type":"text"},{"id":"toolu_1","input":{"apiKey":"[REDACTED]","path":"note.txt"},"name":"read_file","type":"tool_use"}]'
       }
     });
 
-    expect(readAnthropicTextContent(content)).toBe('I will inspect it.');
+    expect(readAnthropicTextContent(content)).toBe(
+      'I will inspect it. Authorization: Bearer secret-token\napi_key=secret-key\ncookie: session=abc123'
+    );
     expect(extractAnthropicToolCalls(content)).toEqual([
       {
         id: 'toolu_1',

@@ -407,103 +407,115 @@ describe('buildCli', () => {
   });
 
   it('passes the selected provider and model to runtime creation in prompt mode', async () => {
-    const writes: string[] = [];
-    const cli = buildCli({
-      argv: ['--provider', 'openai', '--model', 'gpt-4.1', '--prompt', 'inspect package.json'],
-      cwd: '/tmp/qiclaw-provider-test',
-      stdout: {
-        write(chunk) {
-          writes.push(String(chunk));
-          return true;
-        }
-      },
-      createRuntime: (runtimeOptions) => {
-        expect(runtimeOptions.provider).toBe('openai');
-        expect(runtimeOptions.model).toBe('gpt-4.1');
-        expect(runtimeOptions.baseUrl).toBeUndefined();
-        expect(runtimeOptions.apiKey).toBeUndefined();
-        expect(runtimeOptions.cwd).toBe('/tmp/qiclaw-provider-test');
+    await withProviderEnvSnapshot(async () => {
+      delete process.env.OPENAI_BASE_URL;
+      delete process.env.OPENAI_API_KEY;
+      delete process.env.OPENAI_MODEL;
 
-        return {
-          provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
-          availableTools: [],
-          cwd: runtimeOptions.cwd,
-          observer: runtimeOptions.observer ?? { record() {} }
-        };
-      },
-      runTurn: async (input) => ({
-        stopReason: 'completed',
-        finalAnswer: `handled: ${input.userInput}`,
-        history: [],
-        toolRoundsUsed: 0,
-        doneCriteria: {
-          goal: input.userInput,
-          checklist: [input.userInput],
-          requiresNonEmptyFinalAnswer: true,
-          requiresToolEvidence: false
+      const writes: string[] = [];
+      const cli = buildCli({
+        argv: ['--provider', 'openai', '--model', 'gpt-4.1', '--prompt', 'inspect package.json'],
+        cwd: '/tmp/qiclaw-provider-test',
+        stdout: {
+          write(chunk) {
+            writes.push(String(chunk));
+            return true;
+          }
         },
-        verification: {
-          isVerified: true,
-          finalAnswerIsNonEmpty: true,
-          toolEvidenceSatisfied: true,
-          toolMessagesCount: 0,
-          checks: []
-        }
-      })
-    });
+        createRuntime: (runtimeOptions) => {
+          expect(runtimeOptions.provider).toBe('openai');
+          expect(runtimeOptions.model).toBe('gpt-4.1');
+          expect(runtimeOptions.baseUrl).toBeUndefined();
+          expect(runtimeOptions.apiKey).toBeUndefined();
+          expect(runtimeOptions.cwd).toBe('/tmp/qiclaw-provider-test');
 
-    await expect(cli.run()).resolves.toBe(0);
-    expect(writes).toEqual(['handled: inspect package.json\n']);
+          return {
+            provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
+            availableTools: [],
+            cwd: runtimeOptions.cwd,
+            observer: runtimeOptions.observer ?? { record() {} }
+          };
+        },
+        runTurn: async (input) => ({
+          stopReason: 'completed',
+          finalAnswer: `handled: ${input.userInput}`,
+          history: [],
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            toolEvidenceSatisfied: true,
+            toolMessagesCount: 0,
+            checks: []
+          }
+        })
+      });
+
+      await expect(cli.run()).resolves.toBe(0);
+      expect(writes).toEqual(['handled: inspect package.json\n']);
+    });
   });
 
   it('uses the provider default model when --provider is passed without --model', async () => {
-    const writes: string[] = [];
-    const cli = buildCli({
-      argv: ['--provider', 'openai', '--prompt', 'inspect package.json'],
-      cwd: '/tmp/qiclaw-provider-default-test',
-      stdout: {
-        write(chunk) {
-          writes.push(String(chunk));
-          return true;
-        }
-      },
-      createRuntime: (runtimeOptions) => {
-        expect(runtimeOptions.provider).toBe('openai');
-        expect(runtimeOptions.model).toBe('gpt-4.1');
-        expect(runtimeOptions.baseUrl).toBeUndefined();
-        expect(runtimeOptions.apiKey).toBeUndefined();
-        expect(runtimeOptions.cwd).toBe('/tmp/qiclaw-provider-default-test');
+    await withProviderEnvSnapshot(async () => {
+      delete process.env.OPENAI_BASE_URL;
+      delete process.env.OPENAI_API_KEY;
+      delete process.env.OPENAI_MODEL;
 
-        return {
-          provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
-          availableTools: [],
-          cwd: runtimeOptions.cwd,
-          observer: runtimeOptions.observer ?? { record() {} }
-        };
-      },
-      runTurn: async (input) => ({
-        stopReason: 'completed',
-        finalAnswer: `handled: ${input.userInput}`,
-        history: [],
-        toolRoundsUsed: 0,
-        doneCriteria: {
-          goal: input.userInput,
-          checklist: [input.userInput],
-          requiresNonEmptyFinalAnswer: true,
-          requiresToolEvidence: false
+      const writes: string[] = [];
+      const cli = buildCli({
+        argv: ['--provider', 'openai', '--prompt', 'inspect package.json'],
+        cwd: '/tmp/qiclaw-provider-default-test',
+        stdout: {
+          write(chunk) {
+            writes.push(String(chunk));
+            return true;
+          }
         },
-        verification: {
-          isVerified: true,
-          finalAnswerIsNonEmpty: true,
-          toolEvidenceSatisfied: true,
-          toolMessagesCount: 0,
-          checks: []
-        }
-      })
-    });
+        createRuntime: (runtimeOptions) => {
+          expect(runtimeOptions.provider).toBe('openai');
+          expect(runtimeOptions.model).toBe('gpt-4.1');
+          expect(runtimeOptions.baseUrl).toBeUndefined();
+          expect(runtimeOptions.apiKey).toBeUndefined();
+          expect(runtimeOptions.cwd).toBe('/tmp/qiclaw-provider-default-test');
 
-    await expect(cli.run()).resolves.toBe(0);
-    expect(writes).toEqual(['handled: inspect package.json\n']);
+          return {
+            provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
+            availableTools: [],
+            cwd: runtimeOptions.cwd,
+            observer: runtimeOptions.observer ?? { record() {} }
+          };
+        },
+        runTurn: async (input) => ({
+          stopReason: 'completed',
+          finalAnswer: `handled: ${input.userInput}`,
+          history: [],
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            toolEvidenceSatisfied: true,
+            toolMessagesCount: 0,
+            checks: []
+          }
+        })
+      });
+
+      await expect(cli.run()).resolves.toBe(0);
+      expect(writes).toEqual(['handled: inspect package.json\n']);
+    });
   });
 
   it('returns exit code 1 and prints an error when --prompt is missing a value', async () => {

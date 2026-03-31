@@ -3,8 +3,7 @@ import type {
   FunctionTool,
   Response,
   ResponseCreateParamsNonStreaming,
-  ResponseInput,
-  ResponseFunctionToolCall
+  ResponseInput
 } from 'openai/resources/responses/responses';
 
 import type { Message } from '../core/types.js';
@@ -118,18 +117,37 @@ function splitSystemPrompt(messages: Message[]): { instructions: string | undefi
       ];
     }
 
-    return [
-      {
-        type: 'message',
-        role: message.role,
-        content: [
-          {
-            type: 'input_text',
-            text: message.content
+    const conversationItems: ResponseInput = [
+      message.role === 'assistant'
+        ? {
+            type: 'message',
+            role: 'assistant',
+            content: message.content
           }
-        ]
-      }
+        : {
+            type: 'message',
+            role: message.role,
+            content: [
+              {
+                type: 'input_text',
+                text: message.content
+              }
+            ]
+          }
     ];
+
+    if (message.role === 'assistant' && Array.isArray(message.toolCalls)) {
+      conversationItems.push(
+        ...message.toolCalls.map((toolCall) => ({
+          type: 'function_call' as const,
+          call_id: toolCall.id,
+          name: toolCall.name,
+          arguments: JSON.stringify(toolCall.input)
+        }))
+      );
+    }
+
+    return conversationItems;
   });
 
   return { instructions, conversation };
@@ -141,8 +159,15 @@ function toOpenAIFunctionTool(tool: Tool): FunctionTool {
     name: tool.name,
     description: tool.description,
     parameters: tool.inputSchema,
-    strict: true
+    strict: usesStrictOpenAIToolSchema(tool.inputSchema)
   };
+}
+
+function usesStrictOpenAIToolSchema(inputSchema: Tool['inputSchema']): boolean {
+  const propertyNames = Object.keys(inputSchema.properties);
+  const requiredNames = inputSchema.required ?? [];
+
+  return propertyNames.every((name) => requiredNames.includes(name));
 }
 
 function parseOpenAIToolArguments(toolName: string, argumentsValue: unknown): Record<string, unknown> {

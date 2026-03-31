@@ -46,12 +46,15 @@ export interface ModelProvider {
 }
 
 export function normalizeProviderResponse(input: ProviderResponseNormalizationInput): ProviderResponse {
+  const toolCalls = input.toolCalls ?? [];
+
   return {
     message: {
       role: 'assistant',
-      content: input.content ?? ''
+      content: input.content ?? '',
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined
     },
-    toolCalls: input.toolCalls ?? []
+    toolCalls
   };
 }
 

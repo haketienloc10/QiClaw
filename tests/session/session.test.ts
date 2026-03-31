@@ -11,7 +11,17 @@ describe('parseInteractiveCheckpointJson', () => {
       version: 1,
       history: [
         { role: 'user', content: 'inspect package.json' },
-        { role: 'assistant', content: 'Calling Read tool.' },
+        {
+          role: 'assistant',
+          content: 'Calling Read tool.',
+          toolCalls: [
+            {
+              id: 'toolu_123',
+              name: 'Read',
+              input: { path: '/tmp/package.json' }
+            }
+          ]
+        },
         {
           role: 'tool',
           name: 'Read',
@@ -27,7 +37,17 @@ describe('parseInteractiveCheckpointJson', () => {
       version: 1,
       history: [
         { role: 'user', content: 'inspect package.json' },
-        { role: 'assistant', content: 'Calling Read tool.' },
+        {
+          role: 'assistant',
+          content: 'Calling Read tool.',
+          toolCalls: [
+            {
+              id: 'toolu_123',
+              name: 'Read',
+              input: { path: '/tmp/package.json' }
+            }
+          ]
+        },
         {
           role: 'tool',
           name: 'Read',
@@ -38,6 +58,27 @@ describe('parseInteractiveCheckpointJson', () => {
       ],
       historySummary: 'Read package.json successfully.'
     });
+  });
+
+  it('rejects malformed assistant toolCalls when restoring checkpoints', () => {
+    const checkpointJson = JSON.stringify({
+      version: 1,
+      history: [
+        {
+          role: 'assistant',
+          content: 'Calling Read tool.',
+          toolCalls: [
+            {
+              id: 123,
+              name: 'Read',
+              input: { path: '/tmp/package.json' }
+            }
+          ]
+        }
+      ]
+    });
+
+    expect(parseInteractiveCheckpointJson(checkpointJson)).toBeUndefined();
   });
 
   it.each([

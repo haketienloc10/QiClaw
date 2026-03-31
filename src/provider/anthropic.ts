@@ -117,6 +117,23 @@ function splitSystemPrompt(messages: RuntimeMessage[]): { systemPrompt: string |
       ];
     }
 
+    if (message.role === 'assistant' && Array.isArray(message.toolCalls)) {
+      return [
+        {
+          role: 'assistant',
+          content: [
+            ...(message.content ? [{ type: 'text' as const, text: message.content }] : []),
+            ...message.toolCalls.map((toolCall) => ({
+              type: 'tool_use' as const,
+              id: toolCall.id,
+              name: toolCall.name,
+              input: toolCall.input
+            }))
+          ]
+        }
+      ];
+    }
+
     return [
       {
         role: message.role,

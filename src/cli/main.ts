@@ -1,5 +1,5 @@
-import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { mkdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { createAgentRuntime, type AgentRuntime } from '../agent/runtime.js';
 import { runAgentTurn, type RunAgentTurnInput, type RunAgentTurnResult } from '../agent/loop.js';
 import { parseProviderId, resolveProviderConfig } from '../provider/config.js';
@@ -54,6 +54,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
   return {
     async run() {
       try {
+        loadCliEnvFiles(cwd);
         const parsed = parseArgs(argv);
         const providerConfig = resolveProviderConfig({
           provider: parsed.provider,
@@ -241,6 +242,60 @@ function parseArgs(argv: string[]): { prompt?: string; provider: ProviderId; mod
     baseUrl,
     apiKey
   };
+}
+
+function loadCliEnvFiles(cwd: string): void {
+  const originalEnvKeys = new Set(Object.keys(process.env));
+  const fileLoadedKeys = new Set<string>();
+
+  applyEnvFile(join(cwd, '.env'), originalEnvKeys, fileLoadedKeys);
+  applyEnvFile(join(cwd, '.env.local'), originalEnvKeys, fileLoadedKeys);
+}
+
+function applyEnvFile(filePath: string, originalEnvKeys: Set<string>, fileLoadedKeys: Set<string>): void {
+  let fileContents: string;
+
+  try {
+    fileContents = readFileSync(filePath, 'utf8');
+  } catch (error) {
+    if (isEnoentError(error)) {
+      return;
+    }
+
+    throw error;
+  }
+
+  for (const [key, value] of parseEnvFile(fileContents)) {
+    if (originalEnvKeys.has(key) && !fileLoadedKeys.has(key)) {
+      continue;
+    }
+
+    process.env[key] = value;
+    fileLoadedKeys.add(key);
+  }
+}
+
+function parseEnvFile(fileContents: string): Array<[string, string]> {
+  return fileContents.split(/\r?\n/u).flatMap((line, index) => {
+    const normalizedLine = index === 0 ? line.replace(/^\uFEFF/u, '') : line;
+    const trimmedLine = normalizedLine.trim();
+
+    if (trimmedLine.length === 0 || trimmedLine.startsWith('#')) {
+      return [];
+    }
+
+    const match = /^(?<key>[A-Za-z_][A-Za-z0-9_]*)=(?<value>.*)$/u.exec(trimmedLine);
+
+    if (!match?.groups) {
+      throw new Error(`Malformed env file line ${index + 1}: ${trimmedLine}`);
+    }
+
+    return [[match.groups.key, match.groups.value.trim()] as [string, string]];
+  });
+}
+
+function isEnoentError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
 }
 
 function formatCliError(error: unknown): string {

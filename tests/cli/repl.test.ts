@@ -1,10 +1,10 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { buildCli } from '../../src/cli/main.js';
+import { buildCli, type CliRunTurnResult } from '../../src/cli/main.js';
 import { createRepl } from '../../src/cli/repl.js';
 import { getDefaultModelForProvider, parseProviderId, resolveProviderConfig } from '../../src/provider/config.js';
 import { createJsonLineLogger } from '../../src/telemetry/logger.js';
@@ -12,6 +12,68 @@ import { createInMemoryMetricsObserver } from '../../src/telemetry/metrics.js';
 import { createTelemetryEvent } from '../../src/telemetry/observer.js';
 
 const tempDirs: string[] = [];
+const openAIEnvKeys = ['OPENAI_BASE_URL', 'OPENAI_API_KEY'] as const;
+
+type OpenAIEnvSnapshot = Partial<Record<(typeof openAIEnvKeys)[number], string>>;
+
+function snapshotOpenAIEnv(): OpenAIEnvSnapshot {
+  return {
+    OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY
+  };
+}
+
+function restoreOpenAIEnv(snapshot: OpenAIEnvSnapshot): void {
+  for (const key of openAIEnvKeys) {
+    const value = snapshot[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+}
+
+async function withOpenAIEnvSnapshot(run: () => Promise<void> | void): Promise<void> {
+  const snapshot = snapshotOpenAIEnv();
+
+  try {
+    await run();
+  } finally {
+    restoreOpenAIEnv(snapshot);
+  }
+}
+
+function createSuccessfulRunTurn(): (input: { userInput: string }) => Promise<CliRunTurnResult> {
+  return async (input: { userInput: string }) => ({
+    stopReason: 'completed',
+    finalAnswer: `handled: ${input.userInput}`,
+    history: [],
+    toolRoundsUsed: 0,
+    doneCriteria: {
+      goal: input.userInput,
+      checklist: [input.userInput],
+      requiresNonEmptyFinalAnswer: true,
+      requiresToolEvidence: false
+    },
+    verification: {
+      isVerified: true,
+      finalAnswerIsNonEmpty: true,
+      toolEvidenceSatisfied: true,
+      toolMessagesCount: 0,
+      checks: []
+    }
+  });
+}
+
+describe('createSuccessfulRunTurn', () => {
+  it('returns a result compatible with CliRunTurnResult literal requirements', async () => {
+    const runTurn = createSuccessfulRunTurn();
+    const result: CliRunTurnResult = await runTurn({ userInput: 'inspect package.json' });
+
+    expect(result.doneCriteria.requiresNonEmptyFinalAnswer).toBe(true);
+  });
+});
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -382,36 +444,201 @@ describe('buildCli', () => {
     expect(writes).toEqual(['handled: inspect package.json\n']);
   });
 
-  it('lets CLI overrides win over provider-specific env vars', () => {
-    const previousOpenAIBaseUrl = process.env.OPENAI_BASE_URL;
-    const previousOpenAIApiKey = process.env.OPENAI_API_KEY;
+  it('lets CLI overrides win over provider-specific env vars', async () => {
+    await withOpenAIEnvSnapshot(async () => {
+      process.env.OPENAI_BASE_URL = 'https://openai-env.example/v1';
+      process.env.OPENAI_API_KEY = 'openai-env-key';
 
-    process.env.OPENAI_BASE_URL = 'https://openai-env.example/v1';
-    process.env.OPENAI_API_KEY = 'openai-env-key';
-
-    expect(resolveProviderConfig({
-      provider: 'openai',
-      baseUrl: 'https://openai-cli.example/v1',
-      apiKey: 'openai-cli-key',
-      model: 'gpt-4.1-mini'
-    })).toEqual({
-      provider: 'openai',
-      model: 'gpt-4.1-mini',
-      baseUrl: 'https://openai-cli.example/v1',
-      apiKey: 'openai-cli-key'
+      expect(resolveProviderConfig({
+        provider: 'openai',
+        baseUrl: 'https://openai-cli.example/v1',
+        apiKey: 'openai-cli-key',
+        model: 'gpt-4.1-mini'
+      })).toEqual({
+        provider: 'openai',
+        model: 'gpt-4.1-mini',
+        baseUrl: 'https://openai-cli.example/v1',
+        apiKey: 'openai-cli-key'
+      });
     });
+  });
 
-    if (previousOpenAIBaseUrl === undefined) {
+  it('loads provider config from a cwd .env file before creating the runtime', async () => {
+    await withOpenAIEnvSnapshot(async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-env-'));
+      tempDirs.push(tempDir);
+
+      await writeFile(join(tempDir, '.env'), [
+        'OPENAI_BASE_URL=https://openai-from-dotenv.example/v1',
+        'OPENAI_API_KEY=openai-dotenv-key'
+      ].join('\n'), 'utf8');
+
       delete process.env.OPENAI_BASE_URL;
-    } else {
-      process.env.OPENAI_BASE_URL = previousOpenAIBaseUrl;
-    }
-
-    if (previousOpenAIApiKey === undefined) {
       delete process.env.OPENAI_API_KEY;
-    } else {
-      process.env.OPENAI_API_KEY = previousOpenAIApiKey;
-    }
+
+      const cli = buildCli({
+        argv: ['--provider', 'openai', '--prompt', 'inspect package.json'],
+        cwd: tempDir,
+        createRuntime: (runtimeOptions) => {
+          expect(runtimeOptions).toMatchObject({
+            provider: 'openai',
+            model: 'gpt-4.1',
+            baseUrl: 'https://openai-from-dotenv.example/v1',
+            apiKey: 'openai-dotenv-key',
+            cwd: tempDir
+          });
+
+          return {
+            provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
+            availableTools: [],
+            cwd: runtimeOptions.cwd,
+            observer: runtimeOptions.observer ?? { record() {} }
+          };
+        },
+        stdout: { write() { return true; } },
+        runTurn: createSuccessfulRunTurn()
+      });
+
+      await expect(cli.run()).resolves.toBe(0);
+    });
+  });
+
+  it('prefers .env.local values over .env values from the same cwd', async () => {
+    await withOpenAIEnvSnapshot(async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-env-local-'));
+      tempDirs.push(tempDir);
+
+      await writeFile(join(tempDir, '.env'), [
+        'OPENAI_BASE_URL=https://openai-from-dotenv.example/v1',
+        'OPENAI_API_KEY=openai-dotenv-key'
+      ].join('\n'), 'utf8');
+      await writeFile(join(tempDir, '.env.local'), [
+        'OPENAI_BASE_URL=https://openai-from-dotenv-local.example/v1',
+        'OPENAI_API_KEY=openai-dotenv-local-key'
+      ].join('\n'), 'utf8');
+
+      delete process.env.OPENAI_BASE_URL;
+      delete process.env.OPENAI_API_KEY;
+
+      const cli = buildCli({
+        argv: ['--provider', 'openai', '--prompt', 'inspect package.json'],
+        cwd: tempDir,
+        createRuntime: (runtimeOptions) => {
+          expect(runtimeOptions).toMatchObject({
+            provider: 'openai',
+            model: 'gpt-4.1',
+            baseUrl: 'https://openai-from-dotenv-local.example/v1',
+            apiKey: 'openai-dotenv-local-key',
+            cwd: tempDir
+          });
+
+          return {
+            provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
+            availableTools: [],
+            cwd: runtimeOptions.cwd,
+            observer: runtimeOptions.observer ?? { record() {} }
+          };
+        },
+        stdout: { write() { return true; } },
+        runTurn: createSuccessfulRunTurn()
+      });
+
+      await expect(cli.run()).resolves.toBe(0);
+    });
+  });
+
+  it('does not let env files overwrite variables already present in process.env', async () => {
+    await withOpenAIEnvSnapshot(async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-env-shell-'));
+      tempDirs.push(tempDir);
+
+      await writeFile(join(tempDir, '.env'), [
+        'OPENAI_BASE_URL=https://openai-from-dotenv.example/v1',
+        'OPENAI_API_KEY=openai-dotenv-key'
+      ].join('\n'), 'utf8');
+      await writeFile(join(tempDir, '.env.local'), [
+        'OPENAI_BASE_URL=https://openai-from-dotenv-local.example/v1',
+        'OPENAI_API_KEY=openai-dotenv-local-key'
+      ].join('\n'), 'utf8');
+
+      process.env.OPENAI_BASE_URL = 'https://openai-from-shell.example/v1';
+      process.env.OPENAI_API_KEY = 'openai-shell-key';
+
+      const cli = buildCli({
+        argv: ['--provider', 'openai', '--prompt', 'inspect package.json'],
+        cwd: tempDir,
+        createRuntime: (runtimeOptions) => {
+          expect(runtimeOptions).toMatchObject({
+            baseUrl: 'https://openai-from-shell.example/v1',
+            apiKey: 'openai-shell-key'
+          });
+
+          return {
+            provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
+            availableTools: [],
+            cwd: runtimeOptions.cwd,
+            observer: runtimeOptions.observer ?? { record() {} }
+          };
+        },
+        stdout: { write() { return true; } },
+        runTurn: createSuccessfulRunTurn()
+      });
+
+      await expect(cli.run()).resolves.toBe(0);
+    });
+  });
+
+  it('lets CLI flags override env file values before creating the runtime', async () => {
+    await withOpenAIEnvSnapshot(async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-env-override-'));
+      tempDirs.push(tempDir);
+
+      await writeFile(join(tempDir, '.env'), [
+        'OPENAI_BASE_URL=https://openai-from-dotenv.example/v1',
+        'OPENAI_API_KEY=openai-dotenv-key'
+      ].join('\n'), 'utf8');
+      await writeFile(join(tempDir, '.env.local'), [
+        'OPENAI_BASE_URL=https://openai-from-dotenv-local.example/v1',
+        'OPENAI_API_KEY=openai-dotenv-local-key'
+      ].join('\n'), 'utf8');
+
+      delete process.env.OPENAI_BASE_URL;
+      delete process.env.OPENAI_API_KEY;
+
+      const cli = buildCli({
+        argv: [
+          '--provider',
+          'openai',
+          '--base-url',
+          'https://openai-from-cli.example/v1',
+          '--api-key',
+          'openai-cli-key',
+          '--prompt',
+          'inspect package.json'
+        ],
+        cwd: tempDir,
+        createRuntime: (runtimeOptions) => {
+          expect(runtimeOptions).toMatchObject({
+            provider: 'openai',
+            model: 'gpt-4.1',
+            baseUrl: 'https://openai-from-cli.example/v1',
+            apiKey: 'openai-cli-key',
+            cwd: tempDir
+          });
+
+          return {
+            provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
+            availableTools: [],
+            cwd: runtimeOptions.cwd,
+            observer: runtimeOptions.observer ?? { record() {} }
+          };
+        },
+        stdout: { write() { return true; } },
+        runTurn: createSuccessfulRunTurn()
+      });
+
+      await expect(cli.run()).resolves.toBe(0);
+    });
   });
 
   it('returns exit code 1 and prints an error when an unknown flag is provided', async () => {
@@ -722,7 +949,17 @@ describe('buildCli', () => {
         version: 1,
         history: [
           { role: 'user', content: 'inspect package.json' },
-          { role: 'assistant', content: 'Calling Read tool.' },
+          {
+            role: 'assistant',
+            content: 'Calling Read tool.',
+            toolCalls: [
+              {
+                id: 'toolu_restore_1',
+                name: 'Read',
+                input: { path: '/tmp/package.json' }
+              }
+            ]
+          },
           {
             role: 'tool',
             name: 'Read',
@@ -761,7 +998,17 @@ describe('buildCli', () => {
         expect(input.historySummary).toBe('Package metadata restored from checkpoint.');
         expect(input.history).toEqual([
           { role: 'user', content: 'inspect package.json' },
-          { role: 'assistant', content: 'Calling Read tool.' },
+          {
+            role: 'assistant',
+            content: 'Calling Read tool.',
+            toolCalls: [
+              {
+                id: 'toolu_restore_1',
+                name: 'Read',
+                input: { path: '/tmp/package.json' }
+              }
+            ]
+          },
           {
             role: 'tool',
             name: 'Read',

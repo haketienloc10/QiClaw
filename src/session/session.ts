@@ -89,5 +89,24 @@ function isMessage(value: unknown): value is Message {
     return false;
   }
 
+  if (message.toolCalls !== undefined) {
+    if (!Array.isArray(message.toolCalls)) {
+      return false;
+    }
+
+    const hasInvalidToolCall = message.toolCalls.some((toolCall) => {
+      if (!toolCall || typeof toolCall !== 'object') {
+        return true;
+      }
+
+      const candidate = toolCall as Record<string, unknown>;
+      return typeof candidate.id !== 'string' || typeof candidate.name !== 'string' || !('input' in candidate);
+    });
+
+    if (hasInvalidToolCall) {
+      return false;
+    }
+  }
+
   return true;
 }

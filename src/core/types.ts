@@ -6,6 +6,11 @@ export interface Message {
   name?: string;
   toolCallId?: string;
   isError?: boolean;
+  toolCalls?: Array<{
+    id: string;
+    name: string;
+    input: unknown;
+  }>;
 }
 
 export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed';

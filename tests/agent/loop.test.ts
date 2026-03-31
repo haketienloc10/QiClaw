@@ -123,7 +123,14 @@ describe('provider normalization, provider, and dispatcher', () => {
     ).toEqual({
       message: {
         role: 'assistant',
-        content: 'I will inspect the file first.'
+        content: 'I will inspect the file first.',
+        toolCalls: [
+          {
+            id: 'call-read-1',
+            name: 'read_file',
+            input: { path: 'note.txt' }
+          }
+        ]
       },
       toolCalls: [
         {
@@ -149,7 +156,14 @@ describe('provider normalization, provider, and dispatcher', () => {
     ).toEqual({
       message: {
         role: 'assistant',
-        content: ''
+        content: '',
+        toolCalls: [
+          {
+            id: 'call-read-1',
+            name: 'read_file',
+            input: { path: 'note.txt' }
+          }
+        ]
       },
       toolCalls: [
         {
@@ -270,6 +284,57 @@ describe('provider normalization, provider, and dispatcher', () => {
     ]);
   });
 
+  it('includes prior Anthropic tool_use blocks before tool_result messages', () => {
+    const request = buildAnthropicMessagesRequest({
+      model: 'gpt-5.4',
+      messages: [
+        { role: 'system', content: 'System prompt' },
+        { role: 'user', content: 'Inspect note.txt' },
+        {
+          role: 'assistant',
+          content: 'I will inspect it.',
+          toolCalls: [
+            {
+              id: 'toolu_123',
+              name: 'read_file',
+              input: { path: 'note.txt' }
+            }
+          ]
+        } as any,
+        {
+          role: 'tool',
+          name: 'read_file',
+          toolCallId: 'toolu_123',
+          content: 'note contents',
+          isError: false
+        }
+      ],
+      availableTools: getBuiltinTools()
+    });
+
+    expect(request.messages).toEqual([
+      { role: 'user', content: 'Inspect note.txt' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'I will inspect it.' },
+          { type: 'tool_use', id: 'toolu_123', name: 'read_file', input: { path: 'note.txt' } }
+        ]
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_123',
+            content: 'note contents',
+            is_error: false
+          }
+        ]
+      }
+    ]);
+  });
+
   it('builds an OpenAI responses request from system, conversation, and tools', () => {
     const request = buildOpenAIResponsesRequest({
       model: 'gpt-4.1',
@@ -303,12 +368,7 @@ describe('provider normalization, provider, and dispatcher', () => {
       {
         type: 'message',
         role: 'assistant',
-        content: [
-          {
-            type: 'input_text',
-            text: 'I will inspect it.'
-          }
-        ]
+        content: 'I will inspect it.'
       },
       {
         type: 'function_call_output',
@@ -319,8 +379,96 @@ describe('provider normalization, provider, and dispatcher', () => {
     expect(request.tools).toHaveLength(4);
     expect(request.tools?.[0]).toMatchObject({
       type: 'function',
-      name: 'read_file'
+      name: 'read_file',
+      strict: true
     });
+  });
+
+  it('does not mark OpenAI tools with optional properties as strict schemas', () => {
+    const request = buildOpenAIResponsesRequest({
+      model: 'gpt-4.1',
+      messages: [{ role: 'user', content: 'Run ls' }],
+      availableTools: [shellTool]
+    });
+
+    expect(request.tools).toEqual([
+      {
+        type: 'function',
+        name: 'shell',
+        description: 'Run a single program with optional arguments inside the current working directory.',
+        parameters: {
+          type: 'object',
+          properties: {
+            command: { type: 'string' },
+            args: {
+              type: 'array',
+              items: { type: 'string' }
+            }
+          },
+          required: ['command'],
+          additionalProperties: false
+        },
+        strict: false
+      }
+    ]);
+  });
+
+  it('includes prior OpenAI function_call items before function_call_output messages', () => {
+    const request = buildOpenAIResponsesRequest({
+      model: 'gpt-4.1',
+      messages: [
+        { role: 'system', content: 'System prompt' },
+        { role: 'user', content: 'Inspect note.txt' },
+        {
+          role: 'assistant',
+          content: 'I will inspect it.',
+          toolCalls: [
+            {
+              id: 'call_123',
+              name: 'read_file',
+              input: { path: 'note.txt' }
+            }
+          ]
+        } as any,
+        {
+          role: 'tool',
+          name: 'read_file',
+          toolCallId: 'call_123',
+          content: 'note contents',
+          isError: false
+        }
+      ],
+      availableTools: getBuiltinTools()
+    });
+
+    expect(request.input).toEqual([
+      {
+        type: 'message',
+        role: 'user',
+        content: [
+          {
+            type: 'input_text',
+            text: 'Inspect note.txt'
+          }
+        ]
+      },
+      {
+        type: 'message',
+        role: 'assistant',
+        content: 'I will inspect it.'
+      },
+      {
+        type: 'function_call',
+        call_id: 'call_123',
+        name: 'read_file',
+        arguments: '{"path":"note.txt"}'
+      },
+      {
+        type: 'function_call_output',
+        call_id: 'call_123',
+        output: 'note contents'
+      }
+    ]);
   });
 
   it('rejects OpenAI tool messages without a toolCallId', () => {

@@ -15,7 +15,7 @@ function sortTelemetryValue(value: unknown): unknown {
 }
 
 export function buildTelemetryPreview(value: unknown, maxLength = 120): string {
-  const serialized = JSON.stringify(sortTelemetryValue(value));
+  const serialized = JSON.stringify(sortTelemetryValue(value)) ?? 'undefined';
 
   if (serialized.length <= maxLength) {
     return serialized;

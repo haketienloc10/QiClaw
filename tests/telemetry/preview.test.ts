@@ -11,4 +11,10 @@ describe('buildTelemetryPreview', () => {
     expect(preview.endsWith('...')).toBe(true);
     expect(preview.length).toBe(32);
   });
+
+  it('returns a string when top-level values are not JSON-serializable', () => {
+    expect(buildTelemetryPreview(undefined)).toBe('undefined');
+    expect(buildTelemetryPreview(() => 'noop')).toBe('undefined');
+    expect(buildTelemetryPreview(Symbol('telemetry'))).toBe('undefined');
+  });
 });

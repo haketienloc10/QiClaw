@@ -29,14 +29,32 @@ export interface ProviderRequest {
   availableTools: Tool[];
 }
 
+export interface ProviderResponseUsageMetadata {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  cacheCreationInputTokens?: number;
+  cacheReadInputTokens?: number;
+}
+
+export interface ProviderResponseMetadata {
+  provider: ProviderId;
+  model: string;
+  requestId?: string;
+  stopReason?: string;
+  usage?: ProviderResponseUsageMetadata;
+}
+
 export interface ProviderResponse {
   message: Message;
   toolCalls: ToolCallRequest[];
+  metadata?: ProviderResponseMetadata;
 }
 
 export interface ProviderResponseNormalizationInput {
   content?: string | null;
   toolCalls?: ToolCallRequest[];
+  metadata?: ProviderResponseMetadata;
 }
 
 export interface ModelProvider {
@@ -54,7 +72,8 @@ export function normalizeProviderResponse(input: ProviderResponseNormalizationIn
       content: input.content ?? '',
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined
     },
-    toolCalls
+    toolCalls,
+    metadata: input.metadata
   };
 }
 

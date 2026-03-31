@@ -9,7 +9,14 @@ import type {
 import type { Message } from '../core/types.js';
 import type { Tool } from '../tools/registry.js';
 
-import { normalizeProviderResponse, type ModelProvider, type ProviderRequest, type ProviderResponse, type ToolCallRequest } from './model.js';
+import {
+  normalizeProviderResponse,
+  type ModelProvider,
+  type ProviderRequest,
+  type ProviderResponse,
+  type ProviderResponseMetadata,
+  type ToolCallRequest
+} from './model.js';
 
 export interface OpenAIProviderOptions {
   model: string;
@@ -71,6 +78,29 @@ export function extractOpenAIToolCalls(output: unknown[]): ToolCallRequest[] {
     }));
 }
 
+export function normalizeOpenAIResponseMetadata(response: {
+  id: string;
+  model: string;
+  status?: string | null;
+  usage?: {
+    input_tokens?: number | null;
+    output_tokens?: number | null;
+    total_tokens?: number | null;
+  } | null;
+}): ProviderResponseMetadata {
+  return {
+    provider: 'openai',
+    model: response.model,
+    requestId: response.id,
+    stopReason: response.status === 'incomplete' ? response.status : undefined,
+    usage: {
+      inputTokens: response.usage?.input_tokens ?? undefined,
+      outputTokens: response.usage?.output_tokens ?? undefined,
+      totalTokens: response.usage?.total_tokens ?? undefined
+    }
+  };
+}
+
 export function createOpenAIProvider(options: OpenAIProviderOptions): ModelProvider {
   return {
     name: 'openai',
@@ -88,7 +118,8 @@ export function createOpenAIProvider(options: OpenAIProviderOptions): ModelProvi
 
       return normalizeProviderResponse({
         content: readOpenAITextContent(response.output),
-        toolCalls: extractOpenAIToolCalls(response.output)
+        toolCalls: extractOpenAIToolCalls(response.output),
+        metadata: normalizeOpenAIResponseMetadata(response)
       });
     }
   };

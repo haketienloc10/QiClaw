@@ -9,7 +9,14 @@ import type {
 import type { Message as RuntimeMessage } from '../core/types.js';
 import type { Tool } from '../tools/registry.js';
 
-import { normalizeProviderResponse, type ModelProvider, type ProviderRequest, type ProviderResponse, type ToolCallRequest } from './model.js';
+import {
+  normalizeProviderResponse,
+  type ModelProvider,
+  type ProviderRequest,
+  type ProviderResponse,
+  type ProviderResponseMetadata,
+  type ToolCallRequest
+} from './model.js';
 
 export interface AnthropicProviderOptions {
   model: string;
@@ -65,6 +72,40 @@ export function extractAnthropicToolCalls(content: unknown[]): ToolCallRequest[]
     }));
 }
 
+export function normalizeAnthropicResponseMetadata(response: {
+  id: string;
+  model: string;
+  stop_reason?: string | null;
+  usage?: {
+    input_tokens?: number | null;
+    output_tokens?: number | null;
+    cache_creation_input_tokens?: number | null;
+    cache_read_input_tokens?: number | null;
+  } | null;
+}): ProviderResponseMetadata {
+  const inputTokens = response.usage?.input_tokens ?? undefined;
+  const outputTokens = response.usage?.output_tokens ?? undefined;
+  const cacheCreationInputTokens = response.usage?.cache_creation_input_tokens ?? undefined;
+  const cacheReadInputTokens = response.usage?.cache_read_input_tokens ?? undefined;
+  const totalTokens = typeof inputTokens === 'number' && typeof outputTokens === 'number'
+    ? inputTokens + outputTokens
+    : undefined;
+
+  return {
+    provider: 'anthropic',
+    model: response.model,
+    requestId: response.id,
+    stopReason: response.stop_reason ?? undefined,
+    usage: {
+      inputTokens,
+      outputTokens,
+      cacheCreationInputTokens,
+      cacheReadInputTokens,
+      totalTokens
+    }
+  };
+}
+
 export function createAnthropicProvider(options: AnthropicProviderOptions): ModelProvider {
   return {
     name: 'anthropic',
@@ -82,7 +123,8 @@ export function createAnthropicProvider(options: AnthropicProviderOptions): Mode
 
       return normalizeProviderResponse({
         content: readAnthropicTextContent(response.content),
-        toolCalls: extractAnthropicToolCalls(response.content)
+        toolCalls: extractAnthropicToolCalls(response.content),
+        metadata: normalizeAnthropicResponseMetadata(response)
       });
     }
   };

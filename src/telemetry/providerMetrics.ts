@@ -1,8 +1,9 @@
 import type { Message } from '../core/types.js';
 import { buildTelemetryPreview } from './preview.js';
-import { redactSensitiveTelemetryValue } from './redaction.js';
 
 const REDACTED_VALUE = '[REDACTED]';
+const PREVIEW_MAX_LENGTH = 512;
+const SENSITIVE_KEY_PATTERN = /(key|token|secret|authorization|cookie|password)/i;
 const SENSITIVE_STRING_PATTERN = /(authorization\s*:|bearer\s+|api[_-]?key|token|secret|password|cookie)/i;
 
 export interface PromptTelemetry {
@@ -27,18 +28,31 @@ function countContentBlocks(content: unknown): number {
   return 1;
 }
 
-function redactMessageContent(content: unknown): unknown {
-  if (typeof content === 'string') {
-    return SENSITIVE_STRING_PATTERN.test(content) ? REDACTED_VALUE : content;
+function redactTelemetryPreviewValue(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return SENSITIVE_STRING_PATTERN.test(value) ? REDACTED_VALUE : value;
   }
 
-  return redactSensitiveTelemetryValue(content);
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactTelemetryPreviewValue(entry));
+  }
+
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, entryValue]) => [
+      key,
+      SENSITIVE_KEY_PATTERN.test(key) ? REDACTED_VALUE : redactTelemetryPreviewValue(entryValue)
+    ])
+  );
 }
 
 function toPreviewMessage(message: Message): Record<string, unknown> {
   const previewMessage: Record<string, unknown> = {
     role: message.role,
-    content: redactMessageContent(message.content)
+    content: redactTelemetryPreviewValue(message.content)
   };
 
   if (message.name) {
@@ -54,7 +68,7 @@ function toPreviewMessage(message: Message): Record<string, unknown> {
   }
 
   if (Array.isArray(message.toolCalls) && message.toolCalls.length > 0) {
-    previewMessage.toolCalls = redactSensitiveTelemetryValue(message.toolCalls);
+    previewMessage.toolCalls = redactTelemetryPreviewValue(message.toolCalls);
   }
 
   return previewMessage;
@@ -63,15 +77,12 @@ function toPreviewMessage(message: Message): Record<string, unknown> {
 export function measurePromptTelemetry(messages: Message[]): PromptTelemetry {
   return {
     messageCount: messages.length,
-    contentBlockCount: messages.reduce(
-      (total, message) => total + countContentBlocks(message.content) + (message.toolCalls?.length ?? 0),
-      0
-    ),
+    contentBlockCount: messages.reduce((total, message) => total + countContentBlocks(message.content), 0),
     preview: buildTelemetryPreview(
       {
         messages: messages.map((message) => toPreviewMessage(message))
       },
-      Number.MAX_SAFE_INTEGER
+      PREVIEW_MAX_LENGTH
     )
   };
 }

@@ -1,5 +1,6 @@
 import type { Message } from '../core/types.js';
 import { buildPromptWithContext } from '../context/promptBuilder.js';
+import type { ProviderResponse, ProviderUsageSummary } from '../provider/model.js';
 import {
   toToolErrorMessage,
   toToolResultMessage,
@@ -7,8 +8,12 @@ import {
   type ToolCallRequest,
   type ToolResultMessage
 } from '../provider/model.js';
-import { createNoopObserver, createTelemetryEvent, type TelemetryObserver } from '../telemetry/observer.js';
-import { measurePromptTelemetry } from '../telemetry/providerMetrics.js';
+import {
+  createNoopObserver,
+  createTelemetryEvent,
+  type ProviderCalledMessageSummary,
+  type TelemetryObserver
+} from '../telemetry/observer.js';
 import { buildTelemetryPreview } from '../telemetry/preview.js';
 import { redactSensitiveTelemetryValue } from '../telemetry/redaction.js';
 import type { Tool } from '../tools/registry.js';
@@ -68,36 +73,16 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTu
         history
       });
 
-      const promptTelemetry = measurePromptTelemetry(prompt.messages);
+      const promptTelemetry = buildProviderCalledTelemetry(prompt.messages, input.availableTools.map((tool) => tool.name));
 
-      observer.record(
-        createTelemetryEvent('provider_called', {
-          providerName: input.provider.name,
-          providerModel: input.provider.model,
-          messageCount: promptTelemetry.messageCount,
-          contentBlockCount: promptTelemetry.contentBlockCount,
-          promptPreview: promptTelemetry.preview,
-          toolNames: input.availableTools.map((tool) => tool.name)
-        })
-      );
+      observer.record(createTelemetryEvent('provider_called', promptTelemetry));
 
       const response = await input.provider.generate({
         messages: prompt.messages,
         availableTools: input.availableTools
       });
 
-      observer.record(
-        createTelemetryEvent('provider_responded', {
-          providerName: input.provider.name,
-          providerModel: input.provider.model,
-          toolCallCount: response.toolCalls.length,
-          assistantContentLength: response.message.content.length,
-          finish: response.finish,
-          usage: response.usage,
-          responseMetrics: response.responseMetrics,
-          debug: response.debug
-        })
-      );
+      observer.record(createTelemetryEvent('provider_responded', buildProviderRespondedTelemetry(response)));
 
       history.push(response.message);
       finalAnswer = response.message.content;
@@ -191,6 +176,73 @@ function buildResult(
     toolRoundsUsed,
     doneCriteria,
     verification
+  };
+}
+
+function buildProviderCalledTelemetry(messages: Message[], toolNames: string[]) {
+  const messageSummaries = messages.map((message) => summarizePromptMessage(message));
+  const promptRawPreviewRedacted = buildTelemetryPreview(
+    {
+      messages: messages.map((message) => ({
+        role: message.role,
+        content: redactSensitiveTelemetryValue(message.content)
+      }))
+    },
+    512
+  );
+
+  return {
+    messageCount: messages.length,
+    promptRawChars: messages.reduce((total, message) => total + message.content.length, 0),
+    toolNames,
+    messageSummaries,
+    totalContentBlockCount: messageSummaries.reduce((total, message) => total + message.contentBlockCount, 0),
+    hasSystemPrompt: messages.some((message) => message.role === 'system' && message.content.trim().length > 0),
+    promptRawPreviewRedacted
+  };
+}
+
+function summarizePromptMessage(message: Message): ProviderCalledMessageSummary {
+  return {
+    role: message.role,
+    contentPreviewRedacted: buildTelemetryPreview(redactSensitiveTelemetryValue(message.content)),
+    contentBlockCount: countContentBlocks(message.content),
+    hasToolCalls: Array.isArray(message.toolCalls) && message.toolCalls.length > 0
+  };
+}
+
+function countContentBlocks(content: string): number {
+  return content.length > 0 ? 1 : 0;
+}
+
+function buildProviderRespondedTelemetry(response: ProviderResponse) {
+  const responseContentBlockCount = response.responseMetrics?.contentBlockCount ?? countContentBlocks(response.message.content);
+  const toolCallCount = response.responseMetrics?.toolCallCount ?? response.toolCalls.length;
+  const hasTextOutput = response.responseMetrics?.hasTextOutput ?? response.message.content.length > 0;
+
+  return {
+    stopReason: response.finish?.stopReason,
+    usage: normalizeUsageSummary(response.usage),
+    responseContentBlockCount,
+    toolCallCount,
+    hasTextOutput,
+    responseContentBlocksByType: response.debug?.responseContentBlocksByType ?? response.responseMetrics?.contentBlocksByType,
+    toolCallSummaries: response.debug?.toolCallSummaries,
+    providerUsageRawRedacted: response.debug?.providerUsageRawRedacted,
+    providerStopDetails: response.debug?.providerStopDetails,
+    responsePreviewRedacted: response.debug?.responsePreviewRedacted
+  };
+}
+
+function normalizeUsageSummary(usage?: ProviderUsageSummary): ProviderUsageSummary | undefined {
+  if (!usage) {
+    return undefined;
+  }
+
+  return {
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    totalTokens: usage.totalTokens
   };
 }
 

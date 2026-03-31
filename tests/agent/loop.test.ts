@@ -1112,60 +1112,64 @@ describe('agent loop', () => {
     expect(observedEvents[1]).toMatchObject({
       type: 'provider_called',
       data: {
-        providerName: 'scripted',
-        providerModel: 'test-model',
         messageCount: 2,
-        contentBlockCount: 2,
+        promptRawChars: 'You are helpful.'.length + 'Read note.txt and summarize it.'.length,
         toolNames: ['read_file', 'edit_file', 'search', 'shell'],
-        promptPreview: '{"messages":[{"content":"You are helpful.","role":"system"},{"content":"Read note.txt and summarize it.","role":"user"}]}'
+        messageSummaries: [
+          {
+            role: 'system',
+            contentPreviewRedacted: '"You are helpful."',
+            contentBlockCount: 1,
+            hasToolCalls: false
+          },
+          {
+            role: 'user',
+            contentPreviewRedacted: '"Read note.txt and summarize it."',
+            contentBlockCount: 1,
+            hasToolCalls: false
+          }
+        ],
+        totalContentBlockCount: 2,
+        hasSystemPrompt: true,
+        promptRawPreviewRedacted: '{"messages":[{"content":"You are helpful.","role":"system"},{"content":"Read note.txt and summarize it.","role":"user"}]}'
       }
     });
+    expect(observedEvents[1]?.data).not.toHaveProperty('providerName');
+    expect(observedEvents[1]?.data).not.toHaveProperty('promptPreview');
     expect(observedEvents[2]).toMatchObject({
       type: 'provider_responded',
       data: {
-        providerName: 'scripted',
-        providerModel: 'test-model',
-        toolCallCount: 1,
-        assistantContentLength: 27,
-        finish: {
-          stopReason: 'tool_use'
-        },
+        stopReason: 'tool_use',
         usage: {
           inputTokens: 12,
           outputTokens: 7,
           totalTokens: 19
         },
-        responseMetrics: {
-          contentBlockCount: 2,
-          toolCallCount: 1,
-          hasTextOutput: true,
-          contentBlocksByType: {
-            text: 1,
-            tool_use: 1
-          }
+        responseContentBlockCount: 2,
+        toolCallCount: 1,
+        hasTextOutput: true,
+        responseContentBlocksByType: {
+          text: 1,
+          tool_use: 1
         },
-        debug: {
-          providerUsageRawRedacted: {
-            input_tokens: 12,
-            output_tokens: 7
-          },
-          providerStopDetails: {
-            stop_reason: 'tool_use'
-          },
-          toolCallSummaries: [
-            {
-              id: 'call-read-telemetry',
-              name: 'read_file'
-            }
-          ],
-          responseContentBlocksByType: {
-            text: 1,
-            tool_use: 1
-          },
-          responsePreviewRedacted: '[{"type":"text","text":"I will read the file first."},{"type":"tool_use","name":"read_file"}]'
-        }
+        toolCallSummaries: [
+          {
+            id: 'call-read-telemetry',
+            name: 'read_file'
+          }
+        ],
+        providerUsageRawRedacted: {
+          input_tokens: 12,
+          output_tokens: 7
+        },
+        providerStopDetails: {
+          stop_reason: 'tool_use'
+        },
+        responsePreviewRedacted: '[{"type":"text","text":"I will read the file first."},{"type":"tool_use","name":"read_file"}]'
       }
     });
+    expect(observedEvents[2]?.data).not.toHaveProperty('finish');
+    expect(observedEvents[2]?.data).not.toHaveProperty('responseMetrics');
     expect(observedEvents[3]).toMatchObject({
       type: 'tool_call_started',
       data: {
@@ -1196,40 +1200,27 @@ describe('agent loop', () => {
     expect(observedEvents[6]).toMatchObject({
       type: 'provider_responded',
       data: {
-        providerName: 'scripted',
-        providerModel: 'test-model',
-        toolCallCount: 0,
-        assistantContentLength: 25,
-        finish: {
-          stopReason: 'end_turn'
-        },
+        stopReason: 'end_turn',
         usage: {
           inputTokens: 20,
           outputTokens: 5,
           totalTokens: 25
         },
-        responseMetrics: {
-          contentBlockCount: 1,
-          toolCallCount: 0,
-          hasTextOutput: true,
-          contentBlocksByType: {
-            text: 1
-          }
+        responseContentBlockCount: 1,
+        toolCallCount: 0,
+        hasTextOutput: true,
+        responseContentBlocksByType: {
+          text: 1
         },
-        debug: {
-          providerUsageRawRedacted: {
-            input_tokens: 20,
-            output_tokens: 5
-          },
-          providerStopDetails: {
-            stop_reason: 'end_turn'
-          },
-          toolCallSummaries: [],
-          responseContentBlocksByType: {
-            text: 1
-          },
-          responsePreviewRedacted: '[{"type":"text","text":"The note says: agent note"}]'
-        }
+        toolCallSummaries: [],
+        providerUsageRawRedacted: {
+          input_tokens: 20,
+          output_tokens: 5
+        },
+        providerStopDetails: {
+          stop_reason: 'end_turn'
+        },
+        responsePreviewRedacted: '[{"type":"text","text":"The note says: agent note"}]'
       }
     });
     expect(observedEvents[7]).toMatchObject({

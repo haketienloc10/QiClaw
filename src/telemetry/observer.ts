@@ -9,12 +9,7 @@ export type TelemetryEventType =
   | 'turn_stopped'
   | 'turn_failed';
 
-import type {
-  ProviderDebugMetadata,
-  ProviderFinishSummary,
-  ProviderResponseMetrics,
-  ProviderUsageSummary
-} from '../provider/model.js';
+import type { ProviderToolCallSummary, ProviderUsageSummary } from '../provider/model.js';
 
 export interface TurnStartedTelemetryData {
   cwd: string;
@@ -23,24 +18,34 @@ export interface TurnStartedTelemetryData {
   toolNames: string[];
 }
 
-export interface ProviderCalledTelemetryData {
-  providerName: string;
-  providerModel: string;
-  messageCount: number;
+export interface ProviderCalledMessageSummary {
+  role: string;
+  contentPreviewRedacted: string;
   contentBlockCount: number;
-  promptPreview: string;
+  hasToolCalls: boolean;
+}
+
+export interface ProviderCalledTelemetryData {
+  messageCount: number;
+  promptRawChars: number;
   toolNames: string[];
+  messageSummaries: ProviderCalledMessageSummary[];
+  totalContentBlockCount: number;
+  hasSystemPrompt: boolean;
+  promptRawPreviewRedacted: string;
 }
 
 export interface ProviderRespondedTelemetryData {
-  providerName: string;
-  providerModel: string;
-  toolCallCount: number;
-  assistantContentLength: number;
-  finish?: ProviderFinishSummary;
+  stopReason?: string;
   usage?: ProviderUsageSummary;
-  responseMetrics?: ProviderResponseMetrics;
-  debug?: ProviderDebugMetadata;
+  responseContentBlockCount: number;
+  toolCallCount: number;
+  hasTextOutput: boolean;
+  responseContentBlocksByType?: Record<string, number>;
+  toolCallSummaries?: ProviderToolCallSummary[];
+  providerUsageRawRedacted?: unknown;
+  providerStopDetails?: unknown;
+  responsePreviewRedacted?: string;
 }
 
 export interface ToolCallStartedTelemetryData {

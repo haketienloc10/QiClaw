@@ -1,1 +1,4 @@
 .worktrees/
+.claude/
+dist/
+node_modules/

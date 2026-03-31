@@ -29,7 +29,7 @@ import {
   type ProviderResponse,
   type ToolCallRequest
 } from '../../src/provider/model.js';
-import { createTelemetryEvent, type TelemetryEvent } from '../../src/telemetry/observer.js';
+import { createTelemetryEvent, type TelemetryEvent, type TelemetryEventType } from '../../src/telemetry/observer.js';
 import { editFileTool } from '../../src/tools/editFile.js';
 import { getBuiltinToolNames, getBuiltinTools, getTool, hasTool, type Tool, type ToolContext } from '../../src/tools/registry.js';
 import { readFileTool } from '../../src/tools/readFile.js';
@@ -64,6 +64,14 @@ describe('telemetry typing', () => {
     expect(providerRespondedEvent.data.toolCallCount).toBe(0);
   });
 });
+
+function expectTelemetryEvent<TType extends TelemetryEventType>(
+  event: TelemetryEvent | undefined,
+  type: TType
+): TelemetryEvent<TType> {
+  expect(event?.type).toBe(type);
+  return event as TelemetryEvent<TType>;
+}
 
 describe('tool registry', () => {
   it('registers the built-in tool names in a stable order', () => {
@@ -1395,7 +1403,9 @@ describe('agent loop', () => {
       }
     });
 
-    expect(observedEvents[3]).toMatchObject({
+    const toolCallStartedEvent = expectTelemetryEvent(observedEvents[3], 'tool_call_started');
+
+    expect(toolCallStartedEvent).toMatchObject({
       type: 'tool_call_started',
       data: {
         toolName: 'auth_tool',
@@ -1403,7 +1413,7 @@ describe('agent loop', () => {
         inputPreview: '{"apiKey":"[REDACTED]","nested":{"password":"[REDACTED]"},"query":"show status"}'
       }
     });
-    expect(observedEvents[3]?.data.inputRawRedacted).toEqual({
+    expect(toolCallStartedEvent.data.inputRawRedacted).toEqual({
       apiKey: '[REDACTED]',
       nested: {
         password: '[REDACTED]'
@@ -1469,7 +1479,9 @@ describe('agent loop', () => {
       }
     });
 
-    expect(observedEvents[4]).toMatchObject({
+    const toolCallCompletedEvent = expectTelemetryEvent(observedEvents[4], 'tool_call_completed');
+
+    expect(toolCallCompletedEvent).toMatchObject({
       type: 'tool_call_completed',
       data: {
         toolName: 'json_tool',
@@ -1478,7 +1490,7 @@ describe('agent loop', () => {
         resultPreview: '{"content":{"nested":{"authorization":"[REDACTED]"},"query":"show token","token":"[REDACTED]"}}'
       }
     });
-    expect(observedEvents[4]?.data.resultRawRedacted).toEqual({
+    expect(toolCallCompletedEvent.data.resultRawRedacted).toEqual({
       role: 'tool',
       name: 'json_tool',
       toolCallId: 'call-json-telemetry',

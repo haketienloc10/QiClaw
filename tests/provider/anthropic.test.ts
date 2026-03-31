@@ -1,31 +1,81 @@
 import { describe, expect, it } from 'vitest';
 
-import { normalizeAnthropicResponseMetadata } from '../../src/provider/anthropic.js';
+import {
+  extractAnthropicToolCalls,
+  normalizeAnthropicResponseMetadata,
+  readAnthropicTextContent
+} from '../../src/provider/anthropic.js';
 
 describe('normalizeAnthropicResponseMetadata', () => {
-  it('normalizes Anthropic usage counters and stop reason into provider metadata', () => {
+  it('normalizes finish, usage, response metrics, and debug metadata for Task 3', () => {
+    const content = [
+      { type: 'text', text: 'I will inspect it.' },
+      { type: 'tool_use', id: 'toolu_1', name: 'read_file', input: { path: 'note.txt', apiKey: 'secret-key' } }
+    ];
+
     expect(normalizeAnthropicResponseMetadata({
       id: 'msg_123',
       model: 'claude-sonnet-4-20250514',
-      stop_reason: 'end_turn',
+      stop_reason: 'tool_use',
       usage: {
         input_tokens: 120,
         output_tokens: 24,
         cache_creation_input_tokens: 30,
         cache_read_input_tokens: 10
-      }
+      },
+      content
     })).toEqual({
-      provider: 'anthropic',
-      model: 'claude-sonnet-4-20250514',
-      requestId: 'msg_123',
-      stopReason: 'end_turn',
+      finish: {
+        stopReason: 'tool_use'
+      },
       usage: {
         inputTokens: 120,
         outputTokens: 24,
+        totalTokens: 144,
         cacheCreationInputTokens: 30,
-        cacheReadInputTokens: 10,
-        totalTokens: 144
+        cacheReadInputTokens: 10
+      },
+      responseMetrics: {
+        contentBlockCount: 2,
+        toolCallCount: 1,
+        hasTextOutput: true,
+        contentBlocksByType: {
+          text: 1,
+          tool_use: 1
+        }
+      },
+      debug: {
+        providerUsageRawRedacted: {
+          input_tokens: '[REDACTED]',
+          output_tokens: '[REDACTED]',
+          cache_creation_input_tokens: '[REDACTED]',
+          cache_read_input_tokens: '[REDACTED]'
+        },
+        providerStopDetails: {
+          stop_reason: 'tool_use'
+        },
+        toolCallSummaries: [
+          {
+            id: 'toolu_1',
+            name: 'read_file'
+          }
+        ],
+        responseContentBlocksByType: {
+          text: 1,
+          tool_use: 1
+        },
+        responsePreviewRedacted:
+          '[{"text":"I will inspect it.","type":"text"},{"id":"toolu_1","input":{"apiKey":"[REDACTED]","path":"note.txt"},"name":"read_file","type":"tool_use"}]'
       }
     });
+
+    expect(readAnthropicTextContent(content)).toBe('I will inspect it.');
+    expect(extractAnthropicToolCalls(content)).toEqual([
+      {
+        id: 'toolu_1',
+        name: 'read_file',
+        input: { path: 'note.txt', apiKey: 'secret-key' }
+      }
+    ]);
   });
 });

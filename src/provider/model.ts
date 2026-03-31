@@ -29,7 +29,7 @@ export interface ProviderRequest {
   availableTools: Tool[];
 }
 
-export interface ProviderResponseUsageMetadata {
+export interface ProviderUsageSummary {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
@@ -37,24 +37,46 @@ export interface ProviderResponseUsageMetadata {
   cacheReadInputTokens?: number;
 }
 
-export interface ProviderResponseMetadata {
-  provider: ProviderId;
-  model: string;
-  requestId?: string;
+export interface ProviderFinishSummary {
   stopReason?: string;
-  usage?: ProviderResponseUsageMetadata;
+}
+
+export interface ProviderResponseMetrics {
+  contentBlockCount: number;
+  toolCallCount: number;
+  hasTextOutput: boolean;
+  contentBlocksByType?: Record<string, number>;
+}
+
+export interface ProviderToolCallSummary {
+  id: string;
+  name: string;
+}
+
+export interface ProviderDebugMetadata {
+  providerUsageRawRedacted?: unknown;
+  providerStopDetails?: unknown;
+  toolCallSummaries?: ProviderToolCallSummary[];
+  responseContentBlocksByType?: Record<string, number>;
+  responsePreviewRedacted?: string;
 }
 
 export interface ProviderResponse {
   message: Message;
   toolCalls: ToolCallRequest[];
-  metadata?: ProviderResponseMetadata;
+  finish?: ProviderFinishSummary;
+  usage?: ProviderUsageSummary;
+  responseMetrics?: ProviderResponseMetrics;
+  debug?: ProviderDebugMetadata;
 }
 
 export interface ProviderResponseNormalizationInput {
   content?: string | null;
   toolCalls?: ToolCallRequest[];
-  metadata?: ProviderResponseMetadata;
+  finish?: ProviderFinishSummary;
+  usage?: ProviderUsageSummary;
+  responseMetrics?: ProviderResponseMetrics;
+  debug?: ProviderDebugMetadata;
 }
 
 export interface ModelProvider {
@@ -73,7 +95,10 @@ export function normalizeProviderResponse(input: ProviderResponseNormalizationIn
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined
     },
     toolCalls,
-    metadata: input.metadata
+    finish: input.finish,
+    usage: input.usage,
+    responseMetrics: input.responseMetrics,
+    debug: input.debug
   };
 }
 

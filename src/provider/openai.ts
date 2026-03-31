@@ -7,14 +7,19 @@ import type {
 } from 'openai/resources/responses/responses';
 
 import type { Message } from '../core/types.js';
+import { buildTelemetryPreview } from '../telemetry/preview.js';
+import { redactSensitiveTelemetryValue } from '../telemetry/redaction.js';
 import type { Tool } from '../tools/registry.js';
 
 import {
   normalizeProviderResponse,
   type ModelProvider,
+  type ProviderDebugMetadata,
+  type ProviderFinishSummary,
   type ProviderRequest,
   type ProviderResponse,
-  type ProviderResponseMetadata,
+  type ProviderResponseMetrics,
+  type ProviderUsageSummary,
   type ToolCallRequest
 } from './model.js';
 
@@ -78,6 +83,27 @@ export function extractOpenAIToolCalls(output: unknown[]): ToolCallRequest[] {
     }));
 }
 
+function countOpenAIOutputBlocksByType(output: unknown[]): Record<string, number> {
+  return output.reduce<Record<string, number>>((counts, item) => {
+    const type = typeof item === 'object' && item !== null && 'type' in item
+      ? String((item as { type?: unknown }).type)
+      : 'unknown';
+
+    counts[type] = (counts[type] ?? 0) + 1;
+
+    if (type === 'message' && Array.isArray((item as { content?: unknown }).content)) {
+      for (const part of (item as { content: unknown[] }).content) {
+        const partType = typeof part === 'object' && part !== null && 'type' in part
+          ? String((part as { type?: unknown }).type)
+          : 'unknown';
+        counts[partType] = (counts[partType] ?? 0) + 1;
+      }
+    }
+
+    return counts;
+  }, {});
+}
+
 export function normalizeOpenAIResponseMetadata(response: {
   id: string;
   model: string;
@@ -87,16 +113,45 @@ export function normalizeOpenAIResponseMetadata(response: {
     output_tokens?: number | null;
     total_tokens?: number | null;
   } | null;
-}): ProviderResponseMetadata {
+  output: unknown[];
+  incomplete_details?: {
+    reason?: string | null;
+  } | null;
+}): {
+  finish: ProviderFinishSummary;
+  usage: ProviderUsageSummary;
+  responseMetrics: ProviderResponseMetrics;
+  debug: ProviderDebugMetadata;
+} {
+  const toolCalls = extractOpenAIToolCalls(response.output);
+  const contentBlocksByType = countOpenAIOutputBlocksByType(response.output);
+
   return {
-    provider: 'openai',
-    model: response.model,
-    requestId: response.id,
-    stopReason: response.status === 'incomplete' ? response.status : undefined,
+    finish: {
+      stopReason: response.incomplete_details?.reason ?? undefined
+    },
     usage: {
       inputTokens: response.usage?.input_tokens ?? undefined,
       outputTokens: response.usage?.output_tokens ?? undefined,
       totalTokens: response.usage?.total_tokens ?? undefined
+    },
+    responseMetrics: {
+      contentBlockCount: response.output.length,
+      toolCallCount: toolCalls.length,
+      hasTextOutput: readOpenAITextContent(response.output).length > 0,
+      contentBlocksByType
+    },
+    debug: {
+      providerUsageRawRedacted: response.usage ? redactSensitiveTelemetryValue(response.usage) : undefined,
+      providerStopDetails: response.incomplete_details || response.status === 'incomplete'
+        ? {
+            status: response.status ?? undefined,
+            incomplete_details: response.incomplete_details ?? undefined
+          }
+        : undefined,
+      toolCallSummaries: toolCalls.map((toolCall) => ({ id: toolCall.id, name: toolCall.name })),
+      responseContentBlocksByType: contentBlocksByType,
+      responsePreviewRedacted: buildTelemetryPreview(response.output, 400)
     }
   };
 }
@@ -116,10 +171,15 @@ export function createOpenAIProvider(options: OpenAIProviderOptions): ModelProvi
         availableTools: request.availableTools
       }));
 
+      const metadata = normalizeOpenAIResponseMetadata(response);
+
       return normalizeProviderResponse({
         content: readOpenAITextContent(response.output),
         toolCalls: extractOpenAIToolCalls(response.output),
-        metadata: normalizeOpenAIResponseMetadata(response)
+        finish: metadata.finish,
+        usage: metadata.usage,
+        responseMetrics: metadata.responseMetrics,
+        debug: metadata.debug
       });
     }
   };

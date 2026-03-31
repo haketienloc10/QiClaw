@@ -7,14 +7,19 @@ import type {
 } from '@anthropic-ai/sdk/resources/messages/messages';
 
 import type { Message as RuntimeMessage } from '../core/types.js';
+import { buildTelemetryPreview } from '../telemetry/preview.js';
+import { redactSensitiveTelemetryValue } from '../telemetry/redaction.js';
 import type { Tool } from '../tools/registry.js';
 
 import {
   normalizeProviderResponse,
   type ModelProvider,
+  type ProviderDebugMetadata,
+  type ProviderFinishSummary,
   type ProviderRequest,
   type ProviderResponse,
-  type ProviderResponseMetadata,
+  type ProviderResponseMetrics,
+  type ProviderUsageSummary,
   type ToolCallRequest
 } from './model.js';
 
@@ -72,6 +77,17 @@ export function extractAnthropicToolCalls(content: unknown[]): ToolCallRequest[]
     }));
 }
 
+function countAnthropicContentBlocksByType(content: unknown[]): Record<string, number> {
+  return content.reduce<Record<string, number>>((counts, block) => {
+    const type = typeof block === 'object' && block !== null && 'type' in block
+      ? String((block as { type?: unknown }).type)
+      : 'unknown';
+
+    counts[type] = (counts[type] ?? 0) + 1;
+    return counts;
+  }, {});
+}
+
 export function normalizeAnthropicResponseMetadata(response: {
   id: string;
   model: string;
@@ -82,7 +98,15 @@ export function normalizeAnthropicResponseMetadata(response: {
     cache_creation_input_tokens?: number | null;
     cache_read_input_tokens?: number | null;
   } | null;
-}): ProviderResponseMetadata {
+  content: unknown[];
+}): {
+  finish: ProviderFinishSummary;
+  usage: ProviderUsageSummary;
+  responseMetrics: ProviderResponseMetrics;
+  debug: ProviderDebugMetadata;
+} {
+  const toolCalls = extractAnthropicToolCalls(response.content);
+  const contentBlocksByType = countAnthropicContentBlocksByType(response.content);
   const inputTokens = response.usage?.input_tokens ?? undefined;
   const outputTokens = response.usage?.output_tokens ?? undefined;
   const cacheCreationInputTokens = response.usage?.cache_creation_input_tokens ?? undefined;
@@ -92,16 +116,28 @@ export function normalizeAnthropicResponseMetadata(response: {
     : undefined;
 
   return {
-    provider: 'anthropic',
-    model: response.model,
-    requestId: response.id,
-    stopReason: response.stop_reason ?? undefined,
+    finish: {
+      stopReason: response.stop_reason ?? undefined
+    },
     usage: {
       inputTokens,
       outputTokens,
+      totalTokens,
       cacheCreationInputTokens,
-      cacheReadInputTokens,
-      totalTokens
+      cacheReadInputTokens
+    },
+    responseMetrics: {
+      contentBlockCount: response.content.length,
+      toolCallCount: toolCalls.length,
+      hasTextOutput: readAnthropicTextContent(response.content).length > 0,
+      contentBlocksByType
+    },
+    debug: {
+      providerUsageRawRedacted: response.usage ? redactSensitiveTelemetryValue(response.usage) : undefined,
+      providerStopDetails: response.stop_reason ? { stop_reason: response.stop_reason } : undefined,
+      toolCallSummaries: toolCalls.map((toolCall) => ({ id: toolCall.id, name: toolCall.name })),
+      responseContentBlocksByType: contentBlocksByType,
+      responsePreviewRedacted: buildTelemetryPreview(redactSensitiveTelemetryValue(response.content), 400)
     }
   };
 }
@@ -121,10 +157,15 @@ export function createAnthropicProvider(options: AnthropicProviderOptions): Mode
         availableTools: request.availableTools
       }));
 
+      const metadata = normalizeAnthropicResponseMetadata(response);
+
       return normalizeProviderResponse({
         content: readAnthropicTextContent(response.content),
         toolCalls: extractAnthropicToolCalls(response.content),
-        metadata: normalizeAnthropicResponseMetadata(response)
+        finish: metadata.finish,
+        usage: metadata.usage,
+        responseMetrics: metadata.responseMetrics,
+        debug: metadata.debug
       });
     }
   };

@@ -1046,7 +1046,27 @@ describe('agent loop', () => {
       type: 'tool_call_started',
       data: {
         toolName: 'read_file',
-        toolCallId: 'call-read-telemetry'
+        toolCallId: 'call-read-telemetry',
+        inputPreview: '{"path":"note.txt"}',
+        inputRawRedacted: {
+          path: 'note.txt'
+        }
+      }
+    });
+    expect(observedEvents[4]).toMatchObject({
+      type: 'tool_call_completed',
+      data: {
+        toolName: 'read_file',
+        toolCallId: 'call-read-telemetry',
+        isError: false,
+        resultPreview: '{"content":"agent note"}',
+        resultRawRedacted: {
+          role: 'tool',
+          name: 'read_file',
+          toolCallId: 'call-read-telemetry',
+          content: 'agent note',
+          isError: false
+        }
       }
     });
     expect(observedEvents[7]).toMatchObject({
@@ -1069,6 +1089,87 @@ describe('agent loop', () => {
       turnsFailed: 0,
       totalToolCallsCompleted: 1,
       lastTurnDurationMs: expect.any(Number)
+    });
+  });
+
+  it('redacts sensitive values in JSON string tool results before recording telemetry', async () => {
+    const observedEvents: TelemetryEvent[] = [];
+    const provider = createScriptedProvider([
+      {
+        message: { role: 'assistant', content: 'I will call the token tool.' },
+        toolCalls: [
+          {
+            id: 'call-json-telemetry',
+            name: 'json_tool',
+            input: { query: 'show token' }
+          }
+        ]
+      },
+      {
+        message: { role: 'assistant', content: 'Done.' },
+        toolCalls: []
+      }
+    ]);
+
+    const jsonTool: Tool<{ query: string }> = {
+      name: 'json_tool',
+      description: 'Returns JSON as a string',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string' }
+        },
+        required: ['query'],
+        additionalProperties: false
+      },
+      async execute(input) {
+        return {
+          content: JSON.stringify({
+            token: 'secret-token-value',
+            nested: {
+              authorization: 'Bearer abc'
+            },
+            query: input.query
+          })
+        };
+      }
+    };
+
+    await runAgentTurn({
+      provider,
+      availableTools: [jsonTool],
+      baseSystemPrompt: 'You are helpful.',
+      userInput: 'Run the tool.',
+      cwd: '/tmp/json-telemetry-runtime',
+      maxToolRounds: 2,
+      observer: {
+        record(event) {
+          observedEvents.push(event);
+        }
+      }
+    });
+
+    expect(observedEvents[4]).toMatchObject({
+      type: 'tool_call_completed',
+      data: {
+        toolName: 'json_tool',
+        toolCallId: 'call-json-telemetry',
+        isError: false,
+        resultPreview: '{"content":"{\\"token\\":\\"secret-token-value\\",\\"nested\\":{\\"authorization\\":\\"Bearer abc\\"},\\"query\\":\\"show token\\"}"}'
+      }
+    });
+    expect(observedEvents[4]?.data.resultRawRedacted).toEqual({
+      role: 'tool',
+      name: 'json_tool',
+      toolCallId: 'call-json-telemetry',
+      content: {
+        token: '[REDACTED]',
+        nested: {
+          authorization: '[REDACTED]'
+        },
+        query: 'show token'
+      },
+      isError: false
     });
   });
 

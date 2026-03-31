@@ -8,6 +8,8 @@ import {
   type ToolResultMessage
 } from '../provider/model.js';
 import { createNoopObserver, createTelemetryEvent, type TelemetryObserver } from '../telemetry/observer.js';
+import { buildTelemetryPreview } from '../telemetry/preview.js';
+import { redactSensitiveTelemetryValue } from '../telemetry/redaction.js';
 import type { Tool } from '../tools/registry.js';
 
 import { buildDoneCriteria, type DoneCriteria } from './doneCriteria.js';
@@ -101,7 +103,9 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTu
         observer.record(
           createTelemetryEvent('tool_call_started', {
             toolName: toolCall.name,
-            toolCallId: toolCall.id
+            toolCallId: toolCall.id,
+            inputPreview: buildTelemetryPreview(toolCall.input),
+            inputRawRedacted: redactSensitiveTelemetryValue(toolCall.input)
           })
         );
 
@@ -112,7 +116,9 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTu
           createTelemetryEvent('tool_call_completed', {
             toolName: toolCall.name,
             toolCallId: toolCall.id,
-            isError: toolResult.isError
+            isError: toolResult.isError,
+            resultPreview: buildTelemetryPreview({ content: toolResult.content }),
+            resultRawRedacted: buildRedactedToolResultPayload(toolResult)
           })
         );
       }
@@ -171,6 +177,21 @@ function buildResult(
     doneCriteria,
     verification
   };
+}
+
+function buildRedactedToolResultPayload(toolResult: ToolResultMessage): Record<string, unknown> {
+  return {
+    ...toolResult,
+    content: redactSensitiveTelemetryValue(parseToolResultContent(toolResult.content))
+  };
+}
+
+function parseToolResultContent(content: string): unknown {
+  try {
+    return JSON.parse(content);
+  } catch {
+    return content;
+  }
 }
 
 async function dispatchAllowedToolCall(

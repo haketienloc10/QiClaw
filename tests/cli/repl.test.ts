@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { buildCli, type CliRunTurnResult } from '../../src/cli/main.js';
 import { createRepl } from '../../src/cli/repl.js';
@@ -88,6 +88,7 @@ describe('createSuccessfulRunTurn', () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -328,6 +329,160 @@ describe('buildCli', () => {
 
       const selectedLog = await readFile(envLogPath, 'utf8');
       expect(selectedLog).toContain('"type":"turn_started"');
+    });
+  });
+
+  it('records provider telemetry events to the debug JSONL log without changing prompt-mode stdout', async () => {
+    await withProviderEnvSnapshot(async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-03-31T12:34:56.000Z'));
+
+      const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-provider-debug-log-'));
+      tempDirs.push(tempDir);
+
+      const logPath = join(tempDir, 'provider', 'telemetry.jsonl');
+      const stdoutWrites: string[] = [];
+      const cli = buildCli({
+        argv: ['--debug-log', logPath, '--prompt', 'inspect package.json'],
+        cwd: tempDir,
+        stdout: {
+          write(chunk) {
+            stdoutWrites.push(String(chunk));
+            return true;
+          }
+        },
+        createRuntime: (runtimeOptions) => ({
+          provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+          availableTools: [],
+          cwd: tempDir,
+          observer: runtimeOptions.observer ?? { record() {} }
+        }),
+        runTurn: async (input) => {
+          input.observer?.record(createTelemetryEvent('provider_called', {
+            messageCount: 2,
+            promptRawChars: 42,
+            toolNames: ['Read'],
+            messageSummaries: [
+              {
+                role: 'system',
+                contentPreviewRedacted: '"You are a minimal single-agent CLI runtime."',
+                contentBlockCount: 1,
+                hasToolCalls: false
+              },
+              {
+                role: 'user',
+                contentPreviewRedacted: '"inspect package.json"',
+                contentBlockCount: 1,
+                hasToolCalls: false
+              }
+            ],
+            totalContentBlockCount: 2,
+            hasSystemPrompt: true,
+            promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"}]}'
+          }));
+          input.observer?.record(createTelemetryEvent('provider_responded', {
+            stopReason: 'end_turn',
+            usage: {
+              inputTokens: 12,
+              outputTokens: 8,
+              totalTokens: 20
+            },
+            responseContentBlockCount: 1,
+            toolCallCount: 0,
+            hasTextOutput: true,
+            responseContentBlocksByType: { text: 1 },
+            toolCallSummaries: [],
+            providerUsageRawRedacted: {
+              input_tokens: 12,
+              output_tokens: 8
+            },
+            providerStopDetails: {
+              stop_reason: 'end_turn'
+            },
+            responsePreviewRedacted: '[{"type":"text","text":"handled"}]'
+          }));
+
+          return {
+            stopReason: 'completed',
+            finalAnswer: `handled: ${input.userInput}`,
+            history: [],
+            toolRoundsUsed: 0,
+            doneCriteria: {
+              goal: input.userInput,
+              checklist: [input.userInput],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false
+            },
+            verification: {
+              isVerified: true,
+              finalAnswerIsNonEmpty: true,
+              toolEvidenceSatisfied: true,
+              toolMessagesCount: 0,
+              checks: []
+            }
+          };
+        }
+      });
+
+      await expect(cli.run()).resolves.toBe(0);
+
+      const selectedLog = await readFile(logPath, 'utf8');
+      const lines = selectedLog.trim().split('\n');
+
+      expect(lines).toEqual([
+        JSON.stringify({
+          type: 'provider_called',
+          timestamp: '2026-03-31T12:34:56.000Z',
+          data: {
+            messageCount: 2,
+            promptRawChars: 42,
+            toolNames: ['Read'],
+            messageSummaries: [
+              {
+                role: 'system',
+                contentPreviewRedacted: '"You are a minimal single-agent CLI runtime."',
+                contentBlockCount: 1,
+                hasToolCalls: false
+              },
+              {
+                role: 'user',
+                contentPreviewRedacted: '"inspect package.json"',
+                contentBlockCount: 1,
+                hasToolCalls: false
+              }
+            ],
+            totalContentBlockCount: 2,
+            hasSystemPrompt: true,
+            promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"}]}'
+          }
+        }),
+        JSON.stringify({
+          type: 'provider_responded',
+          timestamp: '2026-03-31T12:34:56.000Z',
+          data: {
+            stopReason: 'end_turn',
+            usage: {
+              inputTokens: 12,
+              outputTokens: 8,
+              totalTokens: 20
+            },
+            responseContentBlockCount: 1,
+            toolCallCount: 0,
+            hasTextOutput: true,
+            responseContentBlocksByType: { text: 1 },
+            toolCallSummaries: [],
+            providerUsageRawRedacted: {
+              input_tokens: 12,
+              output_tokens: 8
+            },
+            providerStopDetails: {
+              stop_reason: 'end_turn'
+            },
+            responsePreviewRedacted: '[{"type":"text","text":"handled"}]'
+          }
+        })
+      ]);
+      expect(stdoutWrites).toEqual(['handled: inspect package.json\n']);
     });
   });
 

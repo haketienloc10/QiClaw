@@ -8,6 +8,7 @@ import {
   type ToolResultMessage
 } from '../provider/model.js';
 import { createNoopObserver, createTelemetryEvent, type TelemetryObserver } from '../telemetry/observer.js';
+import { measurePromptTelemetry } from '../telemetry/providerMetrics.js';
 import { buildTelemetryPreview } from '../telemetry/preview.js';
 import { redactSensitiveTelemetryValue } from '../telemetry/redaction.js';
 import type { Tool } from '../tools/registry.js';
@@ -67,9 +68,15 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTu
         history
       });
 
+      const promptTelemetry = measurePromptTelemetry(prompt.messages);
+
       observer.record(
         createTelemetryEvent('provider_called', {
-          messageCount: prompt.messages.length,
+          providerName: input.provider.name,
+          providerModel: input.provider.model,
+          messageCount: promptTelemetry.messageCount,
+          contentBlockCount: promptTelemetry.contentBlockCount,
+          promptPreview: promptTelemetry.preview,
           toolNames: input.availableTools.map((tool) => tool.name)
         })
       );
@@ -81,8 +88,14 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTu
 
       observer.record(
         createTelemetryEvent('provider_responded', {
+          providerName: input.provider.name,
+          providerModel: input.provider.model,
           toolCallCount: response.toolCalls.length,
-          assistantContentLength: response.message.content.length
+          assistantContentLength: response.message.content.length,
+          finish: response.finish,
+          usage: response.usage,
+          responseMetrics: response.responseMetrics,
+          debug: response.debug
         })
       );
 

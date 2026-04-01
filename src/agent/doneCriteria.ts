@@ -14,7 +14,7 @@ export interface DoneCriteria {
   stopVsDoneDistinction?: string;
 }
 
-const TOOL_EVIDENCE_REASON = 'Goal asks for workspace inspection via read/search/check/review actions.';
+const TOOL_EVIDENCE_REASON = 'Goal asks for project inspection via read/search/check/review actions.';
 const CHECKLIST_SPLIT_PATTERN = /\b(?:and|then)\b|,/gi;
 const TOOL_EVIDENCE_PATTERN = /\b(read|inspect|search|grep|scan the repo|scan the workspace|explore the repo|explore the workspace|check the repo|check the workspace|review the repo|review the codebase|examine the repo|examine the codebase|open (?:the )?(?:file|repo|repository|codebase|workspace))\b/i;
 

@@ -1,4 +1,4 @@
-export type AgentCapabilityClass = 'workspace_read' | 'workspace_write' | 'workspace_search' | 'workspace_shell';
+export type AgentCapabilityClass = 'read' | 'write' | 'search' | 'execute';
 
 export interface AgentIdentitySpec {
   purpose: string;
@@ -8,7 +8,7 @@ export interface AgentIdentitySpec {
 
 export interface AgentCapabilitiesSpec {
   allowedCapabilityClasses: AgentCapabilityClass[];
-  workspaceRelationship: string;
+  operatingSurface: string;
   capabilityExclusions: string[];
 }
 

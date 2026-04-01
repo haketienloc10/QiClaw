@@ -25,11 +25,11 @@ export interface CreateAgentRuntimeOptions extends ResolvedProviderConfig {
   agentSpecName?: string;
 }
 
-const capabilityClassToToolNames: Record<AgentCapabilityClass, string[]> = {
-  workspace_read: ['read_file'],
-  workspace_write: ['edit_file'],
-  workspace_search: ['search'],
-  workspace_shell: ['shell']
+const builtinToolNamesByCapabilityClass: Record<AgentCapabilityClass, string[]> = {
+  read: ['read_file'],
+  write: ['edit_file'],
+  search: ['search'],
+  execute: ['shell']
 };
 
 export function createAgentRuntime(options: CreateAgentRuntimeOptions): AgentRuntime {
@@ -54,7 +54,7 @@ export function createAgentRuntime(options: CreateAgentRuntimeOptions): AgentRun
 
 function filterToolsForSpec(tools: Tool[], agentSpec: AgentSpec): Tool[] {
   const allowedToolNames = new Set(
-    agentSpec.capabilities.allowedCapabilityClasses.flatMap((capabilityClass) => capabilityClassToToolNames[capabilityClass] ?? [])
+    agentSpec.capabilities.allowedCapabilityClasses.flatMap((capabilityClass) => builtinToolNamesByCapabilityClass[capabilityClass] ?? [])
   );
 
   return tools.filter((tool) => allowedToolNames.has(tool.name));

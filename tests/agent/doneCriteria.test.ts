@@ -31,7 +31,7 @@ describe('done criteria', () => {
       requiresToolEvidence: true,
       requiresSubstantiveFinalAnswer: false,
       forbidSuccessAfterToolErrors: false,
-      toolEvidenceReason: 'Goal asks for workspace inspection via read/search/check/review actions.',
+      toolEvidenceReason: 'Goal asks for project inspection via read/search/check/review actions.',
       completionMode: undefined,
       doneCriteriaShape: undefined,
       evidenceRequirement: undefined,
@@ -66,7 +66,7 @@ describe('done criteria', () => {
       toolEvidenceReason: undefined,
       completionMode: 'Single-turn task completion with evidence-aware verification.',
       doneCriteriaShape: 'Return a non-empty final answer and provide tool evidence when the task requires inspection.',
-      evidenceRequirement: 'Use direct workspace evidence for inspection-style claims.',
+      evidenceRequirement: 'Use direct project evidence for inspection-style claims.',
       stopVsDoneDistinction: 'A provider stop is not enough unless the final answer satisfies verification criteria.'
     });
   });
@@ -151,7 +151,7 @@ describe('verifier', () => {
         {
           name: 'tool_evidence',
           passed: false,
-          details: 'Expected at least one tool message because: Goal asks for workspace inspection via read/search/check/review actions.'
+          details: 'Expected at least one tool message because: Goal asks for project inspection via read/search/check/review actions.'
         },
         {
           name: 'final_answer_substantive',
@@ -265,7 +265,7 @@ describe('verifier', () => {
         {
           name: 'tool_evidence',
           passed: false,
-          details: 'Expected at least one tool message because: Goal asks for workspace inspection via read/search/check/review actions.'
+          details: 'Expected at least one tool message because: Goal asks for project inspection via read/search/check/review actions.'
         },
         {
           name: 'final_answer_substantive',

@@ -27,7 +27,7 @@ function renderCapabilitiesSection(spec: AgentSpec): string {
   return [
     'Capabilities:',
     `- Allowed capability classes: ${spec.capabilities.allowedCapabilityClasses.join(', ')}`,
-    `- Workspace relationship: ${spec.capabilities.workspaceRelationship}`,
+    `- Operating surface: ${spec.capabilities.operatingSurface}`,
     `- Capability exclusions: ${spec.capabilities.capabilityExclusions.join('; ')}`
   ].join('\n');
 }

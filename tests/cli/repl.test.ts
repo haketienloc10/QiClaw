@@ -97,7 +97,7 @@ afterEach(async () => {
 describe('createRepl', () => {
   it('runs one turn and returns the assistant text', async () => {
     const repl = createRepl({
-      promptLabel: 'qiclaw> ',
+      promptLabel: '> ',
       runTurn: async (input) => ({
         stopReason: 'completed',
         finalAnswer: `echo: ${input}`,
@@ -167,7 +167,7 @@ describe('createRepl', () => {
     const outputs: string[] = [];
     const inputs = ['first question', '/exit'];
     const repl = createRepl({
-      promptLabel: 'qiclaw> ',
+      promptLabel: '> ',
       runTurn: async (input) => ({
         stopReason: 'completed',
         finalAnswer: `answer: ${input}`,
@@ -192,7 +192,7 @@ describe('createRepl', () => {
 });
 
 describe('buildCli', () => {
-  it('keeps prompt mode stdout limited to the final answer even when tool telemetry events are recorded', async () => {
+  it('keeps prompt mode output compact and redacted when tool telemetry events are recorded', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-telemetry-'));
     tempDirs.push(tempDir);
 
@@ -213,16 +213,27 @@ describe('buildCli', () => {
         observer: runtimeOptions.observer ?? { record() {} }
       }),
       runTurn: async (input) => {
-        input.observer?.record(createTelemetryEvent('tool_call_started', {
+        input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
           toolName: 'Read',
           toolCallId: 'toolu_1',
-          payload: { path: '/tmp/package.json', raw: 'secret payload' }
+          inputPreview: '{"path":"/tmp/package.json"}',
+          inputRawRedacted: { path: '/tmp/package.json', raw: 'secret payload' }
         }));
-        input.observer?.record(createTelemetryEvent('tool_call_completed', {
+        input.observer?.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
           toolName: 'Read',
           toolCallId: 'toolu_1',
           isError: false,
-          payload: { content: '{"name":"secret"}' }
+          resultPreview: '{"name":"secret"}',
+          resultRawRedacted: { content: '{"name":"secret"}' },
+          durationMs: 1,
+          resultSizeChars: 17,
+          resultSizeBucket: 'small'
         }));
 
         return {
@@ -248,7 +259,7 @@ describe('buildCli', () => {
     });
 
     await expect(cli.run()).resolves.toBe(0);
-    expect(writes).toEqual(['handled: inspect package.json\n']);
+    expect(writes).toEqual(['· Read\n', 'handled: inspect package.json\n']);
     expect(writes.join('')).not.toContain('Tool: Read');
     expect(writes.join('')).not.toContain('secret payload');
     expect(writes.join('')).not.toContain('{"name":"secret"}');
@@ -274,9 +285,14 @@ describe('buildCli', () => {
           observer: runtimeOptions.observer ?? { record() {} }
         }),
         runTurn: async (input) => {
-          input.observer?.record(createTelemetryEvent('tool_call_started', {
+          input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+            turnId: 'turn-1',
+            providerRound: 1,
+            toolRound: 1,
             toolName: 'Read',
-            toolCallId: 'toolu_1'
+            toolCallId: 'toolu_1',
+            inputPreview: '{}',
+            inputRawRedacted: {}
           }));
 
           return {
@@ -328,8 +344,14 @@ describe('buildCli', () => {
           observer: runtimeOptions.observer ?? { record() {} }
         }),
         runTurn: async (input) => {
-          input.observer?.record(createTelemetryEvent('turn_started', {
-            userInput: input.userInput
+          input.observer?.record(createTelemetryEvent('turn_started', 'input_received', {
+            turnId: 'turn-1',
+            providerRound: 0,
+            toolRound: 0,
+            cwd: tempDir,
+            userInput: input.userInput,
+            maxToolRounds: 3,
+            toolNames: []
           }));
 
           return {

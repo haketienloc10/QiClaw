@@ -13,6 +13,7 @@ export interface CreateReplOptions {
   runTurn(input: string): Promise<Pick<RunAgentTurnResult, 'finalAnswer' | 'stopReason' | 'toolRoundsUsed' | 'verification'>>;
   readLine?(promptLabel: string): Promise<string | undefined>;
   writeLine?(text: string): void;
+  afterTurnRendered?(): void;
 }
 
 export interface Repl {
@@ -55,6 +56,7 @@ export function createRepl(options: CreateReplOptions): Repl {
 
         const result = await this.runOnce(trimmed);
         writeLine(result.finalAnswer);
+        options.afterTurnRendered?.();
       }
     }
   };

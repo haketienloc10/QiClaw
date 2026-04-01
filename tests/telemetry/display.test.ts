@@ -4,7 +4,7 @@ import { createCompactCliTelemetryObserver } from '../../src/telemetry/display.j
 import { createTelemetryEvent } from '../../src/telemetry/observer.js';
 
 describe('createCompactCliTelemetryObserver', () => {
-  it('prints compact tool status lines for a successful tool call', () => {
+  it('renders shell tool activity as a short command label and omits done lines', () => {
     const lines: string[] = [];
     const observer = createCompactCliTelemetryObserver({
       writeLine(text) {
@@ -16,24 +16,66 @@ describe('createCompactCliTelemetryObserver', () => {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'read_file',
+      toolName: 'shell',
       toolCallId: 'call-1',
-      inputPreview: '{"path":"note.txt"}',
-      inputRawRedacted: { path: 'note.txt' }
+      inputPreview: '{"command":"git","args":["status"]}',
+      inputRawRedacted: { command: 'git', args: ['status'] }
     }));
     observer.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'read_file',
+      toolName: 'shell',
       toolCallId: 'call-1',
       isError: false,
-      resultPreview: 'agent note',
-      resultRawRedacted: { content: 'agent note' },
+      resultPreview: 'ok',
+      resultRawRedacted: { content: 'ok' },
       durationMs: 5,
-      resultSizeChars: 10
+      resultSizeChars: 2,
+      resultSizeBucket: 'small'
     }));
 
-    expect(lines).toEqual(['Tool: read_file', 'Tool: read_file done']);
+    expect(lines).toEqual(['· shell git status']);
+  });
+
+  it('renders a minimal footer from turn summary and omits zero tools', () => {
+    const lines: string[] = [];
+    const observer = createCompactCliTelemetryObserver({
+      writeLine(text) {
+        lines.push(text);
+      }
+    }) as ReturnType<typeof createCompactCliTelemetryObserver> & { flushPendingFooter?: () => void };
+
+    observer.record(createTelemetryEvent('turn_completed', 'completion_check', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 0,
+      stopReason: 'completed',
+      toolRoundsUsed: 0,
+      isVerified: true,
+      durationMs: 6300
+    }));
+    observer.record(createTelemetryEvent('turn_summary', 'completion_check', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 0,
+      providerRounds: 1,
+      toolRoundsUsed: 0,
+      toolCallsTotal: 0,
+      toolCallsByName: {},
+      inputTokensTotal: 185,
+      outputTokensTotal: 15,
+      promptCharsMax: 100,
+      toolResultCharsInFinalPrompt: 0,
+      assistantToolCallCharsInFinalPrompt: 0,
+      toolResultPromptGrowthCharsTotal: 0,
+      toolResultCharsAddedAcrossTurn: 0,
+      turnCompleted: true,
+      stopReason: 'completed'
+    }));
+
+    observer.flushPendingFooter?.();
+
+    expect(lines).toEqual(['─ completed • 1 provider • 185 in / 15 out • 6.3s']);
   });
 });

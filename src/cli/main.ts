@@ -12,7 +12,7 @@ import {
   parseInteractiveCheckpointJson
 } from '../session/session.js';
 import { createCompositeObserver } from '../telemetry/composite.js';
-import { createCompactCliTelemetryObserver } from '../telemetry/display.js';
+import { createCompactCliTelemetryObserver, type CompactCliTelemetryObserver } from '../telemetry/display.js';
 import { createFileJsonLineWriter, createJsonLineLogger } from '../telemetry/logger.js';
 import { createInMemoryMetricsObserver } from '../telemetry/metrics.js';
 import type { TelemetryObserver } from '../telemetry/observer.js';
@@ -66,19 +66,18 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
           baseUrl: parsed.baseUrl,
           apiKey: parsed.apiKey
         });
-        const shouldShowCompactToolStatus = parsed.prompt === undefined;
-        const observer = createCliObserver({
+        const cliObserver = createCliObserver({
           cwd,
           stdout,
           metrics,
           debugLogPath: parsed.debugLogPath,
           envDebugLogPath: process.env.QICLAW_DEBUG_LOG,
-          showCompactToolStatus: shouldShowCompactToolStatus
+          showCompactToolStatus: true
         });
         const runtime = createRuntime({
           ...providerConfig,
           cwd,
-          observer
+          observer: cliObserver.observer
         });
 
         if (parsed.prompt) {
@@ -93,7 +92,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
                 userInput,
                 cwd: runtime.cwd,
                 maxToolRounds: 3,
-                observer: observer
+                observer: cliObserver.observer
               });
             },
             writeLine(text) {
@@ -102,6 +101,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
           });
           const result = await repl.runOnce(parsed.prompt);
           stdout.write(`${result.finalAnswer}\n`);
+          cliObserver.flushPendingFooter();
           return 0;
         }
 
@@ -128,7 +128,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
               userInput,
               cwd: runtime.cwd,
               maxToolRounds: 3,
-              observer: observer,
+              observer: cliObserver.observer,
               history,
               historySummary,
               sessionId
@@ -153,6 +153,9 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
           },
           writeLine(text) {
             stdout.write(`${text}\n`);
+          },
+          afterTurnRendered() {
+            cliObserver.flushPendingFooter();
           }
         });
 
@@ -177,15 +180,17 @@ function createCliObserver(options: {
   debugLogPath?: string;
   envDebugLogPath?: string;
   showCompactToolStatus?: boolean;
-}): TelemetryObserver {
+}): { observer: TelemetryObserver; flushPendingFooter(): void } {
   const observers: TelemetryObserver[] = [options.metrics];
+  let compactObserver: CompactCliTelemetryObserver | undefined;
 
   if (options.showCompactToolStatus) {
-    observers.push(createCompactCliTelemetryObserver({
+    compactObserver = createCompactCliTelemetryObserver({
       writeLine(text) {
         options.stdout.write(`${text}\n`);
       }
-    }));
+    });
+    observers.push(compactObserver);
   }
   const selectedDebugLogPath = options.debugLogPath ?? options.envDebugLogPath;
 
@@ -195,7 +200,12 @@ function createCliObserver(options: {
     observers.push(createJsonLineLogger(createFileJsonLineWriter(resolvedDebugLogPath)));
   }
 
-  return createCompositeObserver(observers);
+  return {
+    observer: createCompositeObserver(observers),
+    flushPendingFooter() {
+      compactObserver?.flushPendingFooter();
+    }
+  };
 }
 
 function resolveCliPath(cwd: string, filePath: string): string {

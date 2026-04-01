@@ -4,7 +4,41 @@ import { createCompactCliTelemetryObserver } from '../../src/telemetry/display.j
 import { createTelemetryEvent } from '../../src/telemetry/observer.js';
 
 describe('createCompactCliTelemetryObserver', () => {
-  it('prints short tool activity lines for a successful tool call', () => {
+  it('renders shell tool activity as a short command label and omits done lines', () => {
+    const lines: string[] = [];
+    const observer = createCompactCliTelemetryObserver({
+      writeLine(text) {
+        lines.push(text);
+      }
+    });
+
+    observer.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      toolName: 'shell',
+      toolCallId: 'call-1',
+      inputPreview: '{"command":"git","args":["status"]}',
+      inputRawRedacted: { command: 'git', args: ['status'] }
+    }));
+    observer.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      toolName: 'shell',
+      toolCallId: 'call-1',
+      isError: false,
+      resultPreview: 'ok',
+      resultRawRedacted: { content: 'ok' },
+      durationMs: 5,
+      resultSizeChars: 2,
+      resultSizeBucket: 'small'
+    }));
+
+    expect(lines).toEqual(['· shell git status']);
+  });
+
+  it('renders compact summaries for read_file, edit_file, and search without leaking payloads', () => {
     const lines: string[] = [];
     const observer = createCompactCliTelemetryObserver({
       writeLine(text) {
@@ -18,139 +52,100 @@ describe('createCompactCliTelemetryObserver', () => {
       toolRound: 1,
       toolName: 'read_file',
       toolCallId: 'call-1',
-      inputPreview: '{"path":"note.txt"}',
-      inputRawRedacted: { path: 'note.txt' }
+      inputPreview: '{"path":"src/cli/main.ts"}',
+      inputRawRedacted: { path: 'src/cli/main.ts' }
     }));
-    observer.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
+    observer.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'read_file',
-      toolCallId: 'call-1',
-      isError: false,
-      resultPreview: 'agent note',
-      resultRawRedacted: { content: 'agent note' },
-      durationMs: 5,
-      resultSizeChars: 10,
-      resultSizeBucket: 'small'
-    }));
-
-    expect(lines).toEqual(['· tool read_file', '· tool read_file done']);
-  });
-
-  it('renders one footer line from end-of-turn telemetry and flushes it once', () => {
-    const lines: string[] = [];
-    const observer = createCompactCliTelemetryObserver({
-      writeLine(text) {
-        lines.push(text);
+      toolName: 'edit_file',
+      toolCallId: 'call-2',
+      inputPreview: '{"path":"src/telemetry/display.ts"}',
+      inputRawRedacted: {
+        path: 'src/telemetry/display.ts',
+        oldText: 'secret old text',
+        newText: 'secret new text'
       }
-    }) as ReturnType<typeof createCompactCliTelemetryObserver> & { flushPendingFooter?: () => void };
-
-    observer.record(createTelemetryEvent('provider_responded', 'provider_decision', {
-      turnId: 'turn-1',
-      providerRound: 2,
-      toolRound: 1,
-      usage: { inputTokens: 412, outputTokens: 138, totalTokens: 550 },
-      responseContentBlockCount: 1,
-      toolCallCount: 0,
-      hasTextOutput: true,
-      durationMs: 40
     }));
-    observer.record(createTelemetryEvent('turn_completed', 'completion_check', {
+    observer.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
       turnId: 'turn-1',
-      providerRound: 2,
-      toolRound: 1,
-      stopReason: 'completed',
-      toolRoundsUsed: 1,
-      isVerified: true,
-      durationMs: 3200
-    }));
-    observer.record(createTelemetryEvent('turn_summary', 'completion_check', {
-      turnId: 'turn-1',
-      providerRound: 2,
-      toolRound: 1,
-      providerRounds: 2,
-      toolRoundsUsed: 1,
-      toolCallsTotal: 2,
-      toolCallsByName: { read_file: 2 },
-      inputTokensTotal: 412,
-      outputTokensTotal: 138,
-      promptCharsMax: 100,
-      toolResultCharsInFinalPrompt: 0,
-      assistantToolCallCharsInFinalPrompt: 0,
-      toolResultPromptGrowthCharsTotal: 0,
-      toolResultCharsAddedAcrossTurn: 0,
-      turnCompleted: true,
-      stopReason: 'completed'
-    }));
-
-    observer.flushPendingFooter?.();
-    observer.flushPendingFooter?.();
-
-    expect(lines).toEqual(['─ completed • 2 provider rounds • 1 tool round • 412 in / 138 out • 3.2s']);
-  });
-
-  it('does not reuse footer telemetry from a previous turn when the next turn is partial', () => {
-    const lines: string[] = [];
-    const observer = createCompactCliTelemetryObserver({
-      writeLine(text) {
-        lines.push(text);
-      }
-    }) as ReturnType<typeof createCompactCliTelemetryObserver> & { flushPendingFooter?: () => void };
-
-    observer.record(createTelemetryEvent('provider_responded', 'provider_decision', {
-      turnId: 'turn-1',
-      providerRound: 2,
-      toolRound: 1,
-      usage: { inputTokens: 412, outputTokens: 138, totalTokens: 550 },
-      responseContentBlockCount: 1,
-      toolCallCount: 0,
-      hasTextOutput: true,
-      durationMs: 40
-    }));
-    observer.record(createTelemetryEvent('turn_completed', 'completion_check', {
-      turnId: 'turn-1',
-      providerRound: 2,
-      toolRound: 1,
-      stopReason: 'completed',
-      toolRoundsUsed: 1,
-      isVerified: true,
-      durationMs: 3200
-    }));
-    observer.record(createTelemetryEvent('turn_summary', 'completion_check', {
-      turnId: 'turn-1',
-      providerRound: 2,
-      toolRound: 1,
-      providerRounds: 2,
-      toolRoundsUsed: 1,
-      toolCallsTotal: 2,
-      toolCallsByName: { read_file: 2 },
-      inputTokensTotal: 412,
-      outputTokensTotal: 138,
-      promptCharsMax: 100,
-      toolResultCharsInFinalPrompt: 0,
-      assistantToolCallCharsInFinalPrompt: 0,
-      toolResultPromptGrowthCharsTotal: 0,
-      toolResultCharsAddedAcrossTurn: 0,
-      turnCompleted: true,
-      stopReason: 'completed'
-    }));
-    observer.flushPendingFooter?.();
-
-    observer.record(createTelemetryEvent('turn_stopped', 'completion_check', {
-      turnId: 'turn-2',
       providerRound: 1,
-      toolRound: 0,
-      stopReason: 'max_tool_rounds_reached',
-      toolRoundsUsed: 0,
-      isVerified: false,
-      durationMs: 1200
+      toolRound: 1,
+      toolName: 'search',
+      toolCallId: 'call-3',
+      inputPreview: '{"pattern":"promptLabel"}',
+      inputRawRedacted: { pattern: 'promptLabel' }
     }));
-    observer.flushPendingFooter?.();
 
     expect(lines).toEqual([
-      '─ completed • 2 provider rounds • 1 tool round • 412 in / 138 out • 3.2s',
-      '─ stopped: max_tool_rounds_reached • 0 tool rounds • 1.2s'
+      '· read src/cli/main.ts',
+      '· edit src/telemetry/display.ts',
+      '· search promptLabel'
     ]);
+    expect(lines.join('\n')).not.toContain('secret old text');
+    expect(lines.join('\n')).not.toContain('secret new text');
+  });
+
+  it('suppresses unknown tool activity lines', () => {
+    const lines: string[] = [];
+    const observer = createCompactCliTelemetryObserver({
+      writeLine(text) {
+        lines.push(text);
+      }
+    });
+
+    observer.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      toolName: 'Read',
+      toolCallId: 'call-2',
+      inputPreview: '{"path":"secret.txt"}',
+      inputRawRedacted: { path: 'secret.txt' }
+    }));
+
+    expect(lines).toEqual([]);
+  });
+
+  it('renders a minimal footer from turn summary and omits zero tools', () => {
+    const lines: string[] = [];
+    const observer = createCompactCliTelemetryObserver({
+      writeLine(text) {
+        lines.push(text);
+      }
+    }) as ReturnType<typeof createCompactCliTelemetryObserver> & { flushPendingFooter?: () => void };
+
+    observer.record(createTelemetryEvent('turn_completed', 'completion_check', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 0,
+      stopReason: 'completed',
+      toolRoundsUsed: 0,
+      isVerified: true,
+      durationMs: 6300
+    }));
+    observer.record(createTelemetryEvent('turn_summary', 'completion_check', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 0,
+      providerRounds: 1,
+      toolRoundsUsed: 0,
+      toolCallsTotal: 0,
+      toolCallsByName: {},
+      inputTokensTotal: 185,
+      outputTokensTotal: 15,
+      promptCharsMax: 100,
+      toolResultCharsInFinalPrompt: 0,
+      assistantToolCallCharsInFinalPrompt: 0,
+      toolResultPromptGrowthCharsTotal: 0,
+      toolResultCharsAddedAcrossTurn: 0,
+      turnCompleted: true,
+      stopReason: 'completed'
+    }));
+
+    observer.flushPendingFooter?.();
+
+    expect(lines).toEqual(['─ completed • 1 provider • 185 in / 15 out • 6.3s']);
   });
 });

@@ -12,7 +12,10 @@ import {
   parseInteractiveCheckpointJson
 } from '../session/session.js';
 import { createCompositeObserver } from '../telemetry/composite.js';
-import { createCompactCliTelemetryObserver, type CompactCliTelemetryObserver } from '../telemetry/display.js';
+import {
+  createCompactCliTelemetryObserver,
+  type CompactCliTelemetryObserver
+} from '../telemetry/display.js';
 import { createFileJsonLineWriter, createJsonLineLogger } from '../telemetry/logger.js';
 import { createInMemoryMetricsObserver } from '../telemetry/metrics.js';
 import type { TelemetryObserver } from '../telemetry/observer.js';
@@ -82,7 +85,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
 
         if (parsed.prompt) {
           const repl = createRepl({
-            promptLabel: 'qiclaw> ',
+            promptLabel: '> ',
             readLine: options.readLine,
             async runTurn(userInput) {
               return executeTurn({
@@ -118,7 +121,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
         let historySummary = restored?.historySummary;
 
         const repl = createRepl({
-          promptLabel: 'qiclaw> ',
+          promptLabel: '> ',
           readLine: options.readLine,
           async runTurn(userInput) {
             const result = await executeTurn({
@@ -180,7 +183,10 @@ function createCliObserver(options: {
   debugLogPath?: string;
   envDebugLogPath?: string;
   showCompactToolStatus?: boolean;
-}): { observer: TelemetryObserver; flushPendingFooter(): void } {
+}): {
+  observer: TelemetryObserver;
+  flushPendingFooter(): void;
+} {
   const observers: TelemetryObserver[] = [options.metrics];
   let compactObserver: CompactCliTelemetryObserver | undefined;
 

@@ -97,7 +97,7 @@ afterEach(async () => {
 describe('createRepl', () => {
   it('runs one turn and returns the assistant text', async () => {
     const repl = createRepl({
-      promptLabel: 'qiclaw> ',
+      promptLabel: '> ',
       runTurn: async (input) => ({
         stopReason: 'completed',
         finalAnswer: `echo: ${input}`,
@@ -167,7 +167,7 @@ describe('createRepl', () => {
     const outputs: string[] = [];
     const inputs = ['first question', '/exit'];
     const repl = createRepl({
-      promptLabel: 'qiclaw> ',
+      promptLabel: '> ',
       runTurn: async (input) => ({
         stopReason: 'completed',
         finalAnswer: `answer: ${input}`,
@@ -189,44 +189,10 @@ describe('createRepl', () => {
     await expect(repl.runInteractive()).resolves.toBe(0);
     expect(outputs).toEqual(['answer: first question', 'Goodbye.']);
   });
-
-  it('renders the final answer before the turn footer callback', async () => {
-    const outputs: string[] = [];
-    const inputs = ['first question', '/exit'];
-    const repl = createRepl({
-      promptLabel: 'qiclaw> ',
-      runTurn: async (input) => ({
-        stopReason: 'completed',
-        finalAnswer: `answer: ${input}`,
-        toolRoundsUsed: 0,
-        verification: {
-          isVerified: true,
-          finalAnswerIsNonEmpty: true,
-          toolEvidenceSatisfied: true,
-          toolMessagesCount: 0,
-          checks: []
-        }
-      }),
-      readLine: async () => inputs.shift(),
-      writeLine(text) {
-        outputs.push(text);
-      },
-      afterTurnRendered() {
-        outputs.push('─ completed • 1 provider • 0 tool rounds • 0.5s');
-      }
-    });
-
-    await expect(repl.runInteractive()).resolves.toBe(0);
-    expect(outputs).toEqual([
-      'answer: first question',
-      '─ completed • 1 provider • 0 tool rounds • 0.5s',
-      'Goodbye.'
-    ]);
-  });
 });
 
 describe('buildCli', () => {
-  it('renders compact tool lines and one footer in prompt mode without exposing raw payloads', async () => {
+  it('keeps prompt mode output compact with safe summaries when tool telemetry events are recorded', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-telemetry-'));
     tempDirs.push(tempDir);
 
@@ -253,8 +219,30 @@ describe('buildCli', () => {
           toolRound: 1,
           toolName: 'read_file',
           toolCallId: 'toolu_1',
-          inputPreview: 'secret payload',
+          inputPreview: '{"path":"/tmp/package.json"}',
           inputRawRedacted: { path: '/tmp/package.json', raw: 'secret payload' }
+        }));
+        input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          toolName: 'edit_file',
+          toolCallId: 'toolu_2',
+          inputPreview: '{"path":"/tmp/package.json"}',
+          inputRawRedacted: {
+            path: '/tmp/package.json',
+            oldText: 'secret old text',
+            newText: 'secret new text'
+          }
+        }));
+        input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          toolName: 'search',
+          toolCallId: 'toolu_3',
+          inputPreview: '{"pattern":"package"}',
+          inputRawRedacted: { pattern: 'package' }
         }));
         input.observer?.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
           turnId: 'turn-1',
@@ -265,46 +253,9 @@ describe('buildCli', () => {
           isError: false,
           resultPreview: '{"name":"secret"}',
           resultRawRedacted: { content: '{"name":"secret"}' },
-          durationMs: 5,
+          durationMs: 1,
           resultSizeChars: 17,
           resultSizeBucket: 'small'
-        }));
-        input.observer?.record(createTelemetryEvent('provider_responded', 'provider_decision', {
-          turnId: 'turn-1',
-          providerRound: 1,
-          toolRound: 1,
-          usage: { inputTokens: 412, outputTokens: 138, totalTokens: 550 },
-          responseContentBlockCount: 1,
-          toolCallCount: 1,
-          hasTextOutput: true,
-          durationMs: 30
-        }));
-        input.observer?.record(createTelemetryEvent('turn_completed', 'completion_check', {
-          turnId: 'turn-1',
-          providerRound: 1,
-          toolRound: 1,
-          stopReason: 'completed',
-          toolRoundsUsed: 1,
-          isVerified: true,
-          durationMs: 3200
-        }));
-        input.observer?.record(createTelemetryEvent('turn_summary', 'completion_check', {
-          turnId: 'turn-1',
-          providerRound: 1,
-          toolRound: 1,
-          providerRounds: 1,
-          toolRoundsUsed: 1,
-          toolCallsTotal: 1,
-          toolCallsByName: { read_file: 1 },
-          inputTokensTotal: 412,
-          outputTokensTotal: 138,
-          promptCharsMax: 100,
-          toolResultCharsInFinalPrompt: 0,
-          assistantToolCallCharsInFinalPrompt: 0,
-          toolResultPromptGrowthCharsTotal: 0,
-          toolResultCharsAddedAcrossTurn: 0,
-          turnCompleted: true,
-          stopReason: 'completed'
         }));
 
         return {
@@ -331,12 +282,15 @@ describe('buildCli', () => {
 
     await expect(cli.run()).resolves.toBe(0);
     expect(writes).toEqual([
-      '· tool read_file\n',
-      '· tool read_file done\n',
-      'handled: inspect package.json\n',
-      '─ completed • 1 provider round • 1 tool round • 412 in / 138 out • 3.2s\n'
+      '· read /tmp/package.json\n',
+      '· edit /tmp/package.json\n',
+      '· search package\n',
+      'handled: inspect package.json\n'
     ]);
+    expect(writes.join('')).not.toContain('Tool: Read');
     expect(writes.join('')).not.toContain('secret payload');
+    expect(writes.join('')).not.toContain('secret old text');
+    expect(writes.join('')).not.toContain('secret new text');
     expect(writes.join('')).not.toContain('{"name":"secret"}');
   });
 
@@ -364,10 +318,10 @@ describe('buildCli', () => {
             turnId: 'turn-1',
             providerRound: 1,
             toolRound: 1,
-            toolName: 'read_file',
+            toolName: 'Read',
             toolCallId: 'toolu_1',
-            inputPreview: '{"path":"package.json"}',
-            inputRawRedacted: { path: 'package.json' }
+            inputPreview: '{}',
+            inputRawRedacted: {}
           }));
 
           return {
@@ -591,7 +545,7 @@ describe('buildCli', () => {
           })
         })
       );
-      expect(stdoutWrites).toContain('handled: inspect package.json\n');
+      expect(stdoutWrites).toEqual(['handled: inspect package.json\n']);
     });
   });
 
@@ -667,7 +621,7 @@ describe('buildCli', () => {
       });
 
       await expect(cli.run()).resolves.toBe(0);
-      expect(writes).toContain('handled: inspect package.json\n');
+      expect(writes).toEqual(['handled: inspect package.json\n']);
     });
   });
 
@@ -723,7 +677,7 @@ describe('buildCli', () => {
       });
 
       await expect(cli.run()).resolves.toBe(0);
-      expect(writes).toContain('handled: inspect package.json\n');
+      expect(writes).toEqual(['handled: inspect package.json\n']);
     });
   });
 
@@ -779,7 +733,7 @@ describe('buildCli', () => {
       });
 
       await expect(cli.run()).resolves.toBe(0);
-      expect(writes).toContain('handled: inspect package.json\n');
+      expect(writes).toEqual(['handled: inspect package.json\n']);
     });
   });
 
@@ -920,7 +874,7 @@ describe('buildCli', () => {
     });
 
     await expect(cli.run()).resolves.toBe(0);
-    expect(writes).toContain('handled: inspect package.json\n');
+    expect(writes).toEqual(['handled: inspect package.json\n']);
   });
 
   it('lets CLI overrides win over provider-specific env vars', async () => {
@@ -1576,7 +1530,7 @@ describe('buildCli', () => {
     });
 
     await expect(cli.run()).resolves.toBe(0);
-    expect(writes).toContain('handled: inspect package.json\n');
+    expect(writes).toEqual(['handled: inspect package.json\n']);
   });
 
   it('restores tool messages from a valid checkpoint when resuming interactive mode', async () => {

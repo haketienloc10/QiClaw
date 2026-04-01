@@ -244,7 +244,7 @@ describe('createRepl', () => {
           turnId: 'turn-1',
           providerRound: 1,
           toolRound: 1,
-          toolName: 'shell',
+          toolName: 'shell_readonly',
           toolCallId: 'toolu_1',
           inputPreview: '{"command":"git","args":["status"]}',
           inputRawRedacted: { command: 'git', args: ['status'] }
@@ -265,7 +265,7 @@ describe('createRepl', () => {
           providerRounds: 2,
           toolRoundsUsed: 1,
           toolCallsTotal: 1,
-          toolCallsByName: { shell: 1 },
+          toolCallsByName: { shell_readonly: 1 },
           inputTokensTotal: 516,
           outputTokensTotal: 274,
           promptCharsMax: 100,

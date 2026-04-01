@@ -1,5 +1,6 @@
 import { getTool } from '../tools/registry.js';
 import type { ToolContext } from '../tools/tool.js';
+import { validateToolInput } from '../tools/validation.js';
 import { toToolErrorMessage, toToolResultMessage, type ToolCallRequest, type ToolResultMessage } from '../provider/model.js';
 
 export async function dispatchToolCall(
@@ -13,6 +14,7 @@ export async function dispatchToolCall(
   }
 
   try {
+    validateToolInput(tool, toolCall.input);
     const result = await tool.execute(toolCall.input, context);
     return toToolResultMessage(toolCall, result);
   } catch (error) {

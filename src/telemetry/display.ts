@@ -116,7 +116,7 @@ function createPendingFooterState(
 }
 
 function formatToolActivityLine(data: ToolCallStartedTelemetryData): string | undefined {
-  if (data.toolName === 'shell') {
+  if (data.toolName === 'shell_readonly' || data.toolName === 'shell_exec') {
     return `· shell ${formatShellCommandLabel(data.inputRawRedacted)}`;
   }
 

@@ -8,6 +8,7 @@ import {
   type ToolCallRequest,
   type ToolResultMessage
 } from '../provider/model.js';
+import { validateToolInput } from '../tools/validation.js';
 import {
   createNoopObserver,
   createTelemetryEvent,
@@ -587,6 +588,7 @@ async function dispatchAllowedToolCall(
   }
 
   try {
+    validateToolInput(allowedTool, toolCall.input);
     const result = await allowedTool.execute(toolCall.input, { cwd });
     return toToolResultMessage(toolCall, result);
   } catch (error) {

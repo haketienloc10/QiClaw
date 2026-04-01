@@ -13,6 +13,7 @@ export interface ToolContext {
 
 export interface ToolResult {
   content: string;
+  data?: unknown;
 }
 
 export interface Tool<TInput = unknown> {
@@ -20,6 +21,17 @@ export interface Tool<TInput = unknown> {
   description: string;
   inputSchema: JsonSchema;
   execute(input: TInput, context: ToolContext): Promise<ToolResult>;
+}
+
+export function serializeToolResult(result: ToolResult): string {
+  if (result.data === undefined) {
+    return result.content;
+  }
+
+  return JSON.stringify({
+    content: result.content,
+    data: result.data
+  });
 }
 
 export function resolveWorkspacePath(cwd: string, inputPath: string): string {

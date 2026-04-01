@@ -1,4 +1,4 @@
-export type AgentCapabilityClass = 'read' | 'write' | 'search' | 'execute';
+export type AgentCapabilityClass = 'read' | 'write' | 'search' | 'exec_readonly' | 'execute';
 
 export interface AgentIdentitySpec {
   purpose: string;

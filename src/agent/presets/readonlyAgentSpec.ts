@@ -7,7 +7,7 @@ export const readonlyAgentSpec: AgentSpec = {
     scopeBoundary: 'Stay read-only within the configured operating surface and avoid mutation-oriented actions.'
   },
   capabilities: {
-    allowedCapabilityClasses: ['read', 'search'],
+    allowedCapabilityClasses: ['read', 'search', 'exec_readonly'],
     operatingSurface: 'The project surface is a read-only evidence source used to inspect files and summarize findings.',
     capabilityExclusions: [
       'Do not edit project files.',

@@ -19,7 +19,7 @@ describe('createCompactCliTelemetryObserver', () => {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'shell',
+      toolName: 'shell_readonly',
       toolCallId: 'call-1',
       inputPreview: '{"command":"git","args":["status"]}',
       inputRawRedacted: { command: 'git', args: ['status'] }
@@ -28,11 +28,11 @@ describe('createCompactCliTelemetryObserver', () => {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'shell',
+      toolName: 'shell_readonly',
       toolCallId: 'call-1',
       isError: false,
       resultPreview: 'ok',
-      resultRawRedacted: { content: 'ok' },
+      resultRawRedacted: { content: 'ok', data: { exitCode: 0 } },
       durationMs: 5,
       resultSizeChars: 2,
       resultSizeBucket: 'small'

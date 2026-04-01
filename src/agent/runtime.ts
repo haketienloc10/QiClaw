@@ -29,7 +29,8 @@ const builtinToolNamesByCapabilityClass: Record<AgentCapabilityClass, string[]> 
   read: ['read_file'],
   write: ['edit_file'],
   search: ['search'],
-  execute: ['shell']
+  exec_readonly: ['shell_readonly'],
+  execute: ['shell_exec']
 };
 
 export function createAgentRuntime(options: CreateAgentRuntimeOptions): AgentRuntime {

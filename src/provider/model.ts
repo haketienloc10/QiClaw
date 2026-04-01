@@ -1,5 +1,5 @@
 import type { Message } from '../core/types.js';
-import type { Tool, ToolResult } from '../tools/tool.js';
+import { serializeToolResult, type Tool, type ToolResult } from '../tools/tool.js';
 
 export interface ToolCallRequest {
   id: string;
@@ -105,7 +105,7 @@ export function toToolResultMessage(toolCall: ToolCallRequest, result: ToolResul
     role: 'tool',
     name: toolCall.name,
     toolCallId: toolCall.id,
-    content: result.content,
+    content: serializeToolResult(result),
     isError: false
   };
 }

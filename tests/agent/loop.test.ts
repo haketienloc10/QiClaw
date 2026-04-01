@@ -36,7 +36,7 @@ import { editFileTool } from '../../src/tools/editFile.js';
 import { getBuiltinToolNames, getBuiltinTools, getTool, hasTool, type Tool, type ToolContext } from '../../src/tools/registry.js';
 import { readFileTool } from '../../src/tools/readFile.js';
 import { searchTool } from '../../src/tools/search.js';
-import { shellTool } from '../../src/tools/shell.js';
+import { shellExecTool, shellReadonlyTool } from '../../src/tools/shell.js';
 
 describe('telemetry typing', () => {
   it('requires payloads for events whose contracts need data', () => {
@@ -98,14 +98,15 @@ describe('telemetry typing', () => {
 
 describe('tool registry', () => {
   it('registers the built-in tool names in a stable order', () => {
-    expect(getBuiltinToolNames()).toEqual(['read_file', 'edit_file', 'search', 'shell']);
+    expect(getBuiltinToolNames()).toEqual(['read_file', 'edit_file', 'search', 'shell_readonly', 'shell_exec']);
   });
 
   it('supports tool lookup by name', () => {
     expect(hasTool('read_file')).toBe(true);
     expect(hasTool('edit_file')).toBe(true);
     expect(hasTool('search')).toBe(true);
-    expect(hasTool('shell')).toBe(true);
+    expect(hasTool('shell_readonly')).toBe(true);
+    expect(hasTool('shell_exec')).toBe(true);
     expect(hasTool('missing_tool')).toBe(false);
 
     expect(getTool('missing_tool')).toBeUndefined();
@@ -148,7 +149,8 @@ describe('tool contract', () => {
         calls.push({ cwd: runtimeContext.cwd, input });
 
         return {
-          content: `value=${input.value}`
+          content: `value=${input.value}`,
+          data: { echoedValue: input.value }
         };
       }
     };
@@ -162,7 +164,8 @@ describe('tool contract', () => {
       }
     ]);
     expect(result).toEqual({
-      content: 'value=ok'
+      content: 'value=ok',
+      data: { echoedValue: 'ok' }
     });
   });
 });
@@ -303,7 +306,7 @@ describe('provider normalization, provider, and dispatcher', () => {
         ]
       }
     ]);
-    expect(request.tools?.map((tool) => tool.name)).toEqual(['read_file', 'edit_file', 'search', 'shell']);
+    expect(request.tools?.map((tool) => tool.name)).toEqual(['read_file', 'edit_file', 'search', 'shell_readonly', 'shell_exec']);
   });
 
   it('rejects Anthropic tool messages without a toolCallId', () => {
@@ -436,7 +439,7 @@ describe('provider normalization, provider, and dispatcher', () => {
         output: 'note contents'
       }
     ]);
-    expect(request.tools).toHaveLength(4);
+    expect(request.tools).toHaveLength(5);
     expect(request.tools?.[0]).toMatchObject({
       type: 'function',
       name: 'read_file',
@@ -448,13 +451,13 @@ describe('provider normalization, provider, and dispatcher', () => {
     const request = buildOpenAIResponsesRequest({
       model: 'gpt-4.1',
       messages: [{ role: 'user', content: 'Run ls' }],
-      availableTools: [shellTool]
+      availableTools: [shellExecTool]
     });
 
     expect(request.tools).toEqual([
       {
         type: 'function',
-        name: 'shell',
+        name: 'shell_exec',
         description: 'Run a single program with optional arguments inside the current working directory.',
         parameters: {
           type: 'object',
@@ -650,6 +653,56 @@ describe('provider normalization, provider, and dispatcher', () => {
     });
   });
 
+  it('returns a tool error when dispatcher input fails schema validation', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'dispatcher-invalid-input-'));
+
+    await expect(
+      dispatchToolCall(
+        {
+          id: 'call-read-invalid',
+          name: 'read_file',
+          input: { path: 'note.txt', extra: true }
+        },
+        { cwd: workspace }
+      )
+    ).resolves.toEqual({
+      role: 'tool',
+      name: 'read_file',
+      toolCallId: 'call-read-invalid',
+      content: expect.stringMatching(/unexpected property/i),
+      isError: true
+    });
+  });
+
+  it('serializes structured tool results into tool messages', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'dispatcher-structured-result-'));
+    const toolCall: ToolCallRequest = {
+      id: 'call-shell-structured',
+      name: 'shell_exec',
+      input: {
+        command: process.execPath,
+        args: ['-e', 'process.stdout.write("out"); process.stderr.write("err");']
+      }
+    };
+
+    await expect(dispatchToolCall(toolCall, { cwd: workspace })).resolves.toEqual({
+      role: 'tool',
+      name: 'shell_exec',
+      toolCallId: 'call-shell-structured',
+      content: JSON.stringify({
+        content: 'outerr',
+        data: {
+          command: process.execPath,
+          args: ['-e', 'process.stdout.write("out"); process.stderr.write("err");'],
+          stdout: 'out',
+          stderr: 'err',
+          exitCode: 0
+        }
+      }),
+      isError: false
+    });
+  });
+
   it('normalizes missing tools as dispatcher errors instead of throwing', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'dispatcher-missing-tool-'));
 
@@ -744,7 +797,7 @@ describe('agent loop', () => {
     expect(calls).toEqual([
       {
         messages: ['system:You are helpful.', 'user:Read note.txt and summarize it.'],
-        availableToolNames: ['read_file', 'edit_file', 'search', 'shell']
+        availableToolNames: ['read_file', 'edit_file', 'search', 'shell_readonly', 'shell_exec']
       },
       {
         messages: [
@@ -753,7 +806,7 @@ describe('agent loop', () => {
           'assistant:I will read the file first.',
           'tool:agent note'
         ],
-        availableToolNames: ['read_file', 'edit_file', 'search', 'shell']
+        availableToolNames: ['read_file', 'edit_file', 'search', 'shell_readonly', 'shell_exec']
       }
     ]);
   });
@@ -1061,7 +1114,7 @@ describe('agent loop', () => {
     });
 
     expect(runtime.cwd).toBe('/tmp/runtime-compose');
-    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['read_file', 'edit_file', 'search', 'shell']);
+    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['read_file', 'edit_file', 'search', 'shell_readonly', 'shell_exec']);
     expect(runtime.provider.name).toBe('anthropic');
     expect(runtime.provider.model).toBe('claude-sonnet-4-20250514');
     expect(runtime.observer.record).toBeTypeOf('function');
@@ -1081,7 +1134,7 @@ describe('agent loop', () => {
     });
 
     expect(runtime.cwd).toBe('/tmp/runtime-openai');
-    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['read_file', 'edit_file', 'search', 'shell']);
+    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['read_file', 'edit_file', 'search', 'shell_readonly', 'shell_exec']);
     expect(runtime.provider.name).toBe('openai');
     expect(runtime.provider.model).toBe('gpt-4.1');
     expect(runtime.observer.record).toBeTypeOf('function');
@@ -1099,7 +1152,7 @@ describe('agent loop', () => {
 
     expect(runtime.cwd).toBe('/tmp/runtime-readonly');
     expect(runtime.agentSpec).toEqual(readonlyAgentSpec);
-    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['read_file', 'search']);
+    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['read_file', 'search', 'shell_readonly']);
     expect(runtime.maxToolRounds).toBe(readonlyAgentSpec.completion.maxToolRounds);
     expect(runtime.systemPrompt).toContain(readonlyAgentSpec.identity.purpose);
   });
@@ -1244,7 +1297,7 @@ describe('agent loop', () => {
       data: {
         cwd: workspace,
         maxToolRounds: 3,
-        toolNames: ['read_file', 'edit_file', 'search', 'shell'],
+        toolNames: ['read_file', 'edit_file', 'search', 'shell_readonly', 'shell_exec'],
         userInput: 'Read note.txt and summarize it.',
         providerRound: 0,
         toolRound: 0,
@@ -1283,7 +1336,7 @@ describe('agent loop', () => {
           { role: 'system', content: 'You are helpful.' },
           { role: 'user', content: 'Read note.txt and summarize it.' }
         ]).length,
-        toolNames: ['read_file', 'edit_file', 'search', 'shell'],
+        toolNames: ['read_file', 'edit_file', 'search', 'shell_readonly', 'shell_exec'],
         messageSummaries: [
           {
             role: 'system',
@@ -1480,7 +1533,7 @@ describe('agent loop', () => {
             isError: false
           }
         ]).length,
-        toolNames: ['read_file', 'edit_file', 'search', 'shell'],
+        toolNames: ['read_file', 'edit_file', 'search', 'shell_readonly', 'shell_exec'],
         messageSummaries: [
           {
             role: 'system',
@@ -2161,11 +2214,11 @@ describe('built-in tool behavior', () => {
     ].join('\n'));
   });
 
-  it('wraps shell failures with command, exit code, stdout, and stderr', async () => {
+  it('wraps shell exec failures with command, exit code, stdout, and stderr', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'tool-shell-'));
 
     await expect(
-      shellTool.execute(
+      shellExecTool.execute(
         {
           command: process.execPath,
           args: ['-e', 'process.stdout.write("out"); process.stderr.write("err"); process.exit(7);']
@@ -2175,7 +2228,7 @@ describe('built-in tool behavior', () => {
     ).rejects.toThrow(/exit code:\s*7/i);
 
     await expect(
-      shellTool.execute(
+      shellExecTool.execute(
         {
           command: process.execPath,
           args: ['-e', 'process.stdout.write("out"); process.stderr.write("err"); process.exit(7);']
@@ -2183,6 +2236,43 @@ describe('built-in tool behavior', () => {
         { cwd: workspace }
       )
     ).rejects.toThrow(/stdout:\s*out[\s\S]*stderr:\s*err/i);
+  });
+
+  it('returns structured data for shell exec success', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'tool-shell-success-'));
+
+    await expect(
+      shellExecTool.execute(
+        {
+          command: process.execPath,
+          args: ['-e', 'process.stdout.write("out"); process.stderr.write("err");']
+        },
+        { cwd: workspace }
+      )
+    ).resolves.toEqual({
+      content: 'outerr',
+      data: {
+        command: process.execPath,
+        args: ['-e', 'process.stdout.write("out"); process.stderr.write("err");'],
+        stdout: 'out',
+        stderr: 'err',
+        exitCode: 0
+      }
+    });
+  });
+
+  it('rejects disallowed readonly shell commands before execution', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'tool-shell-readonly-'));
+
+    await expect(
+      shellReadonlyTool.execute(
+        {
+          command: process.execPath,
+          args: ['-e', 'process.stdout.write("out")']
+        },
+        { cwd: workspace }
+      )
+    ).rejects.toThrow(/readonly shell command is not allowed/i);
   });
 });
 

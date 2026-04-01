@@ -7,7 +7,7 @@ export const defaultAgentSpec: AgentSpec = {
     scopeBoundary: 'Stay within the configured operating surface and avoid unrelated actions or host-level assumptions.'
   },
   capabilities: {
-    allowedCapabilityClasses: ['read', 'write', 'search', 'execute'],
+    allowedCapabilityClasses: ['read', 'write', 'search', 'exec_readonly', 'execute'],
     operatingSurface: 'The local project surface is both the main evidence source and the execution boundary for bounded tasks.',
     capabilityExclusions: [
       'Do not assume access to external orchestration backends.',

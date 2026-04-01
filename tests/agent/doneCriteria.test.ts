@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { Message } from '../../src/core/types.js';
 import type { ToolResultMessage } from '../../src/provider/model.js';
 import { buildDoneCriteria } from '../../src/agent/doneCriteria.js';
+import { defaultAgentSpec } from '../../src/agent/defaultAgentSpec.js';
 import { verifyAgentTurn } from '../../src/agent/verifier.js';
 
 describe('done criteria', () => {
@@ -12,7 +13,13 @@ describe('done criteria', () => {
       checklist: ['Answer with a short greeting.'],
       requiresNonEmptyFinalAnswer: true,
       requiresToolEvidence: false,
-      toolEvidenceReason: undefined
+      requiresSubstantiveFinalAnswer: false,
+      forbidSuccessAfterToolErrors: false,
+      toolEvidenceReason: undefined,
+      completionMode: undefined,
+      doneCriteriaShape: undefined,
+      evidenceRequirement: undefined,
+      stopVsDoneDistinction: undefined
     });
   });
 
@@ -22,7 +29,13 @@ describe('done criteria', () => {
       checklist: ['Read package.json', 'summarize scripts', 'inspect tests'],
       requiresNonEmptyFinalAnswer: true,
       requiresToolEvidence: true,
-      toolEvidenceReason: 'Goal asks for workspace inspection via read/search/check/review actions.'
+      requiresSubstantiveFinalAnswer: false,
+      forbidSuccessAfterToolErrors: false,
+      toolEvidenceReason: 'Goal asks for workspace inspection via read/search/check/review actions.',
+      completionMode: undefined,
+      doneCriteriaShape: undefined,
+      evidenceRequirement: undefined,
+      stopVsDoneDistinction: undefined
     });
   });
 
@@ -32,7 +45,29 @@ describe('done criteria', () => {
       checklist: ['Review this answer', 'shorten it.'],
       requiresNonEmptyFinalAnswer: true,
       requiresToolEvidence: false,
-      toolEvidenceReason: undefined
+      requiresSubstantiveFinalAnswer: false,
+      forbidSuccessAfterToolErrors: false,
+      toolEvidenceReason: undefined,
+      completionMode: undefined,
+      doneCriteriaShape: undefined,
+      evidenceRequirement: undefined,
+      stopVsDoneDistinction: undefined
+    });
+  });
+
+  it('includes completion metadata from AgentSpec when provided', () => {
+    expect(buildDoneCriteria('Answer with a short greeting.', defaultAgentSpec.completion)).toEqual({
+      goal: 'Answer with a short greeting.',
+      checklist: ['Answer with a short greeting.'],
+      requiresNonEmptyFinalAnswer: true,
+      requiresToolEvidence: false,
+      requiresSubstantiveFinalAnswer: true,
+      forbidSuccessAfterToolErrors: true,
+      toolEvidenceReason: undefined,
+      completionMode: 'Single-turn task completion with evidence-aware verification.',
+      doneCriteriaShape: 'Return a non-empty final answer and provide tool evidence when the task requires inspection.',
+      evidenceRequirement: 'Use direct workspace evidence for inspection-style claims.',
+      stopVsDoneDistinction: 'A provider stop is not enough unless the final answer satisfies verification criteria.'
     });
   });
 });
@@ -51,7 +86,9 @@ describe('verifier', () => {
     expect(result).toEqual({
       isVerified: true,
       finalAnswerIsNonEmpty: true,
+      finalAnswerIsSubstantive: true,
       toolEvidenceSatisfied: true,
+      noUnresolvedToolErrors: true,
       toolMessagesCount: 0,
       checks: [
         {
@@ -68,6 +105,16 @@ describe('verifier', () => {
           name: 'tool_evidence',
           passed: true,
           details: 'Tool evidence not required for this goal.'
+        },
+        {
+          name: 'final_answer_substantive',
+          passed: true,
+          details: 'Substantive final answer not required for this goal.'
+        },
+        {
+          name: 'no_unresolved_tool_errors',
+          passed: true,
+          details: 'Tool-error consistency check not required for this goal.'
         }
       ]
     });
@@ -86,7 +133,9 @@ describe('verifier', () => {
     expect(result).toEqual({
       isVerified: false,
       finalAnswerIsNonEmpty: true,
+      finalAnswerIsSubstantive: true,
       toolEvidenceSatisfied: false,
+      noUnresolvedToolErrors: true,
       toolMessagesCount: 0,
       checks: [
         {
@@ -103,6 +152,16 @@ describe('verifier', () => {
           name: 'tool_evidence',
           passed: false,
           details: 'Expected at least one tool message because: Goal asks for workspace inspection via read/search/check/review actions.'
+        },
+        {
+          name: 'final_answer_substantive',
+          passed: true,
+          details: 'Substantive final answer not required for this goal.'
+        },
+        {
+          name: 'no_unresolved_tool_errors',
+          passed: true,
+          details: 'Tool-error consistency check not required for this goal.'
         }
       ]
     });
@@ -131,7 +190,9 @@ describe('verifier', () => {
     expect(result).toEqual({
       isVerified: true,
       finalAnswerIsNonEmpty: true,
+      finalAnswerIsSubstantive: true,
       toolEvidenceSatisfied: true,
+      noUnresolvedToolErrors: true,
       toolMessagesCount: 1,
       checks: [
         {
@@ -148,6 +209,16 @@ describe('verifier', () => {
           name: 'tool_evidence',
           passed: true,
           details: 'Observed 1 tool message(s) for an inspection-style goal.'
+        },
+        {
+          name: 'final_answer_substantive',
+          passed: true,
+          details: 'Substantive final answer not required for this goal.'
+        },
+        {
+          name: 'no_unresolved_tool_errors',
+          passed: true,
+          details: 'Tool-error consistency check not required for this goal.'
         }
       ]
     });
@@ -176,7 +247,9 @@ describe('verifier', () => {
     expect(result).toEqual({
       isVerified: false,
       finalAnswerIsNonEmpty: true,
+      finalAnswerIsSubstantive: true,
       toolEvidenceSatisfied: false,
+      noUnresolvedToolErrors: true,
       toolMessagesCount: 0,
       checks: [
         {
@@ -193,6 +266,16 @@ describe('verifier', () => {
           name: 'tool_evidence',
           passed: false,
           details: 'Expected at least one tool message because: Goal asks for workspace inspection via read/search/check/review actions.'
+        },
+        {
+          name: 'final_answer_substantive',
+          passed: true,
+          details: 'Substantive final answer not required for this goal.'
+        },
+        {
+          name: 'no_unresolved_tool_errors',
+          passed: true,
+          details: 'Tool-error consistency check not required for this goal.'
         }
       ]
     });

@@ -1,26 +1,40 @@
+import type { AgentCompletionSpec } from './spec.js';
+
 export interface DoneCriteria {
   goal: string;
   checklist: string[];
   requiresNonEmptyFinalAnswer: true;
   requiresToolEvidence: boolean;
+  requiresSubstantiveFinalAnswer: boolean;
+  forbidSuccessAfterToolErrors: boolean;
   toolEvidenceReason?: string;
+  completionMode?: string;
+  doneCriteriaShape?: string;
+  evidenceRequirement?: string;
+  stopVsDoneDistinction?: string;
 }
 
 const TOOL_EVIDENCE_REASON = 'Goal asks for workspace inspection via read/search/check/review actions.';
 const CHECKLIST_SPLIT_PATTERN = /\b(?:and|then)\b|,/gi;
 const TOOL_EVIDENCE_PATTERN = /\b(read|inspect|search|grep|scan the repo|scan the workspace|explore the repo|explore the workspace|check the repo|check the workspace|review the repo|review the codebase|examine the repo|examine the codebase|open (?:the )?(?:file|repo|repository|codebase|workspace))\b/i;
 
-export function buildDoneCriteria(goal: string): DoneCriteria {
+export function buildDoneCriteria(goal: string, completion?: AgentCompletionSpec): DoneCriteria {
   const normalizedGoal = goal.trim();
   const checklist = splitGoalIntoChecklist(normalizedGoal);
-  const requiresToolEvidence = TOOL_EVIDENCE_PATTERN.test(normalizedGoal);
+  const requiresToolEvidence = completion?.requiresToolEvidence ?? TOOL_EVIDENCE_PATTERN.test(normalizedGoal);
 
   return {
     goal: normalizedGoal,
     checklist,
     requiresNonEmptyFinalAnswer: true,
     requiresToolEvidence,
-    toolEvidenceReason: requiresToolEvidence ? TOOL_EVIDENCE_REASON : undefined
+    requiresSubstantiveFinalAnswer: completion?.requiresSubstantiveFinalAnswer ?? false,
+    forbidSuccessAfterToolErrors: completion?.forbidSuccessAfterToolErrors ?? false,
+    toolEvidenceReason: requiresToolEvidence ? TOOL_EVIDENCE_REASON : undefined,
+    completionMode: completion?.completionMode,
+    doneCriteriaShape: completion?.doneCriteriaShape,
+    evidenceRequirement: completion?.evidenceRequirement,
+    stopVsDoneDistinction: completion?.stopVsDoneDistinction
   };
 }
 

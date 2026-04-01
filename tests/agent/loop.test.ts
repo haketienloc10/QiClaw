@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { dispatchToolCall } from '../../src/agent/dispatcher.js';
+import { defaultAgentSpec } from '../../src/agent/defaultAgentSpec.js';
 import { runAgentTurn } from '../../src/agent/loop.js';
+import { readonlyAgentSpec } from '../../src/agent/presets/readonlyAgentSpec.js';
 import { createAgentRuntime } from '../../src/agent/runtime.js';
 import { createInMemoryMetricsObserver } from '../../src/telemetry/metrics.js';
 import {
@@ -795,6 +797,34 @@ describe('agent loop', () => {
     ]);
   });
 
+  it('accepts AgentSpec completion metadata without changing the current loop happy path', async () => {
+    const calls: string[][] = [];
+    const provider = createScriptedProvider([
+      {
+        message: { role: 'assistant', content: 'Done.' },
+        toolCalls: []
+      }
+    ], calls);
+
+    const result = await runAgentTurn({
+      provider,
+      availableTools: getBuiltinTools(),
+      baseSystemPrompt: 'Spec prompt',
+      userInput: 'Answer briefly.',
+      cwd: '/tmp/runtime',
+      maxToolRounds: defaultAgentSpec.completion.maxToolRounds,
+      agentSpec: defaultAgentSpec
+    });
+
+    expect(result.doneCriteria.completionMode).toBe(defaultAgentSpec.completion.completionMode);
+    expect(result.doneCriteria.doneCriteriaShape).toBe(defaultAgentSpec.completion.doneCriteriaShape);
+    expect(result.doneCriteria.evidenceRequirement).toBe(defaultAgentSpec.completion.evidenceRequirement);
+    expect(result.doneCriteria.stopVsDoneDistinction).toBe(defaultAgentSpec.completion.stopVsDoneDistinction);
+    expect(calls).toEqual([['system:Spec prompt', 'user:Answer briefly.']]);
+    expect(result.verification.isVerified).toBe(false);
+    expect(result.verification.finalAnswerIsSubstantive).toBe(false);
+  });
+
   it('blocks a non-allowed tool before dispatcher lookup and does not count the error as inspection evidence', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'agent-loop-missing-tool-'));
     const provider = createScriptedProvider([
@@ -882,7 +912,9 @@ describe('agent loop', () => {
     expect(result.verification).toEqual({
       isVerified: false,
       finalAnswerIsNonEmpty: false,
+      finalAnswerIsSubstantive: true,
       toolEvidenceSatisfied: true,
+      noUnresolvedToolErrors: true,
       toolMessagesCount: 1,
       checks: [
         {
@@ -899,6 +931,16 @@ describe('agent loop', () => {
           name: 'tool_evidence',
           passed: true,
           details: 'Observed 1 tool message(s) for an inspection-style goal.'
+        },
+        {
+          name: 'final_answer_substantive',
+          passed: true,
+          details: 'Substantive final answer not required for this goal.'
+        },
+        {
+          name: 'no_unresolved_tool_errors',
+          passed: true,
+          details: 'Tool-error consistency check not required for this goal.'
         }
       ]
     });
@@ -1009,7 +1051,7 @@ describe('agent loop', () => {
     ]);
   });
 
-  it('creates a runtime with the selected anthropic provider, builtin tools, cwd, and observer', async () => {
+  it('creates a runtime with the selected anthropic provider, builtin tools, cwd, observer, and AgentSpec defaults', async () => {
     const runtime = createAgentRuntime({
       provider: 'anthropic',
       model: 'claude-sonnet-4-20250514',
@@ -1023,6 +1065,10 @@ describe('agent loop', () => {
     expect(runtime.provider.name).toBe('anthropic');
     expect(runtime.provider.model).toBe('claude-sonnet-4-20250514');
     expect(runtime.observer.record).toBeTypeOf('function');
+    expect(runtime.agentSpec).toEqual(defaultAgentSpec);
+    expect(runtime.systemPrompt).toContain('Identity:');
+    expect(runtime.systemPrompt).toContain(defaultAgentSpec.identity.purpose);
+    expect(runtime.maxToolRounds).toBe(defaultAgentSpec.completion.maxToolRounds);
   });
 
   it('creates a runtime with the selected openai provider and requested model', async () => {
@@ -1039,6 +1085,23 @@ describe('agent loop', () => {
     expect(runtime.provider.name).toBe('openai');
     expect(runtime.provider.model).toBe('gpt-4.1');
     expect(runtime.observer.record).toBeTypeOf('function');
+    expect(runtime.maxToolRounds).toBe(10);
+  });
+
+  it('creates a runtime from the readonly built-in AgentSpec preset', async () => {
+    const runtime = createAgentRuntime({
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-20250514',
+      apiKey: 'anthropic-runtime-key',
+      cwd: '/tmp/runtime-readonly',
+      agentSpecName: 'readonly'
+    });
+
+    expect(runtime.cwd).toBe('/tmp/runtime-readonly');
+    expect(runtime.agentSpec).toEqual(readonlyAgentSpec);
+    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['read_file', 'search']);
+    expect(runtime.maxToolRounds).toBe(readonlyAgentSpec.completion.maxToolRounds);
+    expect(runtime.systemPrompt).toContain(readonlyAgentSpec.identity.purpose);
   });
 
   it('records deterministic telemetry events while a turn runs', async () => {

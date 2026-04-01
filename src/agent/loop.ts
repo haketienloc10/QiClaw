@@ -20,6 +20,7 @@ import { measurePromptTelemetry } from '../telemetry/providerMetrics.js';
 import type { Tool } from '../tools/registry.js';
 
 import { buildDoneCriteria, type DoneCriteria } from './doneCriteria.js';
+import type { AgentSpec } from './spec.js';
 import { verifyAgentTurn, type AgentTurnVerification } from './verifier.js';
 
 export interface RunAgentTurnInput {
@@ -29,6 +30,7 @@ export interface RunAgentTurnInput {
   userInput: string;
   cwd: string;
   maxToolRounds: number;
+  agentSpec?: AgentSpec;
   observer?: TelemetryObserver;
   memoryText?: string;
   skillsText?: string;
@@ -69,7 +71,7 @@ interface TurnTelemetryState {
 export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTurnResult> {
   const observer = input.observer ?? createNoopObserver();
   const history: Message[] = [...(input.history ?? []), { role: 'user', content: input.userInput }];
-  const doneCriteria = buildDoneCriteria(input.userInput);
+  const doneCriteria = buildDoneCriteria(input.userInput, input.agentSpec?.completion);
 
   let finalAnswer = '';
   let toolRoundsUsed = 0;

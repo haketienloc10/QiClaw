@@ -46,7 +46,7 @@ export interface BuildCliOptions {
   stdout?: Pick<NodeJS.WriteStream, 'write'>;
   stderr?: Pick<NodeJS.WriteStream, 'write'>;
   readLine?: (promptLabel: string) => Promise<string | undefined>;
-  createRuntime?: (options: ResolvedProviderConfig & { cwd: string; observer?: AgentRuntime['observer'] }) => AgentRuntime;
+  createRuntime?: (options: ResolvedProviderConfig & { cwd: string; observer?: AgentRuntime['observer']; agentSpecName?: string }) => AgentRuntime;
   createCheckpointStore?: (filename: string) => CheckpointStore;
   createSessionId?: () => string;
   runTurn?: (input: CliRunTurnInput) => Promise<CliRunTurnResult>;
@@ -88,7 +88,8 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
         const runtime = createRuntime({
           ...providerConfig,
           cwd,
-          observer: cliObserver.observer
+          observer: cliObserver.observer,
+          agentSpecName: parsed.agentSpecName
         });
 
         if (parsed.prompt) {
@@ -99,10 +100,11 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
               return executeTurn({
                 provider: runtime.provider,
                 availableTools: runtime.availableTools,
-                baseSystemPrompt: 'You are a minimal single-agent CLI runtime.',
+                baseSystemPrompt: runtime.systemPrompt,
                 userInput,
                 cwd: runtime.cwd,
-                maxToolRounds: 10,
+                maxToolRounds: runtime.maxToolRounds,
+                agentSpec: runtime.agentSpec,
                 observer: cliObserver.observer
               });
             },
@@ -139,10 +141,11 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
             const result = await executeTurn({
               provider: runtime.provider,
               availableTools: runtime.availableTools,
-              baseSystemPrompt: 'You are a minimal single-agent CLI runtime.',
+              baseSystemPrompt: runtime.systemPrompt,
               userInput,
               cwd: runtime.cwd,
-              maxToolRounds: 10,
+              maxToolRounds: runtime.maxToolRounds,
+              agentSpec: runtime.agentSpec,
               observer: cliObserver.observer,
               history,
               historySummary,
@@ -302,6 +305,7 @@ function parseArgs(argv: string[]): {
   baseUrl?: string;
   apiKey?: string;
   debugLogPath?: string;
+  agentSpecName?: string;
 } {
   let prompt: string | undefined;
   let provider = resolveDefaultProviderFromEnv();
@@ -309,6 +313,7 @@ function parseArgs(argv: string[]): {
   let baseUrl: string | undefined;
   let apiKey: string | undefined;
   let debugLogPath: string | undefined;
+  let agentSpecName: string | undefined;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -385,6 +390,18 @@ function parseArgs(argv: string[]): {
       continue;
     }
 
+    if (token === '--agent-spec') {
+      const value = argv[index + 1];
+
+      if (!value || value.startsWith('--')) {
+        throw new Error('Missing value for --agent-spec');
+      }
+
+      agentSpecName = value;
+      index += 1;
+      continue;
+    }
+
     if (token.startsWith('--')) {
       throw new Error(`Unknown argument: ${token}`);
     }
@@ -398,7 +415,8 @@ function parseArgs(argv: string[]): {
     model,
     baseUrl,
     apiKey,
-    debugLogPath
+    debugLogPath,
+    agentSpecName
   };
 }
 

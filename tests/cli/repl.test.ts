@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { defaultAgentSpec } from '../../src/agent/defaultAgentSpec.js';
 import { buildCli, type CliRunTurnResult } from '../../src/cli/main.js';
 import { createRepl } from '../../src/cli/repl.js';
 import { getDefaultModelForProvider, parseProviderId, resolveProviderConfig } from '../../src/provider/config.js';
@@ -83,10 +84,17 @@ function createSuccessfulRunTurn(): (input: { userInput: string }) => Promise<Cl
 function expectExactlyOneBlankLineBeforeEachAssistantBlock(output: string): void {
   const assistantBlockLabel = 'QiClaw\n';
   let blockIndex = output.indexOf(assistantBlockLabel);
+  let isFirstBlock = true;
 
   while (blockIndex !== -1) {
-    expect(output.slice(blockIndex - 2, blockIndex)).toBe('\n\n');
-    expect(output[blockIndex - 3]).not.toBe('\n');
+    if (isFirstBlock) {
+      expect(output.slice(0, blockIndex)).toBe('\n');
+      isFirstBlock = false;
+    } else {
+      expect(output.slice(blockIndex - 2, blockIndex)).toBe('\n\n');
+      expect(output[blockIndex - 3]).not.toBe('\n');
+    }
+
     blockIndex = output.indexOf(assistantBlockLabel, blockIndex + assistantBlockLabel.length);
   }
 }
@@ -226,7 +234,10 @@ describe('createRepl', () => {
         provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
         availableTools: [],
         cwd: '/tmp/qiclaw-interactive-layout',
-        observer: runtimeOptions.observer ?? { record() {} }
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
       }),
       runTurn: async (input) => {
         input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
@@ -275,7 +286,9 @@ describe('createRepl', () => {
             goal: input.userInput,
             checklist: [input.userInput],
             requiresNonEmptyFinalAnswer: true,
-            requiresToolEvidence: false
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
           },
           verification: {
             isVerified: true,
@@ -291,7 +304,7 @@ describe('createRepl', () => {
     await expect(cli.run()).resolves.toBe(0);
     expectRenderedCliOutput(
       writes,
-      '\n\nQiClaw\n  · shell git status\n  Tôi sẽ kiểm tra trước.\n  \n  Tóm tắt:\n  - xong\n─ completed • 2 provider • 1 tools • 516 in / 274 out • 4.8s\nGoodbye.\n'
+      '\nQiClaw\n  · shell git status\n  Tôi sẽ kiểm tra trước.\n  \n  Tóm tắt:\n  - xong\n─ completed • 2 provider • 1 tools • 516 in / 274 out • 4.8s\n\nGoodbye.\n'
     );
   });
 
@@ -314,7 +327,10 @@ describe('createRepl', () => {
         provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
         availableTools: [],
         cwd: '/tmp/qiclaw-interactive-multi-turn-layout',
-        observer: runtimeOptions.observer ?? { record() {} }
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
       }),
       runTurn: createSuccessfulRunTurn()
     });
@@ -322,7 +338,7 @@ describe('createRepl', () => {
     await expect(cli.run()).resolves.toBe(0);
     expectRenderedCliOutput(
       writes,
-      '\n\nQiClaw\n  handled: first question\n\nQiClaw\n  handled: second question\nGoodbye.\n'
+      '\nQiClaw\n  handled: first question\n\nQiClaw\n  handled: second question\nGoodbye.\n'
     );
   });
 });
@@ -346,7 +362,10 @@ describe('buildCli', () => {
         provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
         availableTools: [],
         cwd: tempDir,
-        observer: runtimeOptions.observer ?? { record() {} }
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
       }),
       runTurn: async (input) => {
         input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
@@ -403,7 +422,9 @@ describe('buildCli', () => {
             goal: input.userInput,
             checklist: [input.userInput],
             requiresNonEmptyFinalAnswer: true,
-            requiresToolEvidence: false
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
           },
           verification: {
             isVerified: true,
@@ -419,7 +440,7 @@ describe('buildCli', () => {
     await expect(cli.run()).resolves.toBe(0);
     const output = writes.join('');
     expect(output).toBe(
-      '\n\nQiClaw\n  · read /tmp/package.json\n  · edit /tmp/package.json\n  · search package\n  handled: inspect package.json\n'
+      '\nQiClaw\n  · read /tmp/package.json\n  · edit /tmp/package.json\n  · search package\n  handled: inspect package.json\n'
     );
     expectExactlyOneBlankLineBeforeEachAssistantBlock(output);
     expect(output).not.toContain('Tool: Read');
@@ -446,7 +467,10 @@ describe('buildCli', () => {
           provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
           availableTools: [],
           cwd: tempDir,
-          observer: runtimeOptions.observer ?? { record() {} }
+          observer: runtimeOptions.observer ?? { record() {} },
+          agentSpec: { completion: { maxToolRounds: 3 } },
+          systemPrompt: 'Test prompt',
+          maxToolRounds: 3
         }),
         runTurn: async (input) => {
           input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
@@ -505,7 +529,10 @@ describe('buildCli', () => {
           provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
           availableTools: [],
           cwd: tempDir,
-          observer: runtimeOptions.observer ?? { record() {} }
+          observer: runtimeOptions.observer ?? { record() {} },
+          agentSpec: { completion: { maxToolRounds: 3 } },
+          systemPrompt: 'Test prompt',
+          maxToolRounds: 3
         }),
         runTurn: async (input) => {
           input.observer?.record(createTelemetryEvent('turn_started', 'input_received', {
@@ -570,7 +597,10 @@ describe('buildCli', () => {
           provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
           availableTools: [],
           cwd: tempDir,
-          observer: runtimeOptions.observer ?? { record() {} }
+          observer: runtimeOptions.observer ?? { record() {} },
+          agentSpec: { completion: { maxToolRounds: 3 } },
+          systemPrompt: 'Test prompt',
+          maxToolRounds: 3
         }),
         runTurn: async (input) => {
           input.observer?.record(createTelemetryEvent('provider_called', 'provider_decision', {
@@ -680,7 +710,7 @@ describe('buildCli', () => {
           })
         })
       );
-      expectRenderedCliOutput(stdoutWrites, '\n\nQiClaw\n  handled: inspect package.json\n');
+      expectRenderedCliOutput(stdoutWrites, '\nQiClaw\n  handled: inspect package.json\n');
     });
   });
 
@@ -731,7 +761,10 @@ describe('buildCli', () => {
             provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
             availableTools: [],
             cwd: '/tmp/qiclaw-test',
-            observer: runtimeOptions.observer ?? { record() {} }
+            observer: runtimeOptions.observer ?? { record() {} },
+            agentSpec: defaultAgentSpec,
+            systemPrompt: 'Test prompt',
+            maxToolRounds: 3
           };
         },
         runTurn: async (input) => ({
@@ -743,12 +776,16 @@ describe('buildCli', () => {
             goal: input.userInput,
             checklist: [input.userInput],
             requiresNonEmptyFinalAnswer: true,
-            requiresToolEvidence: false
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
           },
           verification: {
             isVerified: true,
             finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
             toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
             toolMessagesCount: 0,
             checks: []
           }
@@ -756,7 +793,7 @@ describe('buildCli', () => {
       });
 
       await expect(cli.run()).resolves.toBe(0);
-      expectRenderedCliOutput(writes, '\n\nQiClaw\n  handled: inspect package.json\n');
+      expectRenderedCliOutput(writes, '\nQiClaw\n  handled: inspect package.json\n');
     });
   });
 
@@ -787,7 +824,10 @@ describe('buildCli', () => {
             provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
             availableTools: [],
             cwd: runtimeOptions.cwd,
-            observer: runtimeOptions.observer ?? { record() {} }
+            observer: runtimeOptions.observer ?? { record() {} },
+            agentSpec: defaultAgentSpec,
+            systemPrompt: 'Test prompt',
+            maxToolRounds: 3
           };
         },
         runTurn: async (input) => ({
@@ -799,12 +839,16 @@ describe('buildCli', () => {
             goal: input.userInput,
             checklist: [input.userInput],
             requiresNonEmptyFinalAnswer: true,
-            requiresToolEvidence: false
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
           },
           verification: {
             isVerified: true,
             finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
             toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
             toolMessagesCount: 0,
             checks: []
           }
@@ -812,7 +856,7 @@ describe('buildCli', () => {
       });
 
       await expect(cli.run()).resolves.toBe(0);
-      expectRenderedCliOutput(writes, '\n\nQiClaw\n  handled: inspect package.json\n');
+      expectRenderedCliOutput(writes, '\nQiClaw\n  handled: inspect package.json\n');
     });
   });
 
@@ -843,7 +887,10 @@ describe('buildCli', () => {
             provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
             availableTools: [],
             cwd: runtimeOptions.cwd,
-            observer: runtimeOptions.observer ?? { record() {} }
+            observer: runtimeOptions.observer ?? { record() {} },
+            agentSpec: defaultAgentSpec,
+            systemPrompt: 'Test prompt',
+            maxToolRounds: 3
           };
         },
         runTurn: async (input) => ({
@@ -855,12 +902,16 @@ describe('buildCli', () => {
             goal: input.userInput,
             checklist: [input.userInput],
             requiresNonEmptyFinalAnswer: true,
-            requiresToolEvidence: false
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
           },
           verification: {
             isVerified: true,
             finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
             toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
             toolMessagesCount: 0,
             checks: []
           }
@@ -868,7 +919,7 @@ describe('buildCli', () => {
       });
 
       await expect(cli.run()).resolves.toBe(0);
-      expectRenderedCliOutput(writes, '\n\nQiClaw\n  handled: inspect package.json\n');
+      expectRenderedCliOutput(writes, '\nQiClaw\n  handled: inspect package.json\n');
     });
   });
 
@@ -886,6 +937,75 @@ describe('buildCli', () => {
 
     await expect(cli.run()).resolves.toBe(1);
     expect(stderrWrites).toEqual(['Missing value for --prompt\n']);
+  });
+
+  it('passes the selected agent spec name to runtime creation in prompt mode', async () => {
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: ['--agent-spec', 'readonly', '--prompt', 'inspect package.json'],
+      cwd: '/tmp/qiclaw-readonly-spec-test',
+      stdout: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      createRuntime: (runtimeOptions) => {
+        expect(runtimeOptions.agentSpecName).toBe('readonly');
+
+        return {
+          provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+          availableTools: [],
+          cwd: '/tmp/qiclaw-readonly-spec-test',
+          observer: runtimeOptions.observer ?? { record() {} },
+          agentSpec: defaultAgentSpec,
+          systemPrompt: 'Test prompt',
+          maxToolRounds: 3
+        };
+      },
+      runTurn: async (input) => ({
+        stopReason: 'completed',
+        finalAnswer: `handled: ${input.userInput}`,
+        history: [],
+        toolRoundsUsed: 0,
+        doneCriteria: {
+          goal: input.userInput,
+          checklist: [input.userInput],
+          requiresNonEmptyFinalAnswer: true,
+          requiresToolEvidence: false,
+          requiresSubstantiveFinalAnswer: false,
+          forbidSuccessAfterToolErrors: false
+        },
+        verification: {
+          isVerified: true,
+          finalAnswerIsNonEmpty: true,
+          finalAnswerIsSubstantive: true,
+          toolEvidenceSatisfied: true,
+          noUnresolvedToolErrors: true,
+          toolMessagesCount: 0,
+          checks: []
+        }
+      })
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+    expectRenderedCliOutput(writes, '\nQiClaw\n  handled: inspect package.json\n');
+  });
+
+  it('returns exit code 1 and prints an error when --agent-spec is missing a value', async () => {
+    const stderrWrites: string[] = [];
+    const cli = buildCli({
+      argv: ['--agent-spec'],
+      stderr: {
+        write(chunk) {
+          stderrWrites.push(String(chunk));
+          return true;
+        }
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(1);
+    expect(stderrWrites).toEqual(['Missing value for --agent-spec\n']);
   });
 
   it('returns exit code 1 and prints an error when --provider is missing a value', async () => {
@@ -952,6 +1072,22 @@ describe('buildCli', () => {
     expect(stderrWrites).toEqual(['Unknown provider: bedrock\n']);
   });
 
+  it('returns exit code 1 and prints an error when an unknown agent spec is provided', async () => {
+    const stderrWrites: string[] = [];
+    const cli = buildCli({
+      argv: ['--agent-spec', 'missing', '--prompt', 'inspect package.json'],
+      stderr: {
+        write(chunk) {
+          stderrWrites.push(String(chunk));
+          return true;
+        }
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(1);
+    expect(stderrWrites).toEqual(['Unknown agent spec: missing\n']);
+  });
+
   it('uses shared provider config helpers for provider parsing and default models', () => {
     expect(parseProviderId('openai')).toBe('openai');
     expect(parseProviderId('anthropic')).toBe('anthropic');
@@ -984,7 +1120,10 @@ describe('buildCli', () => {
           provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
           availableTools: [],
           cwd: runtimeOptions.cwd,
-          observer: runtimeOptions.observer ?? { record() {} }
+          observer: runtimeOptions.observer ?? { record() {} },
+          agentSpec: { completion: { maxToolRounds: 3 } },
+          systemPrompt: 'Test prompt',
+          maxToolRounds: 3
         };
       },
       runTurn: async (input) => ({
@@ -1009,7 +1148,7 @@ describe('buildCli', () => {
     });
 
     await expect(cli.run()).resolves.toBe(0);
-    expectRenderedCliOutput(writes, '\n\nQiClaw\n  handled: inspect package.json\n');
+    expectRenderedCliOutput(writes, '\nQiClaw\n  handled: inspect package.json\n');
   });
 
   it('lets CLI overrides win over provider-specific env vars', async () => {
@@ -1062,7 +1201,10 @@ describe('buildCli', () => {
             provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
             availableTools: [],
             cwd: runtimeOptions.cwd,
-            observer: runtimeOptions.observer ?? { record() {} }
+            observer: runtimeOptions.observer ?? { record() {} },
+            agentSpec: defaultAgentSpec,
+            systemPrompt: 'Test prompt',
+            maxToolRounds: 3
           };
         },
         stdout: { write() { return true; } },
@@ -1109,7 +1251,10 @@ describe('buildCli', () => {
             provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
             availableTools: [],
             cwd: runtimeOptions.cwd,
-            observer: runtimeOptions.observer ?? { record() {} }
+            observer: runtimeOptions.observer ?? { record() {} },
+            agentSpec: defaultAgentSpec,
+            systemPrompt: 'Test prompt',
+            maxToolRounds: 3
           };
         },
         stdout: { write() { return true; } },
@@ -1154,7 +1299,10 @@ describe('buildCli', () => {
             provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
             availableTools: [],
             cwd: runtimeOptions.cwd,
-            observer: runtimeOptions.observer ?? { record() {} }
+            observer: runtimeOptions.observer ?? { record() {} },
+            agentSpec: defaultAgentSpec,
+            systemPrompt: 'Test prompt',
+            maxToolRounds: 3
           };
         },
         stdout: { write() { return true; } },
@@ -1210,7 +1358,10 @@ describe('buildCli', () => {
             provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
             availableTools: [],
             cwd: runtimeOptions.cwd,
-            observer: runtimeOptions.observer ?? { record() {} }
+            observer: runtimeOptions.observer ?? { record() {} },
+            agentSpec: defaultAgentSpec,
+            systemPrompt: 'Test prompt',
+            maxToolRounds: 3
           };
         },
         stdout: { write() { return true; } },
@@ -1254,7 +1405,10 @@ describe('buildCli', () => {
             provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
             availableTools: [],
             cwd: runtimeOptions.cwd,
-            observer: runtimeOptions.observer ?? { record() {} }
+            observer: runtimeOptions.observer ?? { record() {} },
+            agentSpec: defaultAgentSpec,
+            systemPrompt: 'Test prompt',
+            maxToolRounds: 3
           };
         },
         stdout: { write() { return true; } },
@@ -1298,7 +1452,10 @@ describe('buildCli', () => {
             provider: { name: 'anthropic', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
             availableTools: [],
             cwd: runtimeOptions.cwd,
-            observer: runtimeOptions.observer ?? { record() {} }
+            observer: runtimeOptions.observer ?? { record() {} },
+            agentSpec: defaultAgentSpec,
+            systemPrompt: 'Test prompt',
+            maxToolRounds: 3
           };
         },
         stdout: { write() { return true; } },
@@ -1337,7 +1494,10 @@ describe('buildCli', () => {
             provider: { name: 'anthropic', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
             availableTools: [],
             cwd: runtimeOptions.cwd,
-            observer: runtimeOptions.observer ?? { record() {} }
+            observer: runtimeOptions.observer ?? { record() {} },
+            agentSpec: defaultAgentSpec,
+            systemPrompt: 'Test prompt',
+            maxToolRounds: 3
           };
         },
         stdout: { write() { return true; } },
@@ -1411,7 +1571,10 @@ describe('buildCli', () => {
         provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
         availableTools: [],
         cwd: '/tmp/qiclaw-prompt-layout',
-        observer: runtimeOptions.observer ?? { record() {} }
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
       }),
       runTurn: async (input) => {
         input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
@@ -1460,7 +1623,9 @@ describe('buildCli', () => {
             goal: input.userInput,
             checklist: [input.userInput],
             requiresNonEmptyFinalAnswer: true,
-            requiresToolEvidence: false
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
           },
           verification: {
             isVerified: true,
@@ -1476,7 +1641,7 @@ describe('buildCli', () => {
     await expect(cli.run()).resolves.toBe(0);
     expectRenderedCliOutput(
       writes,
-      '\n\nQiClaw\n  · read /tmp/package.json\n  Tóm tắt:\n  - handled\n─ completed • 1 provider • 1 tools • 185 in / 15 out • 6.3s\n'
+      '\nQiClaw\n  · read /tmp/package.json\n  Tóm tắt:\n  - handled\n─ completed • 1 provider • 1 tools • 185 in / 15 out • 6.3s\n\n'
     );
   });
 
@@ -1499,7 +1664,10 @@ describe('buildCli', () => {
         provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
         availableTools: [],
         cwd: tempDir,
-        observer: runtimeOptions.observer ?? { record() {} }
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
       }),
       createSessionId: () => 'session-test-1',
       readLine: (() => {
@@ -1555,12 +1723,16 @@ describe('buildCli', () => {
             goal: input.userInput,
             checklist: [input.userInput],
             requiresNonEmptyFinalAnswer: true,
-            requiresToolEvidence: false
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
           },
           verification: {
             isVerified: true,
             finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
             toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
             toolMessagesCount: 0,
             checks: []
           }
@@ -1586,7 +1758,7 @@ describe('buildCli', () => {
     ]);
     expectRenderedCliOutput(
       writes,
-      '\n\nQiClaw\n  answer: first question\n\nQiClaw\n  answer: second question\nGoodbye.\n'
+      '\nQiClaw\n  answer: first question\n\nQiClaw\n  answer: second question\nGoodbye.\n'
     );
 
     const resumedRunTurnInputs: Array<{ userInput: string; historySummary?: string; historyLength: number }> = [];
@@ -1602,7 +1774,10 @@ describe('buildCli', () => {
         provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
         availableTools: [],
         cwd: tempDir,
-        observer: runtimeOptions.observer ?? { record() {} }
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
       }),
       createSessionId: () => 'session-test-2',
       readLine: (() => {
@@ -1675,12 +1850,16 @@ describe('buildCli', () => {
             goal: input.userInput,
             checklist: [input.userInput],
             requiresNonEmptyFinalAnswer: true,
-            requiresToolEvidence: false
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
           },
           verification: {
             isVerified: true,
             finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
             toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
             toolMessagesCount: 0,
             checks: []
           }
@@ -1721,7 +1900,10 @@ describe('buildCli', () => {
         provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
         availableTools: [],
         cwd: tempDir,
-        observer: runtimeOptions.observer ?? { record() {} }
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
       }),
       runTurn: async (input) => {
         expect(input.sessionId).toBeUndefined();
@@ -1738,12 +1920,16 @@ describe('buildCli', () => {
             goal: input.userInput,
             checklist: [input.userInput],
             requiresNonEmptyFinalAnswer: true,
-            requiresToolEvidence: false
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
           },
           verification: {
             isVerified: true,
             finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
             toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
             toolMessagesCount: 0,
             checks: []
           }
@@ -1752,7 +1938,7 @@ describe('buildCli', () => {
     });
 
     await expect(cli.run()).resolves.toBe(0);
-    expectRenderedCliOutput(writes, '\n\nQiClaw\n  handled: inspect package.json\n');
+    expectRenderedCliOutput(writes, '\nQiClaw\n  handled: inspect package.json\n');
   });
 
   it('restores tool messages from a valid checkpoint when resuming interactive mode', async () => {
@@ -1812,7 +1998,10 @@ describe('buildCli', () => {
         provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
         availableTools: [],
         cwd: tempDir,
-        observer: runtimeOptions.observer ?? { record() {} }
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
       }),
       createSessionId: () => 'fresh-session',
       readLine: (() => {
@@ -1859,7 +2048,9 @@ describe('buildCli', () => {
             goal: input.userInput,
             checklist: [input.userInput],
             requiresNonEmptyFinalAnswer: true,
-            requiresToolEvidence: false
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
           },
           verification: {
             isVerified: true,
@@ -1907,7 +2098,10 @@ describe('buildCli', () => {
         provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
         availableTools: [],
         cwd: tempDir,
-        observer: runtimeOptions.observer ?? { record() {} }
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
       }),
       createSessionId: () => 'fresh-session',
       readLine: (() => {
@@ -1932,12 +2126,16 @@ describe('buildCli', () => {
             goal: input.userInput,
             checklist: [input.userInput],
             requiresNonEmptyFinalAnswer: true,
-            requiresToolEvidence: false
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
           },
           verification: {
             isVerified: true,
             finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
             toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
             toolMessagesCount: 0,
             checks: []
           }

@@ -25,6 +25,13 @@ export type Cli = {
   run(): Promise<number>;
 };
 
+interface AssistantBlockWriter {
+  writeAssistantLine(text: string): void;
+  writeAssistantTextBlock(text: string): void;
+  writeFooterLine(text: string): void;
+  resetTurn(): void;
+}
+
 type CliRunTurnInput = RunAgentTurnInput & {
   sessionId?: string;
 };
@@ -69,13 +76,14 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
           baseUrl: parsed.baseUrl,
           apiKey: parsed.apiKey
         });
+        const assistantBlockWriter = createAssistantBlockWriter(stdout);
         const cliObserver = createCliObserver({
           cwd,
-          stdout,
           metrics,
           debugLogPath: parsed.debugLogPath,
           envDebugLogPath: process.env.QICLAW_DEBUG_LOG,
-          showCompactToolStatus: true
+          showCompactToolStatus: true,
+          assistantBlockWriter
         });
         const runtime = createRuntime({
           ...providerConfig,
@@ -100,11 +108,15 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
             },
             writeLine(text) {
               stdout.write(`${text}\n`);
+            },
+            renderFinalAnswer(text) {
+              assistantBlockWriter.writeAssistantTextBlock(text);
             }
           });
           const result = await repl.runOnce(parsed.prompt);
-          stdout.write(`${result.finalAnswer}\n`);
+          assistantBlockWriter.writeAssistantTextBlock(result.finalAnswer);
           cliObserver.flushPendingFooter();
+          assistantBlockWriter.resetTurn();
           return 0;
         }
 
@@ -157,8 +169,12 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
           writeLine(text) {
             stdout.write(`${text}\n`);
           },
+          renderFinalAnswer(text) {
+            assistantBlockWriter.writeAssistantTextBlock(text);
+          },
           afterTurnRendered() {
             cliObserver.flushPendingFooter();
+            assistantBlockWriter.resetTurn();
           }
         });
 
@@ -176,13 +192,71 @@ function readTurnHistorySummary(result: RunAgentTurnResult): string | undefined 
   return maybeResult.historySummary;
 }
 
+function createAssistantBlockWriter(stdout: Pick<NodeJS.WriteStream, 'write'>): AssistantBlockWriter {
+  let hasStartedTurn = false;
+  let hasWrittenOutput = false;
+  let trailingNewlineCount = 0;
+
+  function write(text: string): void {
+    stdout.write(text);
+    hasWrittenOutput = true;
+
+    let newlineCount = 0;
+    for (let index = text.length - 1; index >= 0 && text[index] === '\n'; index -= 1) {
+      newlineCount += 1;
+    }
+
+    trailingNewlineCount = newlineCount === text.length ? trailingNewlineCount + newlineCount : newlineCount;
+    if (newlineCount === 0) {
+      trailingNewlineCount = 0;
+    }
+  }
+
+  function ensureTurnPrelude(): void {
+    if (hasStartedTurn) {
+      return;
+    }
+
+    if (!hasWrittenOutput) {
+      write('\n\n');
+    } else if (trailingNewlineCount === 0) {
+      write('\n\n');
+    } else if (trailingNewlineCount === 1) {
+      write('\n');
+    }
+
+    write('QiClaw\n');
+    hasStartedTurn = true;
+  }
+
+  return {
+    writeAssistantLine(text: string) {
+      ensureTurnPrelude();
+      write(`  ${text}\n`);
+    },
+    writeAssistantTextBlock(text: string) {
+      ensureTurnPrelude();
+
+      for (const line of text.split('\n')) {
+        write(`  ${line}\n`);
+      }
+    },
+    writeFooterLine(text: string) {
+      write(`${text}\n`);
+    },
+    resetTurn() {
+      hasStartedTurn = false;
+    }
+  };
+}
+
 function createCliObserver(options: {
   cwd: string;
-  stdout: Pick<NodeJS.WriteStream, 'write'>;
   metrics: TelemetryObserver;
   debugLogPath?: string;
   envDebugLogPath?: string;
   showCompactToolStatus?: boolean;
+  assistantBlockWriter: AssistantBlockWriter;
 }): {
   observer: TelemetryObserver;
   flushPendingFooter(): void;
@@ -192,8 +266,11 @@ function createCliObserver(options: {
 
   if (options.showCompactToolStatus) {
     compactObserver = createCompactCliTelemetryObserver({
-      writeLine(text) {
-        options.stdout.write(`${text}\n`);
+      writeActivityLine(text) {
+        options.assistantBlockWriter.writeAssistantLine(text);
+      },
+      writeFooterLine(text) {
+        options.assistantBlockWriter.writeFooterLine(text);
       }
     });
     observers.push(compactObserver);

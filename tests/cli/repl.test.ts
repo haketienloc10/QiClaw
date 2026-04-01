@@ -80,6 +80,23 @@ function createSuccessfulRunTurn(): (input: { userInput: string }) => Promise<Cl
   });
 }
 
+function expectExactlyOneBlankLineBeforeEachAssistantBlock(output: string): void {
+  const assistantBlockLabel = 'QiClaw\n';
+  let blockIndex = output.indexOf(assistantBlockLabel);
+
+  while (blockIndex !== -1) {
+    expect(output.slice(blockIndex - 2, blockIndex)).toBe('\n\n');
+    expect(output[blockIndex - 3]).not.toBe('\n');
+    blockIndex = output.indexOf(assistantBlockLabel, blockIndex + assistantBlockLabel.length);
+  }
+}
+
+function expectRenderedCliOutput(writes: string[], expectedOutput: string): void {
+  const output = writes.join('');
+  expect(output).toBe(expectedOutput);
+  expectExactlyOneBlankLineBeforeEachAssistantBlock(output);
+}
+
 describe('createSuccessfulRunTurn', () => {
   it('returns a result compatible with CliRunTurnResult literal requirements', async () => {
     const runTurn = createSuccessfulRunTurn();
@@ -189,6 +206,125 @@ describe('createRepl', () => {
     await expect(repl.runInteractive()).resolves.toBe(0);
     expect(outputs).toEqual(['answer: first question', 'Goodbye.']);
   });
+
+  it('renders interactive turns as an indented QiClaw block with a non-indented footer', async () => {
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: [],
+      cwd: '/tmp/qiclaw-interactive-layout',
+      readLine: (() => {
+        const inputs = ['first question', '/exit'];
+        return async () => inputs.shift();
+      })(),
+      stdout: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: '/tmp/qiclaw-interactive-layout',
+        observer: runtimeOptions.observer ?? { record() {} }
+      }),
+      runTurn: async (input) => {
+        input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          toolName: 'shell',
+          toolCallId: 'toolu_1',
+          inputPreview: '{"command":"git","args":["status"]}',
+          inputRawRedacted: { command: 'git', args: ['status'] }
+        }));
+        input.observer?.record(createTelemetryEvent('turn_completed', 'completion_check', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          stopReason: 'completed',
+          toolRoundsUsed: 1,
+          isVerified: true,
+          durationMs: 4800
+        }));
+        input.observer?.record(createTelemetryEvent('turn_summary', 'completion_check', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          providerRounds: 2,
+          toolRoundsUsed: 1,
+          toolCallsTotal: 1,
+          toolCallsByName: { shell: 1 },
+          inputTokensTotal: 516,
+          outputTokensTotal: 274,
+          promptCharsMax: 100,
+          toolResultCharsInFinalPrompt: 0,
+          assistantToolCallCharsInFinalPrompt: 0,
+          toolResultPromptGrowthCharsTotal: 0,
+          toolResultCharsAddedAcrossTurn: 0,
+          turnCompleted: true,
+          stopReason: 'completed'
+        }));
+
+        return {
+          stopReason: 'completed',
+          finalAnswer: 'Tôi sẽ kiểm tra trước.\n\nTóm tắt:\n- xong',
+          history: [],
+          toolRoundsUsed: 1,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            toolEvidenceSatisfied: true,
+            toolMessagesCount: 1,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+    expectRenderedCliOutput(
+      writes,
+      '\n\nQiClaw\n  · shell git status\n  Tôi sẽ kiểm tra trước.\n  \n  Tóm tắt:\n  - xong\n─ completed • 2 provider • 1 tools • 516 in / 274 out • 4.8s\nGoodbye.\n'
+    );
+  });
+
+  it('keeps exactly one blank line before each assistant block across interactive turns', async () => {
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: [],
+      cwd: '/tmp/qiclaw-interactive-multi-turn-layout',
+      readLine: (() => {
+        const inputs = ['first question', 'second question', '/exit'];
+        return async () => inputs.shift();
+      })(),
+      stdout: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: '/tmp/qiclaw-interactive-multi-turn-layout',
+        observer: runtimeOptions.observer ?? { record() {} }
+      }),
+      runTurn: createSuccessfulRunTurn()
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+    expectRenderedCliOutput(
+      writes,
+      '\n\nQiClaw\n  handled: first question\n\nQiClaw\n  handled: second question\nGoodbye.\n'
+    );
+  });
 });
 
 describe('buildCli', () => {
@@ -281,17 +417,16 @@ describe('buildCli', () => {
     });
 
     await expect(cli.run()).resolves.toBe(0);
-    expect(writes).toEqual([
-      '· read /tmp/package.json\n',
-      '· edit /tmp/package.json\n',
-      '· search package\n',
-      'handled: inspect package.json\n'
-    ]);
-    expect(writes.join('')).not.toContain('Tool: Read');
-    expect(writes.join('')).not.toContain('secret payload');
-    expect(writes.join('')).not.toContain('secret old text');
-    expect(writes.join('')).not.toContain('secret new text');
-    expect(writes.join('')).not.toContain('{"name":"secret"}');
+    const output = writes.join('');
+    expect(output).toBe(
+      '\n\nQiClaw\n  · read /tmp/package.json\n  · edit /tmp/package.json\n  · search package\n  handled: inspect package.json\n'
+    );
+    expectExactlyOneBlankLineBeforeEachAssistantBlock(output);
+    expect(output).not.toContain('Tool: Read');
+    expect(output).not.toContain('secret payload');
+    expect(output).not.toContain('secret old text');
+    expect(output).not.toContain('secret new text');
+    expect(output).not.toContain('{"name":"secret"}');
   });
 
   it('prefers --debug-log over QICLAW_DEBUG_LOG and writes JSONL events to the selected file', async () => {
@@ -545,7 +680,7 @@ describe('buildCli', () => {
           })
         })
       );
-      expect(stdoutWrites).toEqual(['handled: inspect package.json\n']);
+      expectRenderedCliOutput(stdoutWrites, '\n\nQiClaw\n  handled: inspect package.json\n');
     });
   });
 
@@ -621,7 +756,7 @@ describe('buildCli', () => {
       });
 
       await expect(cli.run()).resolves.toBe(0);
-      expect(writes).toEqual(['handled: inspect package.json\n']);
+      expectRenderedCliOutput(writes, '\n\nQiClaw\n  handled: inspect package.json\n');
     });
   });
 
@@ -677,7 +812,7 @@ describe('buildCli', () => {
       });
 
       await expect(cli.run()).resolves.toBe(0);
-      expect(writes).toEqual(['handled: inspect package.json\n']);
+      expectRenderedCliOutput(writes, '\n\nQiClaw\n  handled: inspect package.json\n');
     });
   });
 
@@ -733,7 +868,7 @@ describe('buildCli', () => {
       });
 
       await expect(cli.run()).resolves.toBe(0);
-      expect(writes).toEqual(['handled: inspect package.json\n']);
+      expectRenderedCliOutput(writes, '\n\nQiClaw\n  handled: inspect package.json\n');
     });
   });
 
@@ -874,7 +1009,7 @@ describe('buildCli', () => {
     });
 
     await expect(cli.run()).resolves.toBe(0);
-    expect(writes).toEqual(['handled: inspect package.json\n']);
+    expectRenderedCliOutput(writes, '\n\nQiClaw\n  handled: inspect package.json\n');
   });
 
   it('lets CLI overrides win over provider-specific env vars', async () => {
@@ -1261,6 +1396,90 @@ describe('buildCli', () => {
     expect(stderrWrites).toEqual(['Unknown argument: --unknown\n']);
   });
 
+  it('renders prompt mode as an indented QiClaw block with the footer flush to column zero', async () => {
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: ['--prompt', 'inspect package.json'],
+      cwd: '/tmp/qiclaw-prompt-layout',
+      stdout: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: '/tmp/qiclaw-prompt-layout',
+        observer: runtimeOptions.observer ?? { record() {} }
+      }),
+      runTurn: async (input) => {
+        input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          toolName: 'read_file',
+          toolCallId: 'toolu_1',
+          inputPreview: '{"path":"/tmp/package.json"}',
+          inputRawRedacted: { path: '/tmp/package.json' }
+        }));
+        input.observer?.record(createTelemetryEvent('turn_completed', 'completion_check', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          stopReason: 'completed',
+          toolRoundsUsed: 1,
+          isVerified: true,
+          durationMs: 6300
+        }));
+        input.observer?.record(createTelemetryEvent('turn_summary', 'completion_check', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          providerRounds: 1,
+          toolRoundsUsed: 1,
+          toolCallsTotal: 1,
+          toolCallsByName: { read_file: 1 },
+          inputTokensTotal: 185,
+          outputTokensTotal: 15,
+          promptCharsMax: 100,
+          toolResultCharsInFinalPrompt: 0,
+          assistantToolCallCharsInFinalPrompt: 0,
+          toolResultPromptGrowthCharsTotal: 0,
+          toolResultCharsAddedAcrossTurn: 0,
+          turnCompleted: true,
+          stopReason: 'completed'
+        }));
+
+        return {
+          stopReason: 'completed',
+          finalAnswer: 'Tóm tắt:\n- handled',
+          history: [],
+          toolRoundsUsed: 1,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            toolEvidenceSatisfied: true,
+            toolMessagesCount: 1,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+    expectRenderedCliOutput(
+      writes,
+      '\n\nQiClaw\n  · read /tmp/package.json\n  Tóm tắt:\n  - handled\n─ completed • 1 provider • 1 tools • 185 in / 15 out • 6.3s\n'
+    );
+  });
+
   it('keeps interactive session state across turns and saves the latest checkpoint', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-'));
     tempDirs.push(tempDir);
@@ -1365,7 +1584,10 @@ describe('buildCli', () => {
         historyLength: 2
       }
     ]);
-    expect(writes).toEqual(['answer: first question\n', 'answer: second question\n', 'Goodbye.\n']);
+    expectRenderedCliOutput(
+      writes,
+      '\n\nQiClaw\n  answer: first question\n\nQiClaw\n  answer: second question\nGoodbye.\n'
+    );
 
     const resumedRunTurnInputs: Array<{ userInput: string; historySummary?: string; historyLength: number }> = [];
     const resumedCli = buildCli({
@@ -1530,7 +1752,7 @@ describe('buildCli', () => {
     });
 
     await expect(cli.run()).resolves.toBe(0);
-    expect(writes).toEqual(['handled: inspect package.json\n']);
+    expectRenderedCliOutput(writes, '\n\nQiClaw\n  handled: inspect package.json\n');
   });
 
   it('restores tool messages from a valid checkpoint when resuming interactive mode', async () => {

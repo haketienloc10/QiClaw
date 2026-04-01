@@ -7,7 +7,8 @@ import type {
 } from './observer.js';
 
 export interface CompactCliTelemetryObserverOptions {
-  writeLine(text: string): void;
+  writeActivityLine(text: string): void;
+  writeFooterLine(text: string): void;
 }
 
 export interface CompactCliTelemetryObserver extends TelemetryObserver {
@@ -31,7 +32,7 @@ export function createCompactCliTelemetryObserver(
         const line = formatToolActivityLine(event.data);
 
         if (line) {
-          options.writeLine(line);
+          options.writeActivityLine(line);
         }
         return;
       }
@@ -51,7 +52,7 @@ export function createCompactCliTelemetryObserver(
         return;
       }
 
-      options.writeLine(formatFooterLine(pendingFooter.summary, pendingFooter.durationMs));
+      options.writeFooterLine(formatFooterLine(pendingFooter.summary, pendingFooter.durationMs));
       pendingFooter = undefined;
     }
   };

@@ -13,6 +13,7 @@ export interface CreateReplOptions {
   runTurn(input: string): Promise<Pick<RunAgentTurnResult, 'finalAnswer' | 'stopReason' | 'toolRoundsUsed' | 'verification'>>;
   readLine?(promptLabel: string): Promise<string | undefined>;
   writeLine?(text: string): void;
+  renderFinalAnswer?(text: string): void;
   afterTurnRendered?(): void;
 }
 
@@ -24,6 +25,7 @@ export interface Repl {
 export function createRepl(options: CreateReplOptions): Repl {
   const readLine = options.readLine ?? createConsoleReadLine();
   const writeLine = options.writeLine ?? ((text: string) => process.stdout.write(`${text}\n`));
+  const renderFinalAnswer = options.renderFinalAnswer ?? writeLine;
 
   return {
     async runOnce(input: string): Promise<ReplTurnResult> {
@@ -55,7 +57,7 @@ export function createRepl(options: CreateReplOptions): Repl {
         }
 
         const result = await this.runOnce(trimmed);
-        writeLine(result.finalAnswer);
+        renderFinalAnswer(result.finalAnswer);
         options.afterTurnRendered?.();
       }
     }

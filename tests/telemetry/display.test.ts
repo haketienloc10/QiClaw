@@ -7,7 +7,10 @@ describe('createCompactCliTelemetryObserver', () => {
   it('renders shell tool activity as a short command label and omits done lines', () => {
     const lines: string[] = [];
     const observer = createCompactCliTelemetryObserver({
-      writeLine(text) {
+      writeActivityLine(text) {
+        lines.push(text);
+      },
+      writeFooterLine(text) {
         lines.push(text);
       }
     });
@@ -41,7 +44,10 @@ describe('createCompactCliTelemetryObserver', () => {
   it('renders compact summaries for read_file, edit_file, and search without leaking payloads', () => {
     const lines: string[] = [];
     const observer = createCompactCliTelemetryObserver({
-      writeLine(text) {
+      writeActivityLine(text) {
+        lines.push(text);
+      },
+      writeFooterLine(text) {
         lines.push(text);
       }
     });
@@ -90,7 +96,10 @@ describe('createCompactCliTelemetryObserver', () => {
   it('suppresses unknown tool activity lines', () => {
     const lines: string[] = [];
     const observer = createCompactCliTelemetryObserver({
-      writeLine(text) {
+      writeActivityLine(text) {
+        lines.push(text);
+      },
+      writeFooterLine(text) {
         lines.push(text);
       }
     });
@@ -111,7 +120,10 @@ describe('createCompactCliTelemetryObserver', () => {
   it('renders a minimal footer from turn summary and omits zero tools', () => {
     const lines: string[] = [];
     const observer = createCompactCliTelemetryObserver({
-      writeLine(text) {
+      writeActivityLine(text) {
+        lines.push(text);
+      },
+      writeFooterLine(text) {
         lines.push(text);
       }
     }) as ReturnType<typeof createCompactCliTelemetryObserver> & { flushPendingFooter?: () => void };

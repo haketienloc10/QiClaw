@@ -38,6 +38,76 @@ describe('createCompactCliTelemetryObserver', () => {
     expect(lines).toEqual(['· shell git status']);
   });
 
+  it('renders compact summaries for read_file, edit_file, and search without leaking payloads', () => {
+    const lines: string[] = [];
+    const observer = createCompactCliTelemetryObserver({
+      writeLine(text) {
+        lines.push(text);
+      }
+    });
+
+    observer.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      toolName: 'read_file',
+      toolCallId: 'call-1',
+      inputPreview: '{"path":"src/cli/main.ts"}',
+      inputRawRedacted: { path: 'src/cli/main.ts' }
+    }));
+    observer.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      toolName: 'edit_file',
+      toolCallId: 'call-2',
+      inputPreview: '{"path":"src/telemetry/display.ts"}',
+      inputRawRedacted: {
+        path: 'src/telemetry/display.ts',
+        oldText: 'secret old text',
+        newText: 'secret new text'
+      }
+    }));
+    observer.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      toolName: 'search',
+      toolCallId: 'call-3',
+      inputPreview: '{"pattern":"promptLabel"}',
+      inputRawRedacted: { pattern: 'promptLabel' }
+    }));
+
+    expect(lines).toEqual([
+      '· read src/cli/main.ts',
+      '· edit src/telemetry/display.ts',
+      '· search promptLabel'
+    ]);
+    expect(lines.join('\n')).not.toContain('secret old text');
+    expect(lines.join('\n')).not.toContain('secret new text');
+  });
+
+  it('suppresses unknown tool activity lines', () => {
+    const lines: string[] = [];
+    const observer = createCompactCliTelemetryObserver({
+      writeLine(text) {
+        lines.push(text);
+      }
+    });
+
+    observer.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      toolName: 'Read',
+      toolCallId: 'call-2',
+      inputPreview: '{"path":"secret.txt"}',
+      inputRawRedacted: { path: 'secret.txt' }
+    }));
+
+    expect(lines).toEqual([]);
+  });
+
   it('renders a minimal footer from turn summary and omits zero tools', () => {
     const lines: string[] = [];
     const observer = createCompactCliTelemetryObserver({

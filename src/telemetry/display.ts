@@ -28,7 +28,11 @@ export function createCompactCliTelemetryObserver(
   return {
     record(event: TelemetryEvent) {
       if (event.type === 'tool_call_started') {
-        options.writeLine(formatToolActivityLine(event.data));
+        const line = formatToolActivityLine(event.data);
+
+        if (line) {
+          options.writeLine(line);
+        }
         return;
       }
 
@@ -110,12 +114,24 @@ function createPendingFooterState(
   };
 }
 
-function formatToolActivityLine(data: ToolCallStartedTelemetryData): string {
+function formatToolActivityLine(data: ToolCallStartedTelemetryData): string | undefined {
   if (data.toolName === 'shell') {
     return `· shell ${formatShellCommandLabel(data.inputRawRedacted)}`;
   }
 
-  return `· ${String(data.toolName ?? 'unknown')}`;
+  if (data.toolName === 'read_file') {
+    return `· read ${formatPathToolLabel(data.inputRawRedacted, 'file')}`;
+  }
+
+  if (data.toolName === 'edit_file') {
+    return `· edit ${formatPathToolLabel(data.inputRawRedacted, 'file')}`;
+  }
+
+  if (data.toolName === 'search') {
+    return `· search ${formatSearchLabel(data.inputRawRedacted)}`;
+  }
+
+  return undefined;
 }
 
 function formatShellCommandLabel(input: unknown): string {
@@ -132,6 +148,30 @@ function formatShellCommandLabel(input: unknown): string {
   const label = [command, ...args].filter((part) => part.length > 0).join(' ').trim();
 
   return label.length > 0 ? label : 'command';
+}
+
+function formatPathToolLabel(input: unknown, fallbackNoun: string): string {
+  if (!input || typeof input !== 'object') {
+    return fallbackNoun;
+  }
+
+  const path = typeof (input as { path?: unknown }).path === 'string'
+    ? (input as { path: string }).path.trim()
+    : '';
+
+  return path.length > 0 ? path : fallbackNoun;
+}
+
+function formatSearchLabel(input: unknown): string {
+  if (!input || typeof input !== 'object') {
+    return 'pattern';
+  }
+
+  const pattern = typeof (input as { pattern?: unknown }).pattern === 'string'
+    ? (input as { pattern: string }).pattern.trim()
+    : '';
+
+  return pattern.length > 0 ? pattern : 'pattern';
 }
 
 function formatFooterLine(summary: TurnSummaryTelemetryData, durationMs?: number): string {

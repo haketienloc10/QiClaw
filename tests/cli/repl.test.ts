@@ -192,7 +192,7 @@ describe('createRepl', () => {
 });
 
 describe('buildCli', () => {
-  it('keeps prompt mode output compact and redacted when tool telemetry events are recorded', async () => {
+  it('keeps prompt mode output compact with safe summaries when tool telemetry events are recorded', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-telemetry-'));
     tempDirs.push(tempDir);
 
@@ -217,16 +217,38 @@ describe('buildCli', () => {
           turnId: 'turn-1',
           providerRound: 1,
           toolRound: 1,
-          toolName: 'Read',
+          toolName: 'read_file',
           toolCallId: 'toolu_1',
           inputPreview: '{"path":"/tmp/package.json"}',
           inputRawRedacted: { path: '/tmp/package.json', raw: 'secret payload' }
+        }));
+        input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          toolName: 'edit_file',
+          toolCallId: 'toolu_2',
+          inputPreview: '{"path":"/tmp/package.json"}',
+          inputRawRedacted: {
+            path: '/tmp/package.json',
+            oldText: 'secret old text',
+            newText: 'secret new text'
+          }
+        }));
+        input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          toolName: 'search',
+          toolCallId: 'toolu_3',
+          inputPreview: '{"pattern":"package"}',
+          inputRawRedacted: { pattern: 'package' }
         }));
         input.observer?.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
           turnId: 'turn-1',
           providerRound: 1,
           toolRound: 1,
-          toolName: 'Read',
+          toolName: 'read_file',
           toolCallId: 'toolu_1',
           isError: false,
           resultPreview: '{"name":"secret"}',
@@ -259,9 +281,16 @@ describe('buildCli', () => {
     });
 
     await expect(cli.run()).resolves.toBe(0);
-    expect(writes).toEqual(['· Read\n', 'handled: inspect package.json\n']);
+    expect(writes).toEqual([
+      '· read /tmp/package.json\n',
+      '· edit /tmp/package.json\n',
+      '· search package\n',
+      'handled: inspect package.json\n'
+    ]);
     expect(writes.join('')).not.toContain('Tool: Read');
     expect(writes.join('')).not.toContain('secret payload');
+    expect(writes.join('')).not.toContain('secret old text');
+    expect(writes.join('')).not.toContain('secret new text');
     expect(writes.join('')).not.toContain('{"name":"secret"}');
   });
 

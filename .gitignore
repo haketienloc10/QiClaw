@@ -1,0 +1,6 @@
+.worktrees/
+.claude/
+dist/
+node_modules/
+.env.local
+.qiclaw/

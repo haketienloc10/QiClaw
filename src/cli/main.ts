@@ -33,6 +33,10 @@ interface AssistantBlockWriter {
   resetTurn(): void;
 }
 
+type CliStdout = Pick<NodeJS.WriteStream, 'write'> & {
+  isTTY?: boolean;
+};
+
 type CliRunTurnInput = RunAgentTurnInput & {
   sessionId?: string;
 };
@@ -196,13 +200,13 @@ function readTurnHistorySummary(result: RunAgentTurnResult): string | undefined 
   return maybeResult.historySummary;
 }
 
-function createAssistantBlockWriter(stdout: Pick<NodeJS.WriteStream, 'write'>): AssistantBlockWriter {
+function createAssistantBlockWriter(stdout: CliStdout): AssistantBlockWriter {
   let hasStartedTurn = false;
   let hasWrittenOutput = false;
   let trailingNewlineCount = 0;
-  const activityLines: string[] = [];
+  let activeActivityLineCount = 0;
   const activityLineIndexes = new Map<string, number>();
-  let hasFlushedActivityLines = false;
+  const renderedActivityLines: string[] = [];
 
   function write(text: string): void {
     stdout.write(text);
@@ -217,6 +221,40 @@ function createAssistantBlockWriter(stdout: Pick<NodeJS.WriteStream, 'write'>): 
     if (newlineCount === 0) {
       trailingNewlineCount = 0;
     }
+  }
+
+  function writeRaw(text: string): void {
+    write(text);
+  }
+
+  function writeRenderedActivityLine(text: string): void {
+    writeRaw(`  ${text}\n`);
+    activeActivityLineCount += 1;
+  }
+
+  function clearActiveActivityLines(): void {
+    if (!stdout.isTTY || activeActivityLineCount === 0) {
+      activeActivityLineCount = 0;
+      return;
+    }
+
+    writeRaw('\u001b[1A\u001b[2K\r'.repeat(activeActivityLineCount));
+    activeActivityLineCount = 0;
+  }
+
+  function renderActivityLines(): void {
+    for (const line of renderedActivityLines) {
+      writeRenderedActivityLine(line);
+    }
+  }
+
+  function rerenderActivityLines(): void {
+    if (!stdout.isTTY) {
+      return;
+    }
+
+    clearActiveActivityLines();
+    renderActivityLines();
   }
 
   function ensureTurnPrelude(): void {
@@ -236,37 +274,30 @@ function createAssistantBlockWriter(stdout: Pick<NodeJS.WriteStream, 'write'>): 
     hasStartedTurn = true;
   }
 
-  function flushActivityLines(): void {
-    if (hasFlushedActivityLines || activityLines.length === 0) {
-      return;
-    }
-
-    for (const line of activityLines) {
-      write(`  ${line}\n`);
-    }
-    hasFlushedActivityLines = true;
-  }
-
   return {
     writeAssistantLine(text: string, toolCallId?: string) {
       ensureTurnPrelude();
       if (toolCallId) {
-        activityLineIndexes.set(toolCallId, activityLines.length);
+        activityLineIndexes.set(toolCallId, renderedActivityLines.length);
       }
-      activityLines.push(text);
+      renderedActivityLines.push(text);
+      writeRenderedActivityLine(text);
     },
     replaceAssistantLine(toolCallId: string, text: string) {
       const index = activityLineIndexes.get(toolCallId);
-      if (index === undefined) {
-        this.writeAssistantLine(text, toolCallId);
-        return;
+      if (index !== undefined) {
+        renderedActivityLines[index] = text;
+        if (stdout.isTTY) {
+          rerenderActivityLines();
+          return;
+        }
       }
 
-      activityLines[index] = text;
+      writeRenderedActivityLine(text);
     },
     writeAssistantTextBlock(text: string) {
       ensureTurnPrelude();
-      flushActivityLines();
+      activeActivityLineCount = 0;
 
       for (const line of text.split('\n')) {
         write(`  ${line}\n`);
@@ -274,14 +305,14 @@ function createAssistantBlockWriter(stdout: Pick<NodeJS.WriteStream, 'write'>): 
     },
     writeFooterLine(text: string) {
       ensureTurnPrelude();
-      flushActivityLines();
+      activeActivityLineCount = 0;
       write(`${text}\n\n`);
     },
     resetTurn() {
       hasStartedTurn = false;
-      activityLines.length = 0;
+      activeActivityLineCount = 0;
       activityLineIndexes.clear();
-      hasFlushedActivityLines = false;
+      renderedActivityLines.length = 0;
     }
   };
 }

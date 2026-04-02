@@ -413,6 +413,10 @@ describe('buildCli', () => {
           resultSizeBucket: 'small'
         }));
 
+        expect(writes.join('')).toContain('  · read /tmp/package.json\n');
+        expect(writes.join('')).toContain('  · read /tmp/package.json | done (1ms)\n');
+        expect(writes.join('')).not.toContain('handled: inspect package.json');
+
         return {
           stopReason: 'completed',
           finalAnswer: `handled: ${input.userInput}`,
@@ -440,7 +444,7 @@ describe('buildCli', () => {
     await expect(cli.run()).resolves.toBe(0);
     const output = writes.join('');
     expect(output).toBe(
-      '\nQiClaw\n  · read /tmp/package.json | done (1ms)\n  · edit /tmp/package.json\n  · search package\n  handled: inspect package.json\n'
+      '\nQiClaw\n  · read /tmp/package.json\n  · edit /tmp/package.json\n  · search package\n  · read /tmp/package.json | done (1ms)\n  handled: inspect package.json\n'
     );
     expectExactlyOneBlankLineBeforeEachAssistantBlock(output);
     expect(output).not.toContain('Tool: Read');
@@ -448,6 +452,170 @@ describe('buildCli', () => {
     expect(output).not.toContain('secret old text');
     expect(output).not.toContain('secret new text');
     expect(output).not.toContain('{"name":"secret"}');
+  });
+
+  it('renders tool status immediately before final answer in prompt mode', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-telemetry-immediate-'));
+    tempDirs.push(tempDir);
+
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: ['--prompt', 'inspect package.json'],
+      cwd: tempDir,
+      stdout: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: tempDir,
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      runTurn: async (input) => {
+        input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          toolName: 'shell_exec',
+          toolCallId: 'toolu_1',
+          inputPreview: '{"command":"pwd"}',
+          inputRawRedacted: { command: 'pwd' }
+        }));
+
+        expect(writes.join('')).toContain('  · shell:exec pwd\n');
+        expect(writes.join('')).not.toContain('handled: inspect package.json');
+
+        input.observer?.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          toolName: 'shell_exec',
+          toolCallId: 'toolu_1',
+          isError: false,
+          resultPreview: 'ok',
+          resultRawRedacted: { content: 'ok' },
+          durationMs: 11,
+          resultSizeChars: 2,
+          resultSizeBucket: 'small'
+        }));
+
+        expect(writes.join('')).toContain('  · shell:exec pwd | done (11ms)\n');
+        expect(writes.join('')).not.toContain('handled: inspect package.json');
+
+        return {
+          stopReason: 'completed',
+          finalAnswer: `handled: ${input.userInput}`,
+          history: [],
+          toolRoundsUsed: 1,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            toolEvidenceSatisfied: true,
+            toolMessagesCount: 1,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+  });
+
+  it('replaces the active tool line immediately on TTY output', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-telemetry-tty-'));
+    tempDirs.push(tempDir);
+
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: ['--prompt', 'inspect package.json'],
+      cwd: tempDir,
+      stdout: {
+        isTTY: true,
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      } as Pick<NodeJS.WriteStream, 'write'> & { isTTY: boolean },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: tempDir,
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      runTurn: async (input) => {
+        input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          toolName: 'shell_exec',
+          toolCallId: 'toolu_1',
+          inputPreview: '{"command":"pwd"}',
+          inputRawRedacted: { command: 'pwd' }
+        }));
+
+        expect(writes.join('')).toContain('  · shell:exec pwd\n');
+        expect(writes.join('')).not.toContain('handled: inspect package.json');
+
+        input.observer?.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          toolName: 'shell_exec',
+          toolCallId: 'toolu_1',
+          isError: false,
+          resultPreview: 'ok',
+          resultRawRedacted: { content: 'ok' },
+          durationMs: 11,
+          resultSizeChars: 2,
+          resultSizeBucket: 'small'
+        }));
+
+        expect(writes.join('')).toContain('\u001b[1A');
+        expect(writes.join('')).toContain('  · shell:exec pwd | done (11ms)\n');
+        expect(writes.join('')).not.toContain('handled: inspect package.json');
+
+        return {
+          stopReason: 'completed',
+          finalAnswer: `handled: ${input.userInput}`,
+          history: [],
+          toolRoundsUsed: 1,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            toolEvidenceSatisfied: true,
+            toolMessagesCount: 1,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
   });
 
   it('prefers --debug-log over QICLAW_DEBUG_LOG and writes JSONL events to the selected file', async () => {

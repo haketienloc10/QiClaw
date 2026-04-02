@@ -304,7 +304,7 @@ describe('createRepl', () => {
     await expect(cli.run()).resolves.toBe(0);
     expectRenderedCliOutput(
       writes,
-      '\nQiClaw\n  · shell:ro git status\n  Tôi sẽ kiểm tra trước.\n  \n  Tóm tắt:\n  - xong\n─ completed • 2 provider • 1 tools • 516 in / 274 out • 4.8s\n\nGoodbye.\n'
+      '\nQiClaw\n  · shell:read git status\n  Tôi sẽ kiểm tra trước.\n  \n  Tóm tắt:\n  - xong\n─ completed • 2 provider • 1 tools • 516 in / 274 out • 4.8s\n\nGoodbye.\n'
     );
   });
 
@@ -440,7 +440,7 @@ describe('buildCli', () => {
     await expect(cli.run()).resolves.toBe(0);
     const output = writes.join('');
     expect(output).toBe(
-      '\nQiClaw\n  · read /tmp/package.json\n  · edit /tmp/package.json\n  · search package\n  handled: inspect package.json\n'
+      '\nQiClaw\n  · read /tmp/package.json | done (1ms)\n  · edit /tmp/package.json\n  · search package\n  handled: inspect package.json\n'
     );
     expectExactlyOneBlankLineBeforeEachAssistantBlock(output);
     expect(output).not.toContain('Tool: Read');

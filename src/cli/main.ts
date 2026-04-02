@@ -26,7 +26,8 @@ export type Cli = {
 };
 
 interface AssistantBlockWriter {
-  writeAssistantLine(text: string): void;
+  writeAssistantLine(text: string, toolCallId?: string): void;
+  replaceAssistantLine(toolCallId: string, text: string): void;
   writeAssistantTextBlock(text: string): void;
   writeFooterLine(text: string): void;
   resetTurn(): void;
@@ -199,6 +200,9 @@ function createAssistantBlockWriter(stdout: Pick<NodeJS.WriteStream, 'write'>): 
   let hasStartedTurn = false;
   let hasWrittenOutput = false;
   let trailingNewlineCount = 0;
+  const activityLines: string[] = [];
+  const activityLineIndexes = new Map<string, number>();
+  let hasFlushedActivityLines = false;
 
   function write(text: string): void {
     stdout.write(text);
@@ -232,23 +236,52 @@ function createAssistantBlockWriter(stdout: Pick<NodeJS.WriteStream, 'write'>): 
     hasStartedTurn = true;
   }
 
+  function flushActivityLines(): void {
+    if (hasFlushedActivityLines || activityLines.length === 0) {
+      return;
+    }
+
+    for (const line of activityLines) {
+      write(`  ${line}\n`);
+    }
+    hasFlushedActivityLines = true;
+  }
+
   return {
-    writeAssistantLine(text: string) {
+    writeAssistantLine(text: string, toolCallId?: string) {
       ensureTurnPrelude();
-      write(`  ${text}\n`);
+      if (toolCallId) {
+        activityLineIndexes.set(toolCallId, activityLines.length);
+      }
+      activityLines.push(text);
+    },
+    replaceAssistantLine(toolCallId: string, text: string) {
+      const index = activityLineIndexes.get(toolCallId);
+      if (index === undefined) {
+        this.writeAssistantLine(text, toolCallId);
+        return;
+      }
+
+      activityLines[index] = text;
     },
     writeAssistantTextBlock(text: string) {
       ensureTurnPrelude();
+      flushActivityLines();
 
       for (const line of text.split('\n')) {
         write(`  ${line}\n`);
       }
     },
     writeFooterLine(text: string) {
+      ensureTurnPrelude();
+      flushActivityLines();
       write(`${text}\n\n`);
     },
     resetTurn() {
       hasStartedTurn = false;
+      activityLines.length = 0;
+      activityLineIndexes.clear();
+      hasFlushedActivityLines = false;
     }
   };
 }
@@ -269,8 +302,11 @@ function createCliObserver(options: {
 
   if (options.showCompactToolStatus) {
     compactObserver = createCompactCliTelemetryObserver({
-      writeActivityLine(text) {
-        options.assistantBlockWriter.writeAssistantLine(text);
+      writeActivityLine(text, toolCallId) {
+        options.assistantBlockWriter.writeAssistantLine(text, toolCallId);
+      },
+      replaceActivityLine(toolCallId, text) {
+        options.assistantBlockWriter.replaceAssistantLine(toolCallId, text);
       },
       writeFooterLine(text) {
         options.assistantBlockWriter.writeFooterLine(text);

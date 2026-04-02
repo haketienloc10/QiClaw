@@ -8,7 +8,8 @@ import type {
 } from './observer.js';
 
 export interface CompactCliTelemetryObserverOptions {
-  writeActivityLine(text: string): void;
+  writeActivityLine(text: string, toolCallId?: string): void;
+  replaceActivityLine?(toolCallId: string, text: string): void;
   writeFooterLine(text: string): void;
 }
 
@@ -26,6 +27,7 @@ export function createCompactCliTelemetryObserver(
   options: CompactCliTelemetryObserverOptions
 ): CompactCliTelemetryObserver {
   let pendingFooter: PendingFooterState | undefined;
+  const toolActivityLabels = new Map<string, string>();
 
   return {
     record(event: TelemetryEvent) {
@@ -33,21 +35,28 @@ export function createCompactCliTelemetryObserver(
         const line = formatToolActivityLine(event.data);
 
         if (line) {
-          options.writeActivityLine(line);
+          toolActivityLabels.set(event.data.toolCallId, stripActivityLinePrefix(line));
+          options.writeActivityLine(line, event.data.toolCallId);
         }
         return;
       }
 
       if (event.type === 'tool_call_completed') {
-        const line = formatToolCompletionLine(event.data);
+        const line = formatToolCompletionLine(event.data, toolActivityLabels.get(event.data.toolCallId));
+        toolActivityLabels.delete(event.data.toolCallId);
 
         if (line) {
-          options.writeActivityLine(line);
+          if (options.replaceActivityLine) {
+            options.replaceActivityLine(event.data.toolCallId, line);
+          } else {
+            options.writeActivityLine(line);
+          }
         }
         return;
       }
 
       if (event.type === 'turn_completed' || event.type === 'turn_stopped') {
+        toolActivityLabels.clear();
         pendingFooter = createPendingFooterState(event.data, pendingFooter?.summary);
         return;
       }
@@ -126,38 +135,51 @@ function createPendingFooterState(
 }
 
 function formatToolActivityLine(data: ToolCallStartedTelemetryData): string | undefined {
+  const label = formatToolActivityLabel(data);
+  return label ? `· ${label}` : undefined;
+}
+
+function formatToolActivityLabel(data: ToolCallStartedTelemetryData): string | undefined {
   if (data.toolName === 'shell_readonly' || data.toolName === 'shell_exec') {
-    return `· ${formatShellToolKind(data.toolName)} ${formatShellCommandLabel(data.inputRawRedacted)}`;
+    return `${formatShellToolKind(data.toolName)} ${formatShellCommandLabel(data.inputRawRedacted)}`;
   }
 
   if (data.toolName === 'read_file') {
-    return `· read ${formatPathToolLabel(data.inputRawRedacted, 'file')}`;
+    return `read ${formatPathToolLabel(data.inputRawRedacted, 'file')}`;
   }
 
   if (data.toolName === 'edit_file') {
-    return `· edit ${formatPathToolLabel(data.inputRawRedacted, 'file')}`;
+    return `edit ${formatPathToolLabel(data.inputRawRedacted, 'file')}`;
   }
 
   if (data.toolName === 'search') {
-    return `· search ${formatSearchLabel(data.inputRawRedacted)}`;
+    return `search ${formatSearchLabel(data.inputRawRedacted)}`;
   }
 
   return undefined;
 }
 
-function formatToolCompletionLine(data: ToolCallCompletedTelemetryData): string | undefined {
-  if (data.toolName !== 'shell_readonly' && data.toolName !== 'shell_exec') {
+function formatToolCompletionLine(
+  data: ToolCallCompletedTelemetryData,
+  activityLabel?: string
+): string | undefined {
+  if (!activityLabel) {
     return undefined;
   }
 
-  const command = formatShellCommandLabel(data.resultRawRedacted?.data ?? data.resultRawRedacted);
-  const status = data.isError ? 'fail' : 'done';
+  return `· ${activityLabel} | ${formatToolCompletionStatus(data)} (${data.durationMs}ms)`;
+}
 
-  return `· ${status} ${formatShellToolKind(data.toolName)} ${command} (${data.durationMs}ms)`;
+function formatToolCompletionStatus(data: ToolCallCompletedTelemetryData): string {
+  return data.isError ? 'fail' : 'done';
+}
+
+function stripActivityLinePrefix(line: string): string {
+  return line.startsWith('· ') ? line.slice(2) : line;
 }
 
 function formatShellToolKind(toolName: 'shell_readonly' | 'shell_exec'): string {
-  return toolName === 'shell_readonly' ? 'shell:ro' : 'shell:rw';
+  return toolName === 'shell_readonly' ? 'shell:read' : 'shell:exec';
 }
 
 function formatShellCommandLabel(input: unknown): string {

@@ -424,7 +424,7 @@ function resolveDefaultProviderFromEnv(): ProviderId {
   const providerFromEnv = process.env.MODEL?.trim();
 
   if (!providerFromEnv) {
-    return 'anthropic';
+    return 'openai';
   }
 
   return parseProviderId(providerFromEnv);

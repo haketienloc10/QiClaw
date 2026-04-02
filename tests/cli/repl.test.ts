@@ -304,7 +304,7 @@ describe('createRepl', () => {
     await expect(cli.run()).resolves.toBe(0);
     expectRenderedCliOutput(
       writes,
-      '\nQiClaw\n  · shell git status\n  Tôi sẽ kiểm tra trước.\n  \n  Tóm tắt:\n  - xong\n─ completed • 2 provider • 1 tools • 516 in / 274 out • 4.8s\n\nGoodbye.\n'
+      '\nQiClaw\n  · shell:ro git status\n  Tôi sẽ kiểm tra trước.\n  \n  Tóm tắt:\n  - xong\n─ completed • 2 provider • 1 tools • 516 in / 274 out • 4.8s\n\nGoodbye.\n'
     );
   });
 
@@ -742,6 +742,9 @@ describe('buildCli', () => {
       delete process.env.ANTHROPIC_BASE_URL;
       delete process.env.ANTHROPIC_API_KEY;
       delete process.env.ANTHROPIC_MODEL;
+      delete process.env.OPENAI_BASE_URL;
+      delete process.env.OPENAI_API_KEY;
+      delete process.env.OPENAI_MODEL;
 
       const writes: string[] = [];
       const cli = buildCli({
@@ -754,8 +757,8 @@ describe('buildCli', () => {
           }
         },
         createRuntime: (runtimeOptions) => {
-          expect(runtimeOptions.provider).toBe('anthropic');
-          expect(runtimeOptions.model).toBe('claude-opus-4-6');
+          expect(runtimeOptions.provider).toBe('openai');
+          expect(runtimeOptions.model).toBe('gpt-4.1');
 
           return {
             provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
@@ -1466,7 +1469,7 @@ describe('buildCli', () => {
     });
   });
 
-  it('keeps anthropic as the default provider when MODEL is absent', async () => {
+  it('keeps openai as the default provider when MODEL is absent', async () => {
     await withProviderEnvSnapshot(async () => {
       const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-provider-default-'));
       tempDirs.push(tempDir);
@@ -1485,13 +1488,13 @@ describe('buildCli', () => {
         cwd: tempDir,
         createRuntime: (runtimeOptions) => {
           expect(runtimeOptions).toMatchObject({
-            provider: 'anthropic',
-            model: 'claude-from-dotenv',
+            provider: 'openai',
+            model: 'gpt-from-dotenv',
             cwd: tempDir
           });
 
           return {
-            provider: { name: 'anthropic', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
+            provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
             availableTools: [],
             cwd: runtimeOptions.cwd,
             observer: runtimeOptions.observer ?? { record() {} },

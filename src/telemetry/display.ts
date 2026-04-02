@@ -1,6 +1,7 @@
 import type {
   TelemetryEvent,
   TelemetryObserver,
+  ToolCallCompletedTelemetryData,
   ToolCallStartedTelemetryData,
   TurnFinishedTelemetryData,
   TurnSummaryTelemetryData
@@ -30,6 +31,15 @@ export function createCompactCliTelemetryObserver(
     record(event: TelemetryEvent) {
       if (event.type === 'tool_call_started') {
         const line = formatToolActivityLine(event.data);
+
+        if (line) {
+          options.writeActivityLine(line);
+        }
+        return;
+      }
+
+      if (event.type === 'tool_call_completed') {
+        const line = formatToolCompletionLine(event.data);
 
         if (line) {
           options.writeActivityLine(line);
@@ -117,7 +127,7 @@ function createPendingFooterState(
 
 function formatToolActivityLine(data: ToolCallStartedTelemetryData): string | undefined {
   if (data.toolName === 'shell_readonly' || data.toolName === 'shell_exec') {
-    return `· shell ${formatShellCommandLabel(data.inputRawRedacted)}`;
+    return `· ${formatShellToolKind(data.toolName)} ${formatShellCommandLabel(data.inputRawRedacted)}`;
   }
 
   if (data.toolName === 'read_file') {
@@ -133,6 +143,21 @@ function formatToolActivityLine(data: ToolCallStartedTelemetryData): string | un
   }
 
   return undefined;
+}
+
+function formatToolCompletionLine(data: ToolCallCompletedTelemetryData): string | undefined {
+  if (data.toolName !== 'shell_readonly' && data.toolName !== 'shell_exec') {
+    return undefined;
+  }
+
+  const command = formatShellCommandLabel(data.resultRawRedacted?.data ?? data.resultRawRedacted);
+  const status = data.isError ? 'fail' : 'done';
+
+  return `· ${status} ${formatShellToolKind(data.toolName)} ${command} (${data.durationMs}ms)`;
+}
+
+function formatShellToolKind(toolName: 'shell_readonly' | 'shell_exec'): string {
+  return toolName === 'shell_readonly' ? 'shell:ro' : 'shell:rw';
 }
 
 function formatShellCommandLabel(input: unknown): string {

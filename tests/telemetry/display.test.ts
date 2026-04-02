@@ -4,7 +4,7 @@ import { createCompactCliTelemetryObserver } from '../../src/telemetry/display.j
 import { createTelemetryEvent } from '../../src/telemetry/observer.js';
 
 describe('createCompactCliTelemetryObserver', () => {
-  it('renders shell tool activity as a short command label and omits done lines', () => {
+  it('renders shell tool activity with readonly labels and short completion lines', () => {
     const lines: string[] = [];
     const observer = createCompactCliTelemetryObserver({
       writeActivityLine(text) {
@@ -38,7 +38,10 @@ describe('createCompactCliTelemetryObserver', () => {
       resultSizeBucket: 'small'
     }));
 
-    expect(lines).toEqual(['· shell git status']);
+    expect(lines).toEqual([
+      '· shell:ro git status',
+      '· done shell:ro command (5ms)'
+    ]);
   });
 
   it('renders compact summaries for read_file, edit_file, and search without leaking payloads', () => {

@@ -24,6 +24,12 @@ export interface ResolvedProviderConfig {
   apiKey?: string;
 }
 
+export interface ProviderModelDescriptor {
+  id: string;
+  label: string;
+  provider: ProviderId;
+}
+
 export interface ProviderRequest {
   messages: Message[];
   availableTools: Tool[];
@@ -68,6 +74,12 @@ export interface ProviderResponse {
   debug?: ProviderDebugMetadata;
 }
 
+export type ProviderStreamEvent =
+  | { type: 'text_delta'; delta: string }
+  | { type: 'tool_call'; toolCall: ToolCallRequest }
+  | { type: 'usage'; usage: ProviderUsageSummary }
+  | { type: 'completed'; response: ProviderResponse };
+
 export interface ProviderResponseNormalizationInput {
   content?: string | null;
   toolCalls?: ToolCallRequest[];
@@ -81,6 +93,7 @@ export interface ModelProvider {
   name: string;
   model: string;
   generate(request: ProviderRequest): Promise<ProviderResponse>;
+  generateStream?(request: ProviderRequest, onEvent: (event: ProviderStreamEvent) => void): Promise<ProviderResponse>;
 }
 
 export function normalizeProviderResponse(input: ProviderResponseNormalizationInput): ProviderResponse {

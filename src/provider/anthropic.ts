@@ -22,6 +22,7 @@ import {
   type ProviderRequest,
   type ProviderResponse,
   type ProviderResponseMetrics,
+  type ProviderStreamEvent,
   type ProviderUsageSummary,
   type ToolCallRequest
 } from './model.js';
@@ -166,6 +167,50 @@ export function createAnthropicProvider(options: AnthropicProviderOptions): Mode
         responseMetrics: metadata.responseMetrics,
         debug: metadata.debug
       });
+    },
+    async generateStream(request: ProviderRequest, onEvent: (event: ProviderStreamEvent) => void): Promise<ProviderResponse> {
+      const client = new Anthropic({
+        apiKey: getAnthropicApiKey(options.apiKey),
+        baseURL: options.baseUrl
+      });
+      const stream = client.messages.stream({
+        ...buildAnthropicMessagesRequest({
+          model: options.model,
+          messages: request.messages,
+          availableTools: request.availableTools
+        }),
+        stream: true
+      });
+
+      stream.on('text', (delta: string) => {
+        onEvent({ type: 'text_delta', delta });
+      });
+
+      stream.on('streamEvent', (event: unknown) => {
+        const toolCall = readAnthropicStreamToolCall(event);
+        if (toolCall) {
+          onEvent({ type: 'tool_call', toolCall });
+        }
+
+        const usage = readAnthropicStreamUsage(event);
+        if (usage) {
+          onEvent({ type: 'usage', usage });
+        }
+      });
+
+      const response = await stream.finalMessage();
+      const metadata = normalizeAnthropicResponseMetadata(response);
+      const normalized = normalizeProviderResponse({
+        content: readAnthropicTextContent(response.content),
+        toolCalls: extractAnthropicToolCalls(response.content),
+        finish: metadata.finish,
+        usage: metadata.usage,
+        responseMetrics: metadata.responseMetrics,
+        debug: metadata.debug
+      });
+
+      onEvent({ type: 'completed', response: normalized });
+      return normalized;
     }
   };
 }
@@ -232,6 +277,63 @@ function toAnthropicTool(tool: Tool): AnthropicTool {
     name: tool.name,
     description: tool.description,
     input_schema: tool.inputSchema
+  };
+}
+
+function readAnthropicStreamToolCall(event: unknown): ToolCallRequest | undefined {
+  if (!event || typeof event !== 'object') {
+    return undefined;
+  }
+
+  const candidate = event as {
+    type?: unknown;
+    content_block?: unknown;
+  };
+
+  if (candidate.type !== 'content_block_stop') {
+    return undefined;
+  }
+
+  return isAnthropicToolUseBlock(candidate.content_block)
+    ? {
+        id: candidate.content_block.id,
+        name: candidate.content_block.name,
+        input: candidate.content_block.input
+      }
+    : undefined;
+}
+
+function readAnthropicStreamUsage(event: unknown): ProviderUsageSummary | undefined {
+  if (!event || typeof event !== 'object') {
+    return undefined;
+  }
+
+  const candidate = event as {
+    type?: unknown;
+    usage?: {
+      input_tokens?: unknown;
+      output_tokens?: unknown;
+    };
+  };
+
+  if (candidate.type !== 'message_delta' || !candidate.usage || typeof candidate.usage !== 'object') {
+    return undefined;
+  }
+
+  const inputTokens = typeof candidate.usage.input_tokens === 'number' ? candidate.usage.input_tokens : undefined;
+  const outputTokens = typeof candidate.usage.output_tokens === 'number' ? candidate.usage.output_tokens : undefined;
+  const totalTokens = typeof inputTokens === 'number' && typeof outputTokens === 'number'
+    ? inputTokens + outputTokens
+    : undefined;
+
+  if (inputTokens === undefined && outputTokens === undefined && totalTokens === undefined) {
+    return undefined;
+  }
+
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens
   };
 }
 

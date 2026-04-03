@@ -22,6 +22,7 @@ import {
   type ProviderRequest,
   type ProviderResponse,
   type ProviderResponseMetrics,
+  type ProviderStreamEvent,
   type ProviderUsageSummary,
   type ToolCallRequest
 } from './model.js';
@@ -201,6 +202,61 @@ export function createOpenAIProvider(options: OpenAIProviderOptions): ModelProvi
         responseMetrics: metadata.responseMetrics,
         debug: metadata.debug
       });
+    },
+    async generateStream(request: ProviderRequest, onEvent: (event: ProviderStreamEvent) => void): Promise<ProviderResponse> {
+      const client = new OpenAI({
+        apiKey: getOpenAIApiKey(options.apiKey),
+        baseURL: options.baseUrl
+      });
+      const stream = await client.responses.create({
+        ...buildOpenAIResponsesRequest({
+          model: options.model,
+          messages: request.messages,
+          availableTools: request.availableTools
+        }),
+        stream: true
+      });
+
+      let completedResponse: Response | undefined;
+
+      for await (const event of stream as AsyncIterable<unknown>) {
+        const textDelta = readOpenAIStreamTextDelta(event);
+        if (textDelta) {
+          onEvent({ type: 'text_delta', delta: textDelta });
+        }
+
+        const toolCall = readOpenAIStreamToolCall(event);
+        if (toolCall) {
+          onEvent({ type: 'tool_call', toolCall });
+        }
+
+        const usage = readOpenAIStreamUsage(event);
+        if (usage) {
+          onEvent({ type: 'usage', usage });
+        }
+
+        const response = readOpenAICompletedResponse(event);
+        if (response) {
+          completedResponse = response;
+        }
+      }
+
+      if (!completedResponse) {
+        throw new Error('OpenAI stream completed without a final response payload.');
+      }
+
+      const metadata = normalizeOpenAIResponseMetadata(completedResponse);
+      const normalized = normalizeProviderResponse({
+        content: readOpenAITextContent(completedResponse.output),
+        toolCalls: extractOpenAIToolCalls(completedResponse.output),
+        finish: metadata.finish,
+        usage: metadata.usage,
+        responseMetrics: metadata.responseMetrics,
+        debug: metadata.debug
+      });
+
+      onEvent({ type: 'completed', response: normalized });
+      return normalized;
     }
   };
 }
@@ -301,6 +357,68 @@ function parseOpenAIToolArgumentsValue(toolName: string, argumentsValue: unknown
   } catch {
     throw new Error(`OpenAI function_call arguments for ${toolName} must be valid JSON.`);
   }
+}
+
+function readOpenAIStreamTextDelta(event: unknown): string | undefined {
+  if (!event || typeof event !== 'object') {
+    return undefined;
+  }
+
+  const candidate = event as {
+    type?: unknown;
+    delta?: unknown;
+  };
+
+  return candidate.type === 'response.output_text.delta' && typeof candidate.delta === 'string'
+    ? candidate.delta
+    : undefined;
+}
+
+function readOpenAIStreamToolCall(event: unknown): ToolCallRequest | undefined {
+  if (!event || typeof event !== 'object') {
+    return undefined;
+  }
+
+  const candidate = event as {
+    type?: unknown;
+    item?: unknown;
+  };
+
+  if (candidate.type !== 'response.output_item.done' || !isOpenAIFunctionCall(candidate.item)) {
+    return undefined;
+  }
+
+  return {
+    id: candidate.item.call_id,
+    name: candidate.item.name,
+    input: parseOpenAIToolArguments(candidate.item.name, candidate.item.arguments)
+  };
+}
+
+function readOpenAIStreamUsage(event: unknown): ProviderUsageSummary | undefined {
+  const response = readOpenAICompletedResponse(event);
+  if (!response?.usage) {
+    return undefined;
+  }
+
+  return {
+    inputTokens: response.usage.input_tokens ?? undefined,
+    outputTokens: response.usage.output_tokens ?? undefined,
+    totalTokens: response.usage.total_tokens ?? undefined
+  };
+}
+
+function readOpenAICompletedResponse(event: unknown): Response | undefined {
+  if (!event || typeof event !== 'object') {
+    return undefined;
+  }
+
+  const candidate = event as {
+    type?: unknown;
+    response?: Response;
+  };
+
+  return candidate.type === 'response.completed' ? candidate.response : undefined;
 }
 
 function isOpenAIOutputMessage(value: unknown): value is { type: 'message'; role: 'assistant'; content: unknown[] } {

@@ -1,6 +1,6 @@
 import type { Message } from '../core/types.js';
 import { buildPromptWithContext } from '../context/promptBuilder.js';
-import type { ProviderResponse, ProviderUsageSummary } from '../provider/model.js';
+import type { ProviderResponse, ProviderStreamEvent, ProviderUsageSummary } from '../provider/model.js';
 import {
   toToolErrorMessage,
   toToolResultMessage,
@@ -39,6 +39,10 @@ export interface RunAgentTurnInput {
   history?: Message[];
 }
 
+export interface RunAgentTurnStreamInput extends RunAgentTurnInput {
+  onEvent(event: ProviderStreamEvent): void;
+}
+
 export type AgentTurnStopReason = 'completed' | 'max_tool_rounds_reached';
 
 export interface RunAgentTurnResult {
@@ -67,6 +71,44 @@ interface TurnTelemetryState {
   toolResultCharsAddedAcrossTurn: number;
   finalToolResultChars: number;
   finalAssistantToolCallChars: number;
+}
+
+export async function runAgentTurnStream(input: RunAgentTurnStreamInput): Promise<RunAgentTurnResult> {
+  if (!input.provider.generateStream) {
+    return runAgentTurn(input);
+  }
+
+  const userMessage: Message = { role: 'user', content: input.userInput };
+  const response = await input.provider.generateStream(
+    {
+      messages: buildPromptWithContext({
+        baseSystemPrompt: input.baseSystemPrompt,
+        memoryText: input.memoryText,
+        skillsText: input.skillsText,
+        historySummary: input.historySummary,
+        history: [...(input.history ?? []), userMessage]
+      }).messages,
+      availableTools: input.availableTools
+    },
+    input.onEvent
+  );
+
+  const history: Message[] = [...(input.history ?? []), userMessage, response.message];
+  const criteria = buildDoneCriteria(input.userInput, input.agentSpec?.completion);
+
+  return {
+    stopReason: 'completed',
+    finalAnswer: response.message.content,
+    history,
+    toolRoundsUsed: 0,
+    doneCriteria: criteria,
+    verification: verifyAgentTurn({
+      history,
+      finalAnswer: response.message.content,
+      criteria,
+      turnCompleted: true
+    })
+  };
 }
 
 export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTurnResult> {

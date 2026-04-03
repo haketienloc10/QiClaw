@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import { dispatchToolCall } from '../../src/agent/dispatcher.js';
 import { defaultAgentSpec } from '../../src/agent/defaultAgentSpec.js';
-import { runAgentTurn } from '../../src/agent/loop.js';
+import { runAgentTurn, runAgentTurnStream } from '../../src/agent/loop.js';
 import { readonlyAgentSpec } from '../../src/agent/presets/readonlyAgentSpec.js';
 import { createAgentRuntime } from '../../src/agent/runtime.js';
 import { createInMemoryMetricsObserver } from '../../src/telemetry/metrics.js';
@@ -29,6 +29,7 @@ import {
   normalizeProviderResponse,
   type ModelProvider,
   type ProviderResponse,
+  type ProviderStreamEvent,
   type ToolCallRequest
 } from '../../src/provider/model.js';
 import { createTelemetryEvent, type TelemetryEvent } from '../../src/telemetry/observer.js';
@@ -84,7 +85,8 @@ describe('telemetry typing', () => {
       resultPreview: '{}',
       resultRawRedacted: {},
       durationMs: 0,
-      resultSizeChars: 2
+      resultSizeChars: 2,
+      resultSizeBucket: 'small'
     });
 
     if (event.type !== 'tool_call_completed') {
@@ -2118,6 +2120,42 @@ describe('agent loop', () => {
       lastTurnDurationMs: expect.any(Number)
     });
   });
+
+  it('streams text deltas and final result for TUI rendering', async () => {
+    const provider = createScriptedStreamingProvider([
+      {
+        events: [
+          { type: 'text_delta', delta: 'Hello' },
+          { type: 'text_delta', delta: ' world' },
+          { type: 'completed', response: normalizeProviderResponse({ content: 'Hello world' }) }
+        ]
+      }
+    ]);
+    const streamedEvents: ProviderStreamEvent[] = [];
+
+    const result = await runAgentTurnStream({
+      provider,
+      availableTools: getBuiltinTools(),
+      baseSystemPrompt: 'You are helpful.',
+      userInput: 'Say hello.',
+      cwd: '/tmp/runtime-stream',
+      maxToolRounds: 1,
+      onEvent(event) {
+        streamedEvents.push(event);
+      }
+    });
+
+    expect(streamedEvents).toEqual([
+      { type: 'text_delta', delta: 'Hello' },
+      { type: 'text_delta', delta: ' world' },
+      { type: 'completed', response: normalizeProviderResponse({ content: 'Hello world' }) }
+    ]);
+    expect(result.finalAnswer).toBe('Hello world');
+    expect(result.history).toEqual([
+      { role: 'user', content: 'Say hello.' },
+      { role: 'assistant', content: 'Hello world' }
+    ]);
+  });
 });
 
 describe('built-in tool behavior', () => {
@@ -2320,6 +2358,49 @@ function createScriptedProviderWithMetadata(
 
       index += 1;
       return response;
+    }
+  };
+}
+
+function createScriptedStreamingProvider(
+  turns: Array<{ events: ProviderStreamEvent[] }>
+): ModelProvider {
+  let index = 0;
+
+  return {
+    name: 'scripted-streaming',
+    model: 'test-model',
+    async generate() {
+      const turn = turns[index];
+      if (!turn) {
+        throw new Error(`Unexpected provider.generate call at index ${index}`);
+      }
+
+      index += 1;
+      const completedEvent = turn.events.find((event) => event.type === 'completed');
+      if (!completedEvent || completedEvent.type !== 'completed') {
+        throw new Error('Scripted streaming provider requires a completed event.');
+      }
+
+      return completedEvent.response;
+    },
+    async generateStream(_request, onEvent) {
+      const turn = turns[index];
+      if (!turn) {
+        throw new Error(`Unexpected provider.generateStream call at index ${index}`);
+      }
+
+      index += 1;
+      for (const event of turn.events) {
+        onEvent(event);
+      }
+
+      const completedEvent = turn.events.find((event) => event.type === 'completed');
+      if (!completedEvent || completedEvent.type !== 'completed') {
+        throw new Error('Scripted streaming provider requires a completed event.');
+      }
+
+      return completedEvent.response;
     }
   };
 }

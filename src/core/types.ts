@@ -22,6 +22,15 @@ export interface SessionRecord {
   cwd: string;
 }
 
+export interface ChatSessionRecord {
+  sessionId: string;
+  title: string;
+  provider: 'anthropic' | 'openai';
+  model: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface CheckpointRecord {
   sessionId: string;
   taskId: string;

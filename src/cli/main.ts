@@ -20,6 +20,7 @@ import { createFileJsonLineWriter, createJsonLineLogger } from '../telemetry/log
 import { createInMemoryMetricsObserver } from '../telemetry/metrics.js';
 import type { TelemetryObserver } from '../telemetry/observer.js';
 import { createRepl } from './repl.js';
+import { runInteractiveApp as runInkInteractiveApp } from '../ui/runInteractiveApp.js';
 
 export type Cli = {
   run(): Promise<number>;
@@ -55,6 +56,15 @@ export interface BuildCliOptions {
   createCheckpointStore?: (filename: string) => CheckpointStore;
   createSessionId?: () => string;
   runTurn?: (input: CliRunTurnInput) => Promise<CliRunTurnResult>;
+  runInteractiveApp?: (input: {
+    runtime: AgentRuntime;
+    checkpointStore: CheckpointStore;
+    sessionId: string;
+    history: RunAgentTurnInput['history'];
+    historySummary?: string;
+    executeTurn: (input: CliRunTurnInput) => Promise<CliRunTurnResult>;
+    flushPendingFooter(): void;
+  }) => Promise<number>;
 }
 
 export function buildCli(options: BuildCliOptions = {}): Cli {
@@ -69,6 +79,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
   const executeTurn: (input: CliRunTurnInput) => Promise<CliRunTurnResult> = options.runTurn
     ? options.runTurn
     : async ({ sessionId: _sessionId, ...input }) => runAgentTurn(input);
+  const runInteractiveApp = options.runInteractiveApp ?? defaultRunInteractiveApp;
 
   return {
     async run() {
@@ -135,64 +146,39 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
           ? parseInteractiveCheckpointJson(latestCheckpoint.checkpointJson)
           : undefined;
 
-        let sessionId = restored ? latestCheckpoint?.sessionId ?? sessionIdFactory() : sessionIdFactory();
-        let history = restored?.history ?? [];
-        let historySummary = restored?.historySummary;
+        const sessionId = restored ? latestCheckpoint?.sessionId ?? sessionIdFactory() : sessionIdFactory();
+        const history = restored?.history ?? [];
+        const historySummary = restored?.historySummary;
 
-        const repl = createRepl({
-          promptLabel: '> ',
-          readLine: options.readLine,
-          async runTurn(userInput) {
-            const result = await executeTurn({
-              provider: runtime.provider,
-              availableTools: runtime.availableTools,
-              baseSystemPrompt: runtime.systemPrompt,
-              userInput,
-              cwd: runtime.cwd,
-              maxToolRounds: runtime.maxToolRounds,
-              agentSpec: runtime.agentSpec,
-              observer: cliObserver.observer,
-              history,
-              historySummary,
-              sessionId
-            });
-
-            if (result.stopReason === 'completed' || result.stopReason === 'max_tool_rounds_reached') {
-              history = result.history;
-              historySummary = readTurnHistorySummary(result) ?? historySummary;
-              checkpointStore.save({
-                sessionId,
-                taskId: 'interactive',
-                status: result.stopReason === 'completed' ? 'completed' : 'running',
-                checkpointJson: createInteractiveCheckpointJson({
-                  version: 1,
-                  history,
-                  historySummary
-                })
-              });
-            }
-
-            return result;
-          },
-          writeLine(text) {
-            stdout.write(`${text}\n`);
-          },
-          renderFinalAnswer(text) {
-            assistantBlockWriter.writeAssistantTextBlock(text);
-          },
-          afterTurnRendered() {
+        return runInteractiveApp({
+          runtime,
+          checkpointStore,
+          sessionId,
+          history,
+          historySummary,
+          executeTurn,
+          flushPendingFooter() {
             cliObserver.flushPendingFooter();
-            assistantBlockWriter.resetTurn();
           }
         });
-
-        return repl.runInteractive();
       } catch (error) {
         stderr.write(`${formatCliError(error)}\n`);
         return 1;
       }
     }
   };
+}
+
+async function defaultRunInteractiveApp(input: {
+  runtime: AgentRuntime;
+  checkpointStore: CheckpointStore;
+  sessionId: string;
+  history: RunAgentTurnInput['history'];
+  historySummary?: string;
+  executeTurn: (input: CliRunTurnInput) => Promise<CliRunTurnResult>;
+  flushPendingFooter(): void;
+}): Promise<number> {
+  return runInkInteractiveApp(input);
 }
 
 function readTurnHistorySummary(result: RunAgentTurnResult): string | undefined {

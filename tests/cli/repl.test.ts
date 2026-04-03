@@ -8,9 +8,13 @@ import { defaultAgentSpec } from '../../src/agent/defaultAgentSpec.js';
 import { buildCli, type CliRunTurnResult } from '../../src/cli/main.js';
 import { createRepl } from '../../src/cli/repl.js';
 import { getDefaultModelForProvider, parseProviderId, resolveProviderConfig } from '../../src/provider/config.js';
+import type { ModelProvider } from '../../src/provider/model.js';
+import { createInteractiveCheckpointJson } from '../../src/session/session.js';
 import { createJsonLineLogger } from '../../src/telemetry/logger.js';
 import { createInMemoryMetricsObserver } from '../../src/telemetry/metrics.js';
-import { createTelemetryEvent } from '../../src/telemetry/observer.js';
+import { createTelemetryEvent, type TelemetryObserver } from '../../src/telemetry/observer.js';
+import type { AgentTurnVerification } from '../../src/agent/verifier.js';
+import type { Tool } from '../../src/tools/registry.js';
 
 const tempDirs: string[] = [];
 const providerEnvKeys = [
@@ -59,6 +63,19 @@ async function withProviderEnvSnapshot(run: () => Promise<void> | void): Promise
   }
 }
 
+function createVerifiedResult(overrides: Partial<AgentTurnVerification> = {}): AgentTurnVerification {
+  return {
+    isVerified: true,
+    finalAnswerIsNonEmpty: true,
+    finalAnswerIsSubstantive: true,
+    toolEvidenceSatisfied: true,
+    noUnresolvedToolErrors: true,
+    toolMessagesCount: 0,
+    checks: [],
+    ...overrides
+  };
+}
+
 function createSuccessfulRunTurn(): (input: { userInput: string }) => Promise<CliRunTurnResult> {
   return async (input: { userInput: string }) => ({
     stopReason: 'completed',
@@ -69,16 +86,98 @@ function createSuccessfulRunTurn(): (input: { userInput: string }) => Promise<Cl
       goal: input.userInput,
       checklist: [input.userInput],
       requiresNonEmptyFinalAnswer: true,
-      requiresToolEvidence: false
+      requiresToolEvidence: false,
+      requiresSubstantiveFinalAnswer: false,
+      forbidSuccessAfterToolErrors: false
     },
-    verification: {
-      isVerified: true,
-      finalAnswerIsNonEmpty: true,
-      toolEvidenceSatisfied: true,
-      toolMessagesCount: 0,
-      checks: []
-    }
+    verification: createVerifiedResult()
   });
+}
+
+function createTestInteractiveApp(options: {
+  readLine?: (promptLabel: string) => Promise<string | undefined>;
+  writeLine?: (text: string) => void;
+  renderFinalAnswer?: (text: string) => void;
+  beforeEachTurn?: () => void;
+  afterEachTurn?: () => void;
+}) {
+  return async (input: {
+    executeTurn: (turnInput: {
+      provider: ModelProvider;
+      availableTools: Tool[];
+      baseSystemPrompt: string;
+      userInput: string;
+      cwd: string;
+      maxToolRounds: number;
+      agentSpec: typeof defaultAgentSpec;
+      observer: TelemetryObserver;
+      sessionId?: string;
+      history?: CliRunTurnResult['history'];
+      historySummary?: string;
+    }) => Promise<CliRunTurnResult>;
+    flushPendingFooter(): void;
+    checkpointStore: { save(record: { sessionId: string; taskId: string; status: 'completed'; checkpointJson: string }): void };
+    sessionId: string;
+    history?: CliRunTurnResult['history'];
+    historySummary?: string;
+    runtime: {
+      provider: ModelProvider;
+      availableTools: Tool[];
+      cwd: string;
+      agentSpec: typeof defaultAgentSpec;
+      observer: TelemetryObserver;
+      systemPrompt: string;
+      maxToolRounds: number;
+    };
+  }): Promise<number> => {
+    let history = input.history ?? [];
+    let historySummary = input.historySummary;
+
+    const repl = createRepl({
+      promptLabel: '> ',
+      readLine: options.readLine,
+      writeLine: options.writeLine,
+      renderFinalAnswer(text) {
+        options.beforeEachTurn?.();
+        options.renderFinalAnswer?.(text);
+      },
+      afterTurnRendered() {
+        input.flushPendingFooter();
+        options.afterEachTurn?.();
+      },
+      async runTurn(userInput) {
+        const result = await input.executeTurn({
+          provider: input.runtime.provider,
+          availableTools: input.runtime.availableTools,
+          baseSystemPrompt: input.runtime.systemPrompt,
+          userInput,
+          cwd: input.runtime.cwd,
+          maxToolRounds: input.runtime.maxToolRounds,
+          agentSpec: input.runtime.agentSpec,
+          observer: input.runtime.observer,
+          sessionId: input.sessionId,
+          history,
+          historySummary
+        });
+
+        history = result.history;
+        historySummary = result.historySummary ?? historySummary;
+        input.checkpointStore.save({
+          sessionId: input.sessionId,
+          taskId: 'interactive',
+          status: 'completed',
+          checkpointJson: createInteractiveCheckpointJson({
+            version: 1,
+            history,
+            historySummary
+          })
+        });
+        return result;
+      }
+    });
+
+    return repl.runInteractive();
+  };
 }
 
 function expectExactlyOneBlankLineBeforeEachAssistantBlock(output: string): void {
@@ -127,13 +226,7 @@ describe('createRepl', () => {
         stopReason: 'completed',
         finalAnswer: `echo: ${input}`,
         toolRoundsUsed: 0,
-        verification: {
-          isVerified: true,
-          finalAnswerIsNonEmpty: true,
-          toolEvidenceSatisfied: true,
-          toolMessagesCount: 0,
-          checks: []
-        }
+        verification: createVerifiedResult()
       }),
       readLine: async () => undefined,
       writeLine() {}
@@ -167,7 +260,8 @@ describe('createRepl', () => {
       resultPreview: '{}',
       resultRawRedacted: {},
       durationMs: 1,
-      resultSizeChars: 2
+      resultSizeChars: 2,
+      resultSizeBucket: 'small'
     }));
     metrics.record(createTelemetryEvent('turn_completed', 'completion_check', {
       turnId: 'turn-1',
@@ -197,13 +291,7 @@ describe('createRepl', () => {
         stopReason: 'completed',
         finalAnswer: `answer: ${input}`,
         toolRoundsUsed: 0,
-        verification: {
-          isVerified: true,
-          finalAnswerIsNonEmpty: true,
-          toolEvidenceSatisfied: true,
-          toolMessagesCount: 0,
-          checks: []
-        }
+        verification: createVerifiedResult()
       }),
       readLine: async () => inputs.shift(),
       writeLine(text) {
@@ -238,6 +326,20 @@ describe('createRepl', () => {
         agentSpec: defaultAgentSpec,
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
+      }),
+      runInteractiveApp: createTestInteractiveApp({
+        readLine: (() => {
+          const inputs = ['first question', '/exit'];
+          return async () => inputs.shift();
+        })(),
+        writeLine(text) {
+          writes.push(`${text}\n`);
+        },
+        renderFinalAnswer(text) {
+          for (const line of text.split('\n')) {
+            writes.push(`  ${line}\n`);
+          }
+        }
       }),
       runTurn: async (input) => {
         input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
@@ -290,13 +392,7 @@ describe('createRepl', () => {
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
           },
-          verification: {
-            isVerified: true,
-            finalAnswerIsNonEmpty: true,
-            toolEvidenceSatisfied: true,
-            toolMessagesCount: 1,
-            checks: []
-          }
+          verification: createVerifiedResult({ toolMessagesCount: 1 })
         };
       }
     });
@@ -331,6 +427,29 @@ describe('createRepl', () => {
         agentSpec: defaultAgentSpec,
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
+      }),
+      runInteractiveApp: createTestInteractiveApp({
+        readLine: (() => {
+          const inputs = ['first question', 'second question', '/exit'];
+          return async () => inputs.shift();
+        })(),
+        writeLine(text) {
+          writes.push(`${text}\n`);
+        },
+        beforeEachTurn() {
+          if (writes.length === 0) {
+            writes.push('\nQiClaw\n');
+            return;
+          }
+
+          const last = writes[writes.length - 1] ?? '';
+          writes.push(last.endsWith('\n') ? '\nQiClaw\n' : '\n\nQiClaw\n');
+        },
+        renderFinalAnswer(text) {
+          for (const line of text.split('\n')) {
+            writes.push(`  ${line}\n`);
+          }
+        }
       }),
       runTurn: createSuccessfulRunTurn()
     });
@@ -430,13 +549,7 @@ describe('buildCli', () => {
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
           },
-          verification: {
-            isVerified: true,
-            finalAnswerIsNonEmpty: true,
-            toolEvidenceSatisfied: true,
-            toolMessagesCount: 1,
-            checks: []
-          }
+          verification: createVerifiedResult({ toolMessagesCount: 1 })
         };
       }
     });
@@ -521,13 +634,7 @@ describe('buildCli', () => {
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
           },
-          verification: {
-            isVerified: true,
-            finalAnswerIsNonEmpty: true,
-            toolEvidenceSatisfied: true,
-            toolMessagesCount: 1,
-            checks: []
-          }
+          verification: createVerifiedResult({ toolMessagesCount: 1 })
         };
       }
     });
@@ -604,13 +711,7 @@ describe('buildCli', () => {
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
           },
-          verification: {
-            isVerified: true,
-            finalAnswerIsNonEmpty: true,
-            toolEvidenceSatisfied: true,
-            toolMessagesCount: 1,
-            checks: []
-          }
+          verification: createVerifiedResult({ toolMessagesCount: 1 })
         };
       }
     });
@@ -636,7 +737,7 @@ describe('buildCli', () => {
           availableTools: [],
           cwd: tempDir,
           observer: runtimeOptions.observer ?? { record() {} },
-          agentSpec: { completion: { maxToolRounds: 3 } },
+          agentSpec: defaultAgentSpec,
           systemPrompt: 'Test prompt',
           maxToolRounds: 3
         }),
@@ -660,15 +761,11 @@ describe('buildCli', () => {
               goal: input.userInput,
               checklist: [input.userInput],
               requiresNonEmptyFinalAnswer: true,
-              requiresToolEvidence: false
+              requiresToolEvidence: false,
+      requiresSubstantiveFinalAnswer: false,
+      forbidSuccessAfterToolErrors: false
             },
-            verification: {
-              isVerified: true,
-              finalAnswerIsNonEmpty: true,
-              toolEvidenceSatisfied: true,
-              toolMessagesCount: 1,
-              checks: []
-            }
+            verification: createVerifiedResult({ toolMessagesCount: 1 })
           };
         }
       });
@@ -698,7 +795,7 @@ describe('buildCli', () => {
           availableTools: [],
           cwd: tempDir,
           observer: runtimeOptions.observer ?? { record() {} },
-          agentSpec: { completion: { maxToolRounds: 3 } },
+          agentSpec: defaultAgentSpec,
           systemPrompt: 'Test prompt',
           maxToolRounds: 3
         }),
@@ -722,12 +819,16 @@ describe('buildCli', () => {
               goal: input.userInput,
               checklist: [input.userInput],
               requiresNonEmptyFinalAnswer: true,
-              requiresToolEvidence: false
+              requiresToolEvidence: false,
+      requiresSubstantiveFinalAnswer: false,
+      forbidSuccessAfterToolErrors: false
             },
             verification: {
               isVerified: true,
               finalAnswerIsNonEmpty: true,
+              finalAnswerIsSubstantive: true,
               toolEvidenceSatisfied: true,
+              noUnresolvedToolErrors: true,
               toolMessagesCount: 0,
               checks: []
             }
@@ -766,7 +867,7 @@ describe('buildCli', () => {
           availableTools: [],
           cwd: tempDir,
           observer: runtimeOptions.observer ?? { record() {} },
-          agentSpec: { completion: { maxToolRounds: 3 } },
+          agentSpec: defaultAgentSpec,
           systemPrompt: 'Test prompt',
           maxToolRounds: 3
         }),
@@ -781,11 +882,13 @@ describe('buildCli', () => {
             messageSummaries: [
               {
                 role: 'system',
+                messageSource: 'system',
                 rawChars: 67,
                 contentBlockCount: 1
               },
               {
                 role: 'user',
+                messageSource: 'user',
                 rawChars: 40,
                 contentBlockCount: 1
               }
@@ -829,12 +932,16 @@ describe('buildCli', () => {
               goal: input.userInput,
               checklist: [input.userInput],
               requiresNonEmptyFinalAnswer: true,
-              requiresToolEvidence: false
+              requiresToolEvidence: false,
+      requiresSubstantiveFinalAnswer: false,
+      forbidSuccessAfterToolErrors: false
             },
             verification: {
               isVerified: true,
               finalAnswerIsNonEmpty: true,
+              finalAnswerIsSubstantive: true,
               toolEvidenceSatisfied: true,
+              noUnresolvedToolErrors: true,
               toolMessagesCount: 0,
               checks: []
             }
@@ -1292,7 +1399,7 @@ describe('buildCli', () => {
           availableTools: [],
           cwd: runtimeOptions.cwd,
           observer: runtimeOptions.observer ?? { record() {} },
-          agentSpec: { completion: { maxToolRounds: 3 } },
+          agentSpec: defaultAgentSpec,
           systemPrompt: 'Test prompt',
           maxToolRounds: 3
         };
@@ -1306,15 +1413,11 @@ describe('buildCli', () => {
           goal: input.userInput,
           checklist: [input.userInput],
           requiresNonEmptyFinalAnswer: true,
-          requiresToolEvidence: false
+          requiresToolEvidence: false,
+      requiresSubstantiveFinalAnswer: false,
+      forbidSuccessAfterToolErrors: false
         },
-        verification: {
-          isVerified: true,
-          finalAnswerIsNonEmpty: true,
-          toolEvidenceSatisfied: true,
-          toolMessagesCount: 0,
-          checks: []
-        }
+        verification: createVerifiedResult()
       })
     });
 
@@ -1798,13 +1901,7 @@ describe('buildCli', () => {
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
           },
-          verification: {
-            isVerified: true,
-            finalAnswerIsNonEmpty: true,
-            toolEvidenceSatisfied: true,
-            toolMessagesCount: 1,
-            checks: []
-          }
+          verification: createVerifiedResult({ toolMessagesCount: 1 })
         };
       }
     });
@@ -1841,10 +1938,29 @@ describe('buildCli', () => {
         maxToolRounds: 3
       }),
       createSessionId: () => 'session-test-1',
-      readLine: (() => {
-        const inputs = ['first question', 'second question', '/exit'];
-        return async () => inputs.shift();
-      })(),
+      runInteractiveApp: createTestInteractiveApp({
+        readLine: (() => {
+          const inputs = ['first question', 'second question', '/exit'];
+          return async () => inputs.shift();
+        })(),
+        writeLine(text) {
+          writes.push(`${text}\n`);
+        },
+        beforeEachTurn() {
+          if (writes.length === 0) {
+            writes.push('\nQiClaw\n');
+            return;
+          }
+
+          const last = writes[writes.length - 1] ?? '';
+          writes.push(last.endsWith('\n') ? '\nQiClaw\n' : '\n\nQiClaw\n');
+        },
+        renderFinalAnswer(text) {
+          for (const line of text.split('\n')) {
+            writes.push(`  ${line}\n`);
+          }
+        }
+      }),
       runTurn: async (input) => {
         runTurnInputs.push({
           userInput: input.userInput,
@@ -1868,12 +1984,16 @@ describe('buildCli', () => {
               goal: input.userInput,
               checklist: [input.userInput],
               requiresNonEmptyFinalAnswer: true,
-              requiresToolEvidence: false
+              requiresToolEvidence: false,
+      requiresSubstantiveFinalAnswer: false,
+      forbidSuccessAfterToolErrors: false
             },
             verification: {
               isVerified: true,
               finalAnswerIsNonEmpty: true,
+              finalAnswerIsSubstantive: true,
               toolEvidenceSatisfied: true,
+              noUnresolvedToolErrors: true,
               toolMessagesCount: 0,
               checks: []
             }
@@ -1951,10 +2071,14 @@ describe('buildCli', () => {
         maxToolRounds: 3
       }),
       createSessionId: () => 'session-test-2',
-      readLine: (() => {
-        const inputs = ['resumed question', 'follow-up question', '/exit'];
-        return async () => inputs.shift();
-      })(),
+      runInteractiveApp: createTestInteractiveApp({
+        readLine: (() => {
+          const inputs = ['resumed question', 'follow-up question', '/exit'];
+          return async () => inputs.shift();
+        })(),
+        writeLine() {},
+        renderFinalAnswer() {}
+      }),
       runTurn: async (input) => {
         expect(input.sessionId).toBe('session-test-1');
         resumedRunTurnInputs.push({
@@ -1986,12 +2110,16 @@ describe('buildCli', () => {
               goal: input.userInput,
               checklist: [input.userInput],
               requiresNonEmptyFinalAnswer: true,
-              requiresToolEvidence: false
+              requiresToolEvidence: false,
+      requiresSubstantiveFinalAnswer: false,
+      forbidSuccessAfterToolErrors: false
             },
             verification: {
               isVerified: true,
               finalAnswerIsNonEmpty: true,
+              finalAnswerIsSubstantive: true,
               toolEvidenceSatisfied: true,
+              noUnresolvedToolErrors: true,
               toolMessagesCount: 0,
               checks: []
             }
@@ -2175,10 +2303,14 @@ describe('buildCli', () => {
         maxToolRounds: 3
       }),
       createSessionId: () => 'fresh-session',
-      readLine: (() => {
-        const inputs = ['follow-up question', '/exit'];
-        return async () => inputs.shift();
-      })(),
+      runInteractiveApp: createTestInteractiveApp({
+        readLine: (() => {
+          const inputs = ['follow-up question', '/exit'];
+          return async () => inputs.shift();
+        })(),
+        writeLine() {},
+        renderFinalAnswer() {}
+      }),
       runTurn: async (input) => {
         expect(input.sessionId).toBe('restored-session');
         expect(input.historySummary).toBe('Package metadata restored from checkpoint.');
@@ -2223,13 +2355,7 @@ describe('buildCli', () => {
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
           },
-          verification: {
-            isVerified: true,
-            finalAnswerIsNonEmpty: true,
-            toolEvidenceSatisfied: true,
-            toolMessagesCount: 1,
-            checks: []
-          }
+          verification: createVerifiedResult({ toolMessagesCount: 1 })
         };
       }
     });
@@ -2275,10 +2401,14 @@ describe('buildCli', () => {
         maxToolRounds: 3
       }),
       createSessionId: () => 'fresh-session',
-      readLine: (() => {
-        const inputs = ['new question', '/exit'];
-        return async () => inputs.shift();
-      })(),
+      runInteractiveApp: createTestInteractiveApp({
+        readLine: (() => {
+          const inputs = ['new question', '/exit'];
+          return async () => inputs.shift();
+        })(),
+        writeLine() {},
+        renderFinalAnswer() {}
+      }),
       runTurn: async (input) => {
         seenSessionIds.push(input.sessionId ?? 'missing');
         expect(input.history).toEqual([]);
@@ -2328,7 +2458,15 @@ describe('createJsonLineLogger', () => {
       }
     });
 
-    logger.record(createTelemetryEvent('turn_started', 'input_received', { userInput: 'hello' }));
+    logger.record(createTelemetryEvent('turn_started', 'input_received', {
+      turnId: 'turn-1',
+      providerRound: 0,
+      toolRound: 0,
+      cwd: '/tmp/workspace',
+      userInput: 'hello',
+      maxToolRounds: 3,
+      toolNames: []
+    }));
 
     expect(lines).toHaveLength(1);
     expect(lines[0].endsWith('\n')).toBe(true);

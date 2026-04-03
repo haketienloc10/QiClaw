@@ -105,6 +105,54 @@ function expectRenderedCliOutput(writes: string[], expectedOutput: string): void
   expectExactlyOneBlankLineBeforeEachAssistantBlock(output);
 }
 
+function stripAnsi(text: string): string {
+  return text.replace(/\u001B\[[0-9;]*m/g, '');
+}
+
+function renderTerminalTranscript(output: string): string {
+  const normalizedOutput = stripAnsi(output);
+  const lines: string[] = [];
+  let currentLine = '';
+
+  for (let index = 0; index < normalizedOutput.length; index += 1) {
+    const character = normalizedOutput[index];
+
+    if (character === '\u001b') {
+      const sequence = normalizedOutput.slice(index);
+      if (sequence.startsWith('\u001b[1A\u001b[2K')) {
+        if (currentLine.length > 0) {
+          currentLine = '';
+        } else if (lines.length > 0) {
+          lines.pop();
+        }
+        index += '\u001b[1A\u001b[2K'.length - 1;
+        continue;
+      }
+      continue;
+    }
+
+    if (character === '\n') {
+      lines.push(currentLine);
+      currentLine = '';
+      continue;
+    }
+
+    currentLine += character;
+  }
+
+  if (currentLine.length > 0) {
+    lines.push(currentLine);
+  }
+
+  return `${lines.join('\n')}${normalizedOutput.endsWith('\n') ? '\n' : ''}`;
+}
+
+function expectTopLevelResponding(output: string): void {
+  const normalizedOutput = renderTerminalTranscript(output);
+  expect(normalizedOutput).toMatch(/(?:^|\n)✓ Responding\n/);
+  expect(normalizedOutput).not.toContain('  ✓ Responding\n');
+}
+
 describe('createSuccessfulRunTurn', () => {
   it('returns a result compatible with CliRunTurnResult literal requirements', async () => {
     const runTurn = createSuccessfulRunTurn();
@@ -215,6 +263,72 @@ describe('createRepl', () => {
     expect(outputs).toEqual(['answer: first question', 'Goodbye.']);
   });
 
+  it('shows help commands without calling runTurn', async () => {
+    const outputs: string[] = [];
+    const runTurn = vi.fn(async (input: string) => ({
+      stopReason: 'completed' as const,
+      finalAnswer: `answer: ${input}`,
+      toolRoundsUsed: 0,
+      verification: {
+        isVerified: true,
+        finalAnswerIsNonEmpty: true,
+        toolEvidenceSatisfied: true,
+        toolMessagesCount: 0,
+        checks: []
+      }
+    }));
+    const inputs = ['/help', '/exit'];
+    const repl = createRepl({
+      promptLabel: '> ',
+      runTurn,
+      readLine: async () => inputs.shift(),
+      writeLine(text) {
+        outputs.push(text);
+      }
+    });
+
+    await expect(repl.runInteractive()).resolves.toBe(0);
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(outputs).toEqual([
+      'Commands: /help, /multiline, /skills, /exit',
+      'Goodbye.'
+    ]);
+  });
+
+  it('combines continued input lines into one multiline turn', async () => {
+    const outputs: string[] = [];
+    const runTurn = vi.fn(async (input: string) => ({
+      stopReason: 'completed' as const,
+      finalAnswer: `answer: ${JSON.stringify(input)}`,
+      toolRoundsUsed: 0,
+      verification: {
+        isVerified: true,
+        finalAnswerIsNonEmpty: true,
+        toolEvidenceSatisfied: true,
+        toolMessagesCount: 0,
+        checks: []
+      }
+    }));
+    const inputs = ['/multiline', 'first line', 'second line', '/send', '/exit'];
+    const repl = createRepl({
+      promptLabel: '> ',
+      runTurn,
+      readLine: async () => inputs.shift(),
+      writeLine(text) {
+        outputs.push(text);
+      }
+    });
+
+    await expect(repl.runInteractive()).resolves.toBe(0);
+    expect(runTurn).toHaveBeenCalledTimes(1);
+    expect(runTurn).toHaveBeenCalledWith('first line\nsecond line');
+    expect(outputs).toEqual([
+      'Multiline mode on. Enter /send to submit or /cancel to discard.',
+      'answer: "first line\\nsecond line"',
+      'Goodbye.'
+    ]);
+  });
+
   it('renders interactive turns as an indented QiClaw block with a non-indented footer', async () => {
     const writes: string[] = [];
     const cli = buildCli({
@@ -304,7 +418,7 @@ describe('createRepl', () => {
     await expect(cli.run()).resolves.toBe(0);
     expectRenderedCliOutput(
       writes,
-      '\nQiClaw\n  · shell:read git status\n  Tôi sẽ kiểm tra trước.\n  \n  Tóm tắt:\n  - xong\n─ completed • 2 provider • 1 tools • 516 in / 274 out • 4.8s\n\nGoodbye.\n'
+      '\nQiClaw\n  · shell:read git status\n  Tôi sẽ kiểm tra trước.\n  \n  Tóm tắt:\n  - xong\n─ completed • verified • 2 provider • 1 tool round • 1 tools • 516 in / 274 out • 4.8s\n\nGoodbye.\n'
     );
   });
 
@@ -880,6 +994,633 @@ describe('buildCli', () => {
       );
       expectRenderedCliOutput(stdoutWrites, '\nQiClaw\n  handled: inspect package.json\n');
     });
+  });
+
+  it('shows QiClaw and provider thinking immediately when provider_called is recorded', async () => {
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: ['--prompt', 'inspect package.json'],
+      cwd: '/tmp/qiclaw-provider-thinking-immediate',
+      stdout: {
+        isTTY: true,
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      } as Pick<NodeJS.WriteStream, 'write'> & { isTTY: boolean },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: '/tmp/qiclaw-provider-thinking-immediate',
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      runTurn: async (input) => {
+        input.observer?.record(createTelemetryEvent('provider_called', 'provider_decision', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 0,
+          messageCount: 2,
+          promptRawChars: 42,
+          toolNames: [],
+          messageSummaries: [
+            { role: 'system', rawChars: 12, contentBlockCount: 1 },
+            { role: 'user', rawChars: 20, contentBlockCount: 1 }
+          ],
+          totalContentBlockCount: 2,
+          hasSystemPrompt: true,
+          promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"}]}'
+        }));
+
+        const outputAfterProviderCalled = writes.join('');
+        expect(outputAfterProviderCalled).toContain('\nQiClaw\n🧠 Thinking.\n');
+        expect(outputAfterProviderCalled).not.toContain('handled: inspect package.json');
+
+        input.observer?.record(createTelemetryEvent('provider_responded', 'provider_decision', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 0,
+          stopReason: 'end_turn',
+          usage: {
+            inputTokens: 12,
+            outputTokens: 8,
+            totalTokens: 20
+          },
+          responseContentBlockCount: 1,
+          toolCallCount: 0,
+          hasTextOutput: true,
+          responseContentBlocksByType: { text: 1 },
+          toolCallSummaries: [],
+          providerUsageRawRedacted: {
+            input_tokens: 12,
+            output_tokens: 8
+          },
+          providerStopDetails: {
+            stop_reason: 'end_turn'
+          },
+          responsePreviewRedacted: '[{"type":"text","text":"handled"}]',
+          durationMs: 20
+        }));
+
+        expectTopLevelResponding(writes.join(''));
+
+        return {
+          stopReason: 'completed',
+          finalAnswer: `handled: ${input.userInput}`,
+          history: [],
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            toolEvidenceSatisfied: true,
+            toolMessagesCount: 0,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+
+    const output = writes.join('');
+    const normalizedOutput = stripAnsi(output);
+    const respondingIndex = normalizedOutput.indexOf('✓ Responding\n');
+    expectTopLevelResponding(output);
+    expect(normalizedOutput.indexOf('QiClaw\n')).toBeLessThan(normalizedOutput.indexOf('🧠 Thinking.\n'));
+    expect(normalizedOutput.indexOf('🧠 Thinking.\n')).toBeLessThan(respondingIndex);
+    expect(respondingIndex).toBeLessThan(normalizedOutput.indexOf('  handled: inspect package.json\n'));
+    expect(normalizedOutput).toContain('  handled: inspect package.json\n');
+  });
+
+  it('shows QiClaw only once and preserves one responding line per provider round in the same turn', async () => {
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: ['--prompt', 'inspect package.json'],
+      cwd: '/tmp/qiclaw-provider-thinking-multi-round',
+      stdout: {
+        isTTY: true,
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      } as Pick<NodeJS.WriteStream, 'write'> & { isTTY: boolean },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: '/tmp/qiclaw-provider-thinking-multi-round',
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 6
+      }),
+      runTurn: async (input) => {
+        for (let providerRound = 1; providerRound <= 5; providerRound += 1) {
+          input.observer?.record(createTelemetryEvent('provider_called', 'provider_decision', {
+            turnId: 'turn-1',
+            providerRound,
+            toolRound: providerRound - 1,
+            messageCount: providerRound + 1,
+            promptRawChars: 40 + providerRound,
+            toolNames: providerRound === 1 ? [] : ['shell_readonly'],
+            messageSummaries: [
+              { role: 'system', rawChars: 12, contentBlockCount: 1 },
+              { role: 'user', rawChars: 20, contentBlockCount: 1 }
+            ],
+            totalContentBlockCount: 2,
+            hasSystemPrompt: true,
+            promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"}]}'
+          }));
+          input.observer?.record(createTelemetryEvent('provider_responded', 'provider_decision', {
+            turnId: 'turn-1',
+            providerRound,
+            toolRound: providerRound - 1,
+            stopReason: providerRound === 5 ? 'end_turn' : 'tool_use',
+            usage: { inputTokens: 10 + providerRound, outputTokens: 5 + providerRound, totalTokens: 15 + providerRound * 2 },
+            responseContentBlockCount: 1,
+            toolCallCount: providerRound === 5 ? 0 : 1,
+            hasTextOutput: providerRound === 5,
+            responseContentBlocksByType: providerRound === 5 ? { text: 1 } : { tool_use: 1 },
+            toolCallSummaries: [],
+            providerUsageRawRedacted: { input_tokens: 10 + providerRound, output_tokens: 5 + providerRound },
+            providerStopDetails: { stop_reason: providerRound === 5 ? 'end_turn' : 'tool_use' },
+            responsePreviewRedacted: providerRound === 5 ? '[{"type":"text","text":"handled"}]' : '[{"type":"tool_use"}]',
+            durationMs: 20 + providerRound
+          }));
+
+          if (providerRound < 5) {
+            input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+              turnId: 'turn-1',
+              providerRound,
+              toolRound: providerRound,
+              toolName: 'shell_readonly',
+              toolCallId: `call-${providerRound}`,
+              inputPreview: '{"command":"git diff -- repl.ts"}',
+              inputRawRedacted: { command: 'git diff -- repl.ts' }
+            }));
+            input.observer?.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
+              turnId: 'turn-1',
+              providerRound,
+              toolRound: providerRound,
+              toolName: 'shell_readonly',
+              toolCallId: `call-${providerRound}`,
+              durationMs: 15,
+              isError: false,
+              outputPreview: '',
+              outputRawChars: 0,
+              outputSummary: 'done'
+            }));
+          }
+        }
+
+        return {
+          stopReason: 'completed',
+          finalAnswer: `handled: ${input.userInput}`,
+          history: [],
+          toolRoundsUsed: 4,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            toolEvidenceSatisfied: true,
+            toolMessagesCount: 4,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+
+    const output = writes.join('');
+    const normalizedOutput = renderTerminalTranscript(output);
+    expect(normalizedOutput.match(/(?:^|\n)QiClaw\n/g)).toHaveLength(1);
+    expect(normalizedOutput.match(/(?:^|\n)✓ Responding\n/g)).toHaveLength(5);
+    expect(normalizedOutput).not.toContain('  ✓ Responding\n');
+    expect(normalizedOutput.match(/  · shell:read git diff -- repl.ts \| done \(15ms\)\n/g)).toHaveLength(4);
+    expect(normalizedOutput).toContain('  handled: inspect package.json\n');
+  });
+
+  it('transitions waiting provider status before rendering the footer', async () => {
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: ['--prompt', 'inspect package.json'],
+      cwd: '/tmp/qiclaw-provider-thinking-footer',
+      stdout: {
+        isTTY: true,
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      } as Pick<NodeJS.WriteStream, 'write'> & { isTTY: boolean },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: '/tmp/qiclaw-provider-thinking-footer',
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      runTurn: async (input) => {
+        input.observer?.record(createTelemetryEvent('provider_called', 'provider_decision', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 0,
+          messageCount: 2,
+          promptRawChars: 42,
+          toolNames: [],
+          messageSummaries: [
+            { role: 'system', rawChars: 12, contentBlockCount: 1 },
+            { role: 'user', rawChars: 20, contentBlockCount: 1 }
+          ],
+          totalContentBlockCount: 2,
+          hasSystemPrompt: true,
+          promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"}]}'
+        }));
+        expect(stripAnsi(writes.join(''))).toContain('\nQiClaw\n🧠 Thinking.\n');
+        input.observer?.record(createTelemetryEvent('turn_summary', 'completion_check', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 0,
+          providerRounds: 1,
+          toolRoundsUsed: 0,
+          toolCallsTotal: 0,
+          toolCallsByName: {},
+          inputTokensTotal: 12,
+          outputTokensTotal: 8,
+          promptCharsMax: 42,
+          toolResultCharsInFinalPrompt: 0,
+          assistantToolCallCharsInFinalPrompt: 0,
+          toolResultPromptGrowthCharsTotal: 0,
+          toolResultCharsAddedAcrossTurn: 0,
+          turnCompleted: true,
+          stopReason: 'completed'
+        }));
+        input.observer?.record(createTelemetryEvent('turn_completed', 'completion_check', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 0,
+          stopReason: 'completed',
+          toolRoundsUsed: 0,
+          isVerified: true,
+          durationMs: 5
+        }));
+
+        return {
+          stopReason: 'completed',
+          finalAnswer: '',
+          history: [],
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: false,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: false,
+            toolEvidenceSatisfied: true,
+            toolMessagesCount: 0,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+
+    const output = writes.join('');
+    const normalizedOutput = stripAnsi(output);
+    expectTopLevelResponding(output);
+    expect(normalizedOutput).toContain('─ completed');
+    expect(normalizedOutput.indexOf('✓ Responding\n')).toBeLessThan(normalizedOutput.indexOf('─ completed'));
+  });
+
+  it('preserves replacement semantics for provider status on tty without cursor controls', async () => {
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: ['--prompt', 'inspect package.json'],
+      cwd: '/tmp/qiclaw-provider-thinking-fallback-tty',
+      stdout: {
+        isTTY: true,
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      } as Pick<NodeJS.WriteStream, 'write'> & { isTTY: boolean },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: '/tmp/qiclaw-provider-thinking-fallback-tty',
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      runTurn: async (input) => {
+        input.observer?.record(createTelemetryEvent('provider_called', 'provider_decision', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 0,
+          messageCount: 2,
+          promptRawChars: 42,
+          toolNames: [],
+          messageSummaries: [
+            { role: 'system', rawChars: 12, contentBlockCount: 1 },
+            { role: 'user', rawChars: 20, contentBlockCount: 1 }
+          ],
+          totalContentBlockCount: 2,
+          hasSystemPrompt: true,
+          promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"}]}'
+        }));
+        input.observer?.record(createTelemetryEvent('provider_responded', 'provider_decision', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 0,
+          stopReason: 'end_turn',
+          usage: { inputTokens: 12, outputTokens: 8, totalTokens: 20 },
+          responseContentBlockCount: 1,
+          toolCallCount: 0,
+          hasTextOutput: true,
+          responseContentBlocksByType: { text: 1 },
+          toolCallSummaries: [],
+          providerUsageRawRedacted: { input_tokens: 12, output_tokens: 8 },
+          providerStopDetails: { stop_reason: 'end_turn' },
+          responsePreviewRedacted: '[{"type":"text","text":"handled"}]',
+          durationMs: 20
+        }));
+
+        return {
+          stopReason: 'completed',
+          finalAnswer: `handled: ${input.userInput}`,
+          history: [],
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            toolEvidenceSatisfied: true,
+            toolMessagesCount: 0,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+
+    const transcript = renderTerminalTranscript(writes.join(''));
+    expect(transcript).not.toContain('🧠 Thinking.\n✓ Responding\n');
+    expect(transcript).toContain('\nQiClaw\n✓ Responding\n  handled: inspect package.json\n');
+  });
+
+  it('replaces the previous thinking frame after the animation cycles back to Thinking. on fallback tty', async () => {
+    vi.useFakeTimers();
+
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: ['--prompt', 'inspect package.json'],
+      cwd: '/tmp/qiclaw-provider-thinking-cycle-fallback-tty',
+      stdout: {
+        isTTY: true,
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      } as Pick<NodeJS.WriteStream, 'write'> & { isTTY: boolean },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: '/tmp/qiclaw-provider-thinking-cycle-fallback-tty',
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      runTurn: async (input) => {
+        input.observer?.record(createTelemetryEvent('provider_called', 'provider_decision', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 0,
+          messageCount: 2,
+          promptRawChars: 42,
+          toolNames: [],
+          messageSummaries: [
+            { role: 'system', rawChars: 12, contentBlockCount: 1 },
+            { role: 'user', rawChars: 20, contentBlockCount: 1 }
+          ],
+          totalContentBlockCount: 2,
+          hasSystemPrompt: true,
+          promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"}]}'
+        }));
+
+        await vi.advanceTimersByTimeAsync(1600);
+
+        input.observer?.record(createTelemetryEvent('provider_responded', 'provider_decision', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 0,
+          stopReason: 'end_turn',
+          usage: { inputTokens: 12, outputTokens: 8, totalTokens: 20 },
+          responseContentBlockCount: 1,
+          toolCallCount: 0,
+          hasTextOutput: true,
+          responseContentBlocksByType: { text: 1 },
+          toolCallSummaries: [],
+          providerUsageRawRedacted: { input_tokens: 12, output_tokens: 8 },
+          providerStopDetails: { stop_reason: 'end_turn' },
+          responsePreviewRedacted: '[{"type":"text","text":"handled"}]',
+          durationMs: 20
+        }));
+
+        return {
+          stopReason: 'completed',
+          finalAnswer: `handled: ${input.userInput}`,
+          history: [],
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            toolEvidenceSatisfied: true,
+            toolMessagesCount: 0,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+
+    const transcript = renderTerminalTranscript(writes.join(''));
+    expect(transcript).not.toContain('🧠 Thinking...\n🧠 Thinking.\n');
+    expect(transcript).not.toContain('🧠 Thinking.\n✓ Responding\n');
+    expect(transcript).toContain('\nQiClaw\n✓ Responding\n  handled: inspect package.json\n');
+  });
+
+  it('cleans up provider thinking timers when a turn throws after provider_called', async () => {
+    vi.useFakeTimers();
+
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: ['--prompt', 'inspect package.json'],
+      cwd: '/tmp/qiclaw-provider-thinking-error-cleanup',
+      stdout: {
+        isTTY: true,
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      } as Pick<NodeJS.WriteStream, 'write'> & { isTTY: boolean },
+      stderr: {
+        write() {
+          return true;
+        }
+      },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: '/tmp/qiclaw-provider-thinking-error-cleanup',
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      runTurn: async (input) => {
+        input.observer?.record(createTelemetryEvent('provider_called', 'provider_decision', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 0,
+          messageCount: 2,
+          promptRawChars: 42,
+          toolNames: [],
+          messageSummaries: [
+            { role: 'system', rawChars: 12, contentBlockCount: 1 },
+            { role: 'user', rawChars: 20, contentBlockCount: 1 }
+          ],
+          totalContentBlockCount: 2,
+          hasSystemPrompt: true,
+          promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"}]}'
+        }));
+
+        throw new Error('turn failed');
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+
+    const outputAfterFailure = writes.join('');
+    await vi.advanceTimersByTimeAsync(1600);
+    expect(writes.join('')).toBe(outputAfterFailure);
+  });
+
+  it('does not animate provider thinking frames in non-tty mode', async () => {
+    vi.useFakeTimers();
+
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: ['--prompt', 'inspect package.json'],
+      cwd: '/tmp/qiclaw-provider-thinking-non-tty',
+      stdout: {
+        isTTY: false,
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      } as Pick<NodeJS.WriteStream, 'write'> & { isTTY: boolean },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: '/tmp/qiclaw-provider-thinking-non-tty',
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      runTurn: async (input) => {
+        input.observer?.record(createTelemetryEvent('provider_called', 'provider_decision', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 0,
+          messageCount: 2,
+          promptRawChars: 42,
+          toolNames: [],
+          messageSummaries: [
+            { role: 'system', rawChars: 12, contentBlockCount: 1 },
+            { role: 'user', rawChars: 20, contentBlockCount: 1 }
+          ],
+          totalContentBlockCount: 2,
+          hasSystemPrompt: true,
+          promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"}]}'
+        }));
+
+        await vi.advanceTimersByTimeAsync(1600);
+
+        return {
+          stopReason: 'completed',
+          finalAnswer: `handled: ${input.userInput}`,
+          history: [],
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            toolEvidenceSatisfied: true,
+            toolMessagesCount: 0,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+
+    const output = writes.join('');
+    const thinkingFrames = output.match(/🧠 Thinking/g) ?? [];
+    expect(thinkingFrames.length).toBeLessThanOrEqual(1);
+    expect(output).not.toContain('\u001b[1A');
   });
 
   it('returns exit code 1 and prints an error when --debug-log is missing a value', async () => {
@@ -1812,7 +2553,7 @@ describe('buildCli', () => {
     await expect(cli.run()).resolves.toBe(0);
     expectRenderedCliOutput(
       writes,
-      '\nQiClaw\n  · read /tmp/package.json\n  Tóm tắt:\n  - handled\n─ completed • 1 provider • 1 tools • 185 in / 15 out • 6.3s\n\n'
+      '\nQiClaw\n  · read /tmp/package.json\n  Tóm tắt:\n  - handled\n─ completed • verified • 1 provider • 1 tool round • 1 tools • 185 in / 15 out • 6.3s\n\n'
     );
   });
 

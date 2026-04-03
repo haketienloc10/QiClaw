@@ -26,6 +26,9 @@ export type Cli = {
 };
 
 interface AssistantBlockWriter {
+  startProviderThinking(): void;
+  markResponding(): void;
+  clearProviderStatus(): void;
   writeAssistantLine(text: string, toolCallId?: string): void;
   replaceAssistantLine(toolCallId: string, text: string): void;
   writeAssistantTextBlock(text: string): void;
@@ -33,8 +36,15 @@ interface AssistantBlockWriter {
   resetTurn(): void;
 }
 
+interface PendingFooterRenderState {
+  isVerified: boolean;
+  toolRoundsUsed: number;
+}
+
 type CliStdout = Pick<NodeJS.WriteStream, 'write'> & {
   isTTY?: boolean;
+  clearLine?(dir: -1 | 0 | 1, callback?: () => void): boolean;
+  moveCursor?(dx: number, dy: number, callback?: () => void): boolean;
 };
 
 type CliRunTurnInput = RunAgentTurnInput & {
@@ -72,6 +82,8 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
 
   return {
     async run() {
+      let assistantBlockWriter: AssistantBlockWriter | undefined;
+
       try {
         loadCliEnvFiles(cwd);
         const parsed = parseArgs(argv);
@@ -81,7 +93,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
           baseUrl: parsed.baseUrl,
           apiKey: parsed.apiKey
         });
-        const assistantBlockWriter = createAssistantBlockWriter(stdout);
+        assistantBlockWriter = createAssistantBlockWriter(stdout);
         const cliObserver = createCliObserver({
           cwd,
           metrics,
@@ -117,13 +129,15 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
               stdout.write(`${text}\n`);
             },
             renderFinalAnswer(text) {
-              assistantBlockWriter.writeAssistantTextBlock(text);
+              assistantBlockWriter?.writeAssistantTextBlock(text);
             }
           });
           const result = await repl.runOnce(parsed.prompt);
-          assistantBlockWriter.writeAssistantTextBlock(result.finalAnswer);
+          if (result.finalAnswer.length > 0) {
+            assistantBlockWriter?.writeAssistantTextBlock(result.finalAnswer);
+          }
           cliObserver.flushPendingFooter();
-          assistantBlockWriter.resetTurn();
+          assistantBlockWriter?.resetTurn();
           return 0;
         }
 
@@ -178,11 +192,11 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
             stdout.write(`${text}\n`);
           },
           renderFinalAnswer(text) {
-            assistantBlockWriter.writeAssistantTextBlock(text);
+            assistantBlockWriter?.writeAssistantTextBlock(text);
           },
           afterTurnRendered() {
             cliObserver.flushPendingFooter();
-            assistantBlockWriter.resetTurn();
+            assistantBlockWriter?.resetTurn();
           }
         });
 
@@ -190,6 +204,8 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
       } catch (error) {
         stderr.write(`${formatCliError(error)}\n`);
         return 1;
+      } finally {
+        assistantBlockWriter?.resetTurn();
       }
     }
   };
@@ -205,8 +221,13 @@ function createAssistantBlockWriter(stdout: CliStdout): AssistantBlockWriter {
   let hasWrittenOutput = false;
   let trailingNewlineCount = 0;
   let activeActivityLineCount = 0;
+  let providerStatus: 'thinking' | 'responding' | undefined;
+  let providerStatusFrameIndex = 0;
+  let hasRenderedProviderStatusLine = false;
+  let providerStatusTimer: ReturnType<typeof setInterval> | undefined;
   const activityLineIndexes = new Map<string, number>();
   const renderedActivityLines: string[] = [];
+  const providerThinkingFrames = ['🧠 Thinking.', '🧠 Thinking..', '🧠 Thinking...'];
 
   function write(text: string): void {
     stdout.write(text);
@@ -227,9 +248,42 @@ function createAssistantBlockWriter(stdout: CliStdout): AssistantBlockWriter {
     write(text);
   }
 
+  function clearProviderStatusTimer(): void {
+    if (!providerStatusTimer) {
+      return;
+    }
+
+    clearInterval(providerStatusTimer);
+    providerStatusTimer = undefined;
+  }
+
+  function resetActivityTracking(): void {
+    activeActivityLineCount = 0;
+    activityLineIndexes.clear();
+    renderedActivityLines.length = 0;
+  }
+
   function writeRenderedActivityLine(text: string): void {
     writeRaw(`  ${text}\n`);
     activeActivityLineCount += 1;
+  }
+
+  function canRewriteTerminalLines(): boolean {
+    return Boolean(stdout.isTTY && stdout.moveCursor && stdout.clearLine);
+  }
+
+  function rewritePreviousLine(): void {
+    if (!stdout.isTTY) {
+      return;
+    }
+
+    if (canRewriteTerminalLines()) {
+      stdout.moveCursor?.(0, -1);
+      stdout.clearLine?.(0);
+      return;
+    }
+
+    writeRaw('\u001b[1A\u001b[2K');
   }
 
   function clearActiveActivityLines(): void {
@@ -238,7 +292,10 @@ function createAssistantBlockWriter(stdout: CliStdout): AssistantBlockWriter {
       return;
     }
 
-    writeRaw('\u001b[1A\u001b[2K\r'.repeat(activeActivityLineCount));
+    for (let index = 0; index < activeActivityLineCount; index += 1) {
+      rewritePreviousLine();
+    }
+
     activeActivityLineCount = 0;
   }
 
@@ -274,9 +331,90 @@ function createAssistantBlockWriter(stdout: CliStdout): AssistantBlockWriter {
     hasStartedTurn = true;
   }
 
+  function writeProviderStatusLine(text: string): void {
+    writeRaw(`${text}\n`);
+    hasRenderedProviderStatusLine = true;
+  }
+
+  function rewriteProviderStatusLine(): void {
+    if (!stdout.isTTY || !hasRenderedProviderStatusLine) {
+      return;
+    }
+
+    rewritePreviousLine();
+  }
+
+  function renderThinkingFrame(): void {
+    const frame = providerThinkingFrames[providerStatusFrameIndex] ?? providerThinkingFrames[0];
+    providerStatusFrameIndex = (providerStatusFrameIndex + 1) % providerThinkingFrames.length;
+
+    if (stdout.isTTY && providerStatus === 'thinking') {
+      rewriteProviderStatusLine();
+    }
+
+    writeProviderStatusLine(frame);
+  }
+
+  function prepareForProviderRound(): void {
+    if (!hasStartedTurn) {
+      ensureTurnPrelude();
+    }
+
+    resetActivityTracking();
+    providerStatus = undefined;
+    hasRenderedProviderStatusLine = false;
+  }
+
+  function ensureRespondingStatus(): void {
+    if (providerStatus !== 'thinking') {
+      return;
+    }
+
+    clearProviderStatusTimer();
+
+    if (stdout.isTTY) {
+      rewriteProviderStatusLine();
+      writeProviderStatusLine('\u001b[32m✓\u001b[39m Responding');
+    } else {
+      writeProviderStatusLine('✓ Responding');
+    }
+
+    providerStatus = 'responding';
+  }
+
   return {
+    startProviderThinking() {
+      clearProviderStatusTimer();
+
+      if (!stdout.isTTY) {
+        providerStatus = undefined;
+        return;
+      }
+
+      prepareForProviderRound();
+      providerStatus = 'thinking';
+      providerStatusFrameIndex = 0;
+      renderThinkingFrame();
+      providerStatusTimer = setInterval(() => {
+        if (providerStatus !== 'thinking') {
+          clearProviderStatusTimer();
+          return;
+        }
+
+        renderThinkingFrame();
+      }, 500);
+    },
+    markResponding() {
+      ensureRespondingStatus();
+    },
+    clearProviderStatus() {
+      clearProviderStatusTimer();
+      providerStatus = undefined;
+      hasRenderedProviderStatusLine = false;
+    },
     writeAssistantLine(text: string, toolCallId?: string) {
       ensureTurnPrelude();
+      ensureRespondingStatus();
       if (toolCallId) {
         activityLineIndexes.set(toolCallId, renderedActivityLines.length);
       }
@@ -284,6 +422,8 @@ function createAssistantBlockWriter(stdout: CliStdout): AssistantBlockWriter {
       writeRenderedActivityLine(text);
     },
     replaceAssistantLine(toolCallId: string, text: string) {
+      ensureTurnPrelude();
+      ensureRespondingStatus();
       const index = activityLineIndexes.get(toolCallId);
       if (index !== undefined) {
         renderedActivityLines[index] = text;
@@ -297,20 +437,29 @@ function createAssistantBlockWriter(stdout: CliStdout): AssistantBlockWriter {
     },
     writeAssistantTextBlock(text: string) {
       ensureTurnPrelude();
+      ensureRespondingStatus();
       activeActivityLineCount = 0;
 
       for (const line of text.split('\n')) {
         write(`  ${line}\n`);
       }
+
+      providerStatus = undefined;
     },
     writeFooterLine(text: string) {
       ensureTurnPrelude();
+      ensureRespondingStatus();
       activeActivityLineCount = 0;
       write(`${text}\n\n`);
+      providerStatus = undefined;
     },
     resetTurn() {
+      clearProviderStatusTimer();
       hasStartedTurn = false;
       activeActivityLineCount = 0;
+      providerStatus = undefined;
+      providerStatusFrameIndex = 0;
+      hasRenderedProviderStatusLine = false;
       activityLineIndexes.clear();
       renderedActivityLines.length = 0;
     }
@@ -330,6 +479,7 @@ function createCliObserver(options: {
 } {
   const observers: TelemetryObserver[] = [options.metrics];
   let compactObserver: CompactCliTelemetryObserver | undefined;
+  let pendingFooterRenderState: PendingFooterRenderState | undefined;
 
   if (options.showCompactToolStatus) {
     compactObserver = createCompactCliTelemetryObserver({
@@ -340,7 +490,20 @@ function createCliObserver(options: {
         options.assistantBlockWriter.replaceAssistantLine(toolCallId, text);
       },
       writeFooterLine(text) {
-        options.assistantBlockWriter.writeFooterLine(text);
+        let renderedText = text;
+
+        if (pendingFooterRenderState?.isVerified) {
+          renderedText = renderedText.replace('─ completed', '─ completed • verified');
+        }
+
+        if (pendingFooterRenderState && pendingFooterRenderState.toolRoundsUsed > 0) {
+          renderedText = renderedText.replace(
+            ' provider',
+            ` provider • ${pendingFooterRenderState.toolRoundsUsed} tool round`
+          );
+        }
+
+        options.assistantBlockWriter.writeFooterLine(renderedText);
       }
     });
     observers.push(compactObserver);
@@ -353,10 +516,28 @@ function createCliObserver(options: {
     observers.push(createJsonLineLogger(createFileJsonLineWriter(resolvedDebugLogPath)));
   }
 
+  const compositeObserver = createCompositeObserver(observers);
+
   return {
-    observer: createCompositeObserver(observers),
+    observer: {
+      record(event) {
+        if (event.type === 'provider_called') {
+          options.assistantBlockWriter.startProviderThinking();
+        } else if (event.type === 'provider_responded') {
+          options.assistantBlockWriter.markResponding();
+        } else if (event.type === 'turn_completed' || event.type === 'turn_stopped') {
+          pendingFooterRenderState = {
+            isVerified: event.data.isVerified,
+            toolRoundsUsed: event.data.toolRoundsUsed
+          };
+        }
+
+        compositeObserver.record(event);
+      }
+    },
     flushPendingFooter() {
       compactObserver?.flushPendingFooter();
+      pendingFooterRenderState = undefined;
     }
   };
 }

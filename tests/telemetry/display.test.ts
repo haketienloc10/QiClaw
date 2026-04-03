@@ -267,4 +267,48 @@ describe('createCompactCliTelemetryObserver', () => {
 
     expect(lines).toEqual(['─ completed • 1 provider • 185 in / 15 out • 6.3s']);
   });
+
+  it('adds verification status and tool round counts to the footer when tools run', () => {
+    const lines: string[] = [];
+    const observer = createCompactCliTelemetryObserver({
+      writeActivityLine(text) {
+        lines.push(text);
+      },
+      writeFooterLine(text) {
+        lines.push(text);
+      }
+    }) as ReturnType<typeof createCompactCliTelemetryObserver> & { flushPendingFooter?: () => void };
+
+    observer.record(createTelemetryEvent('turn_completed', 'completion_check', {
+      turnId: 'turn-2',
+      providerRound: 2,
+      toolRound: 1,
+      stopReason: 'completed',
+      toolRoundsUsed: 1,
+      isVerified: true,
+      durationMs: 4800
+    }));
+    observer.record(createTelemetryEvent('turn_summary', 'completion_check', {
+      turnId: 'turn-2',
+      providerRound: 2,
+      toolRound: 1,
+      providerRounds: 2,
+      toolRoundsUsed: 1,
+      toolCallsTotal: 3,
+      toolCallsByName: { read_file: 2, search: 1 },
+      inputTokensTotal: 516,
+      outputTokensTotal: 274,
+      promptCharsMax: 100,
+      toolResultCharsInFinalPrompt: 0,
+      assistantToolCallCharsInFinalPrompt: 0,
+      toolResultPromptGrowthCharsTotal: 0,
+      toolResultCharsAddedAcrossTurn: 0,
+      turnCompleted: true,
+      stopReason: 'completed'
+    }));
+
+    observer.flushPendingFooter?.();
+
+    expect(lines).toEqual(['─ completed • verified • 2 provider • 1 tool round • 3 tools • 516 in / 274 out • 4.8s']);
+  });
 });

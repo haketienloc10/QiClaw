@@ -26,6 +26,33 @@ export function createRepl(options: CreateReplOptions): Repl {
   const readLine = options.readLine ?? createConsoleReadLine();
   const writeLine = options.writeLine ?? ((text: string) => process.stdout.write(`${text}\n`));
   const renderFinalAnswer = options.renderFinalAnswer ?? writeLine;
+  let multilineMode = false;
+  let multilineBuffer: string[] = [];
+
+  function formatHelpText(): string {
+    return 'Commands: /help, /multiline, /skills, /exit';
+  }
+
+  function isExitCommand(trimmed: string): boolean {
+    return trimmed === '/exit' || trimmed === 'exit';
+  }
+
+  function isMultilineActive(): boolean {
+    return multilineMode;
+  }
+
+  function clearMultilineBuffer(): void {
+    multilineBuffer = [];
+    multilineMode = false;
+  }
+
+  function appendMultilineLine(line: string): void {
+    multilineBuffer.push(line);
+  }
+
+  function readBufferedMultilineText(): string {
+    return multilineBuffer.join('\n').trim();
+  }
 
   return {
     async runOnce(input: string): Promise<ReplTurnResult> {
@@ -38,7 +65,7 @@ export function createRepl(options: CreateReplOptions): Repl {
     },
     async runInteractive(): Promise<number> {
       while (true) {
-        const line = await readLine(options.promptLabel);
+        const line = await readLine(isMultilineActive() ? '… ' : options.promptLabel);
 
         if (line === undefined) {
           writeLine('Goodbye.');
@@ -47,13 +74,55 @@ export function createRepl(options: CreateReplOptions): Repl {
 
         const trimmed = line.trim();
 
+        if (isMultilineActive()) {
+          if (trimmed === '/send') {
+            const multilineInput = readBufferedMultilineText();
+            clearMultilineBuffer();
+
+            if (multilineInput.length === 0) {
+              continue;
+            }
+
+            const result = await this.runOnce(multilineInput);
+            renderFinalAnswer(result.finalAnswer);
+            options.afterTurnRendered?.();
+            continue;
+          }
+
+          if (trimmed === '/cancel') {
+            clearMultilineBuffer();
+            writeLine('Multiline draft discarded.');
+            continue;
+          }
+
+          appendMultilineLine(line);
+          continue;
+        }
+
         if (trimmed.length === 0) {
           continue;
         }
 
-        if (trimmed === '/exit' || trimmed === 'exit') {
+        if (isExitCommand(trimmed)) {
           writeLine('Goodbye.');
           return 0;
+        }
+
+        if (trimmed === '/help') {
+          writeLine(formatHelpText());
+          continue;
+        }
+
+        if (trimmed === '/skills') {
+          writeLine('Skills coming soon.');
+          continue;
+        }
+
+        if (trimmed === '/multiline') {
+          multilineMode = true;
+          multilineBuffer = [];
+          writeLine('Multiline mode on. Enter /send to submit or /cancel to discard.');
+          continue;
         }
 
         const result = await this.runOnce(trimmed);

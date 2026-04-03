@@ -268,7 +268,7 @@ describe('createCompactCliTelemetryObserver', () => {
     expect(lines).toEqual(['─ completed • 1 provider • 185 in / 15 out • 6.3s']);
   });
 
-  it('adds verification status and tool round counts to the footer when tools run', () => {
+  it('renders the compact base footer without CLI-only verification and tool-round details', () => {
     const lines: string[] = [];
     const observer = createCompactCliTelemetryObserver({
       writeActivityLine(text) {
@@ -309,6 +309,6 @@ describe('createCompactCliTelemetryObserver', () => {
 
     observer.flushPendingFooter?.();
 
-    expect(lines).toEqual(['─ completed • verified • 2 provider • 1 tool round • 3 tools • 516 in / 274 out • 4.8s']);
+    expect(lines).toEqual(['─ completed • 2 provider • 3 tools • 516 in / 274 out • 4.8s']);
   });
 });

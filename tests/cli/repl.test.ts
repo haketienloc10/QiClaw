@@ -1217,6 +1217,89 @@ describe('buildCli', () => {
     expect(normalizedOutput).toContain('  handled: inspect package.json\n');
   });
 
+  it('renders provider status at top level instead of indenting it into the assistant body', async () => {
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: ['--prompt', 'inspect package.json'],
+      cwd: '/tmp/qiclaw-provider-layout',
+      stdout: {
+        isTTY: true,
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      } as Pick<NodeJS.WriteStream, 'write'> & { isTTY: boolean },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: '/tmp/qiclaw-provider-layout',
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      runTurn: async (input) => {
+        input.observer?.record(createTelemetryEvent('provider_called', 'provider_decision', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 0,
+          messageCount: 2,
+          promptRawChars: 42,
+          toolNames: [],
+          messageSummaries: [
+            { role: 'system', rawChars: 12, contentBlockCount: 1 },
+            { role: 'user', rawChars: 20, contentBlockCount: 1 }
+          ],
+          totalContentBlockCount: 2,
+          hasSystemPrompt: true,
+          promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"}]}'
+        }));
+
+        input.observer?.record(createTelemetryEvent('provider_responded', 'provider_decision', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 0,
+          stopReason: 'end_turn',
+          usage: { inputTokens: 12, outputTokens: 8, totalTokens: 20 },
+          responseContentBlockCount: 1,
+          toolCallCount: 0,
+          hasTextOutput: true,
+          responseContentBlocksByType: { text: 1 },
+          toolCallSummaries: [],
+          providerUsageRawRedacted: { input_tokens: 12, output_tokens: 8 },
+          providerStopDetails: { stop_reason: 'end_turn' },
+          responsePreviewRedacted: '[{"type":"text","text":"handled"}]',
+          durationMs: 20
+        }));
+
+        return {
+          stopReason: 'completed',
+          finalAnswer: 'handled: inspect package.json',
+          history: [],
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            toolEvidenceSatisfied: true,
+            toolMessagesCount: 0,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+    expect(stripAnsi(renderTerminalTranscript(writes.join('')))).toBe('\nQiClaw\n✓ Responding\n  handled: inspect package.json\n');
+  });
+
   it('transitions waiting provider status before rendering the footer', async () => {
     const writes: string[] = [];
     const cli = buildCli({
@@ -1315,7 +1398,6 @@ describe('buildCli', () => {
     expect(normalizedOutput).toContain('─ completed');
     expect(normalizedOutput.indexOf('✓ Responding\n')).toBeLessThan(normalizedOutput.indexOf('─ completed'));
   });
-
   it('preserves replacement semantics for provider status on tty without cursor controls', async () => {
     const writes: string[] = [];
     const cli = buildCli({

@@ -17,8 +17,9 @@
     "vitest": "^3.2.4"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.80.0",
+    "@anthropic-ai/sdk": "^0.82.0",
     "better-sqlite3": "^12.8.0",
-    "openai": "^6.33.0"
+    "openai": "^6.33.0",
+    "picocolors": "^1.1.1"
   }
 }

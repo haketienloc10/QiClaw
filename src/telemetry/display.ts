@@ -1,3 +1,5 @@
+import pc from 'picocolors';
+
 import type {
   TelemetryEvent,
   TelemetryObserver,
@@ -8,6 +10,7 @@ import type {
 } from './observer.js';
 
 export interface CompactCliTelemetryObserverOptions {
+  mode?: 'compact' | 'interactive';
   writeActivityLine(text: string, toolCallId?: string): void;
   replaceActivityLine?(toolCallId: string, text: string): void;
   writeFooterLine(text: string): void;
@@ -28,25 +31,27 @@ export function createCompactCliTelemetryObserver(
 ): CompactCliTelemetryObserver {
   let pendingFooter: PendingFooterState | undefined;
   const toolActivityLabels = new Map<string, string>();
+  const mode = options.mode ?? 'compact';
 
   return {
     record(event: TelemetryEvent) {
       if (event.type === 'tool_call_started') {
-        const line = formatToolActivityLine(event.data);
+        const label = formatToolActivityLabel(event.data, mode);
 
-        if (line) {
-          toolActivityLabels.set(event.data.toolCallId, stripActivityLinePrefix(line));
-          options.writeActivityLine(line, event.data.toolCallId);
+        if (label) {
+          toolActivityLabels.set(event.data.toolCallId, label);
+          options.writeActivityLine(formatToolActivityLine(label, mode), event.data.toolCallId);
         }
         return;
       }
 
       if (event.type === 'tool_call_completed') {
-        const line = formatToolCompletionLine(event.data, toolActivityLabels.get(event.data.toolCallId));
+        const activityLabel = toolActivityLabels.get(event.data.toolCallId);
+        const line = formatToolCompletionLine(event.data, activityLabel, mode);
         toolActivityLabels.delete(event.data.toolCallId);
 
         if (line) {
-          if (options.replaceActivityLine) {
+          if (options.replaceActivityLine && mode === 'compact') {
             options.replaceActivityLine(event.data.toolCallId, line);
           } else {
             options.writeActivityLine(line);
@@ -71,7 +76,7 @@ export function createCompactCliTelemetryObserver(
         return;
       }
 
-      options.writeFooterLine(formatFooterLine(pendingFooter.summary, pendingFooter.durationMs));
+      options.writeFooterLine(formatFooterLine(pendingFooter.summary, pendingFooter.durationMs, mode));
       pendingFooter = undefined;
     }
   };
@@ -134,12 +139,28 @@ function createPendingFooterState(
   };
 }
 
-function formatToolActivityLine(data: ToolCallStartedTelemetryData): string | undefined {
-  const label = formatToolActivityLabel(data);
-  return label ? `· ${label}` : undefined;
+function formatToolActivityLine(label: string, mode: 'compact' | 'interactive'): string {
+  if (mode === 'interactive') {
+    return ` ${pc.cyan('⚡')} ${label}`;
+  }
+
+  return `· ${label}`;
 }
 
-function formatToolActivityLabel(data: ToolCallStartedTelemetryData): string | undefined {
+function formatToolActivityLabel(
+  data: ToolCallStartedTelemetryData,
+  mode: 'compact' | 'interactive'
+): string | undefined {
+  const actionLabel = formatToolActionLabel(data);
+
+  if (!actionLabel) {
+    return undefined;
+  }
+
+  return actionLabel;
+}
+
+function formatToolActionLabel(data: ToolCallStartedTelemetryData): string | undefined {
   if (data.toolName === 'shell_readonly' || data.toolName === 'shell_exec') {
     return `${formatShellToolKind(data.toolName)} ${formatShellCommandLabel(data.inputRawRedacted)}`;
   }
@@ -161,21 +182,28 @@ function formatToolActivityLabel(data: ToolCallStartedTelemetryData): string | u
 
 function formatToolCompletionLine(
   data: ToolCallCompletedTelemetryData,
-  activityLabel?: string
+  activityLabel: string | undefined,
+  mode: 'compact' | 'interactive'
 ): string | undefined {
   if (!activityLabel) {
     return undefined;
   }
 
-  return `· ${activityLabel} | ${formatToolCompletionStatus(data)} (${data.durationMs}ms)`;
+  const statusText = formatToolCompletionStatus(data, mode);
+  return mode === 'interactive'
+    ? ` └─ ${statusText} (${data.durationMs}ms)`
+    : `· ${activityLabel} | ${statusText} (${data.durationMs}ms)`;
 }
 
-function formatToolCompletionStatus(data: ToolCallCompletedTelemetryData): string {
+function formatToolCompletionStatus(
+  data: ToolCallCompletedTelemetryData,
+  mode: 'compact' | 'interactive'
+): string {
+  if (mode === 'interactive') {
+    return data.isError ? `${pc.red('✖')} ${pc.red('Fail')}` : `${pc.green('✔')} ${pc.green('Success')}`;
+  }
+
   return data.isError ? 'fail' : 'done';
-}
-
-function stripActivityLinePrefix(line: string): string {
-  return line.startsWith('· ') ? line.slice(2) : line;
 }
 
 function formatShellToolKind(toolName: 'shell_readonly' | 'shell_exec'): string {
@@ -222,9 +250,17 @@ function formatSearchLabel(input: unknown): string {
   return pattern.length > 0 ? pattern : 'pattern';
 }
 
-function formatFooterLine(summary: TurnSummaryTelemetryData, durationMs?: number): string {
+function formatFooterLine(
+  summary: TurnSummaryTelemetryData,
+  durationMs: number | undefined,
+  mode: 'compact' | 'interactive'
+): string {
+  if (mode === 'interactive') {
+    return formatInteractiveFooterLine(summary, durationMs);
+  }
+
   const parts = [
-    formatStatus(summary.stopReason),
+    formatCompactStatus(summary.stopReason),
     `${summary.providerRounds} provider`,
     summary.toolCallsTotal > 0 ? `${summary.toolCallsTotal} tools` : undefined,
     `${summary.inputTokensTotal} in / ${summary.outputTokensTotal} out`,
@@ -234,7 +270,22 @@ function formatFooterLine(summary: TurnSummaryTelemetryData, durationMs?: number
   return `─ ${parts.join(' • ')}`;
 }
 
-function formatStatus(stopReason: string): string {
+function formatInteractiveFooterLine(summary: TurnSummaryTelemetryData, durationMs?: number): string {
+  const isSuccess = summary.stopReason === 'completed';
+  const status = isSuccess
+    ? `${pc.green('✔')} ${pc.green(pc.bold('DONE'))}`
+    : `${pc.red('✖')} ${pc.red(pc.bold('FAIL: ' + summary.stopReason))}`;
+  const parts = [
+    `${summary.providerRounds} provider`,
+    summary.toolCallsTotal > 0 ? `${summary.toolCallsTotal} tools` : undefined,
+    `${summary.inputTokensTotal} in / ${summary.outputTokensTotal} out`,
+    durationMs === undefined ? undefined : `⏱️` + formatDurationSeconds(durationMs)
+  ].filter((part): part is string => Boolean(part));
+
+  return `${pc.dim('─'.repeat(54))}\n${status}${parts.length > 0 ? ` • ${parts.join(pc.dim(' • '))}` : ''}`;
+}
+
+function formatCompactStatus(stopReason: string): string {
   return stopReason === 'completed' ? 'completed' : `stopped: ${stopReason}`;
 }
 

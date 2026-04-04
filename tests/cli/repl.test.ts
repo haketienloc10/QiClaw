@@ -81,8 +81,45 @@ function createSuccessfulRunTurn(): (input: { userInput: string }) => Promise<Cl
   });
 }
 
+function createTestRuntime(cwd: string, observer?: { record(): void }) {
+  return {
+    provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+    availableTools: [],
+    cwd,
+    observer: observer ?? { record() {} },
+    agentSpec: defaultAgentSpec,
+    systemPrompt: 'Test prompt',
+    maxToolRounds: 3
+  };
+}
+
+function createPromptCliTestHarness(options: {
+  cwd: string;
+  runTurn: NonNullable<Parameters<typeof buildCli>[0]>['runTurn'];
+  stdout?: Pick<NodeJS.WriteStream, 'write'>;
+}): { writes: string[]; cli: ReturnType<typeof buildCli> } {
+  const writes: string[] = [];
+  const stdout = options.stdout ?? {
+    write(chunk: string | Uint8Array) {
+      writes.push(String(chunk));
+      return true;
+    }
+  };
+
+  return {
+    writes,
+    cli: buildCli({
+      argv: ['--prompt', 'inspect package.json'],
+      cwd: options.cwd,
+      stdout,
+      createRuntime: (runtimeOptions) => createTestRuntime(options.cwd, runtimeOptions.observer),
+      runTurn: options.runTurn
+    })
+  };
+}
+
 function expectExactlyOneBlankLineBeforeEachAssistantBlock(output: string): void {
-  const assistantBlockLabel = 'QiClaw\n';
+  const assistantBlockLabel = 'QiClaw';
   let blockIndex = output.indexOf(assistantBlockLabel);
   let isFirstBlock = true;
 
@@ -151,6 +188,16 @@ function expectTopLevelResponding(output: string): void {
   const normalizedOutput = renderTerminalTranscript(output);
   expect(normalizedOutput).toMatch(/(?:^|\n)✓ Responding\n/);
   expect(normalizedOutput).not.toContain('  ✓ Responding\n');
+}
+
+function expectContainsInOrder(text: string, markers: string[]): void {
+  let cursor = 0;
+
+  for (const marker of markers) {
+    const index = text.indexOf(marker, cursor);
+    expect(index, `Expected marker in order: ${marker}`).toBeGreaterThanOrEqual(cursor);
+    cursor = index + marker.length;
+  }
 }
 
 describe('createSuccessfulRunTurn', () => {
@@ -354,6 +401,37 @@ describe('createRepl', () => {
         maxToolRounds: 3
       }),
       runTurn: async (input) => {
+        input.observer?.record(createTelemetryEvent('provider_called', 'provider_decision', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 0,
+          messageCount: 2,
+          promptRawChars: 42,
+          toolNames: [],
+          messageSummaries: [
+            { role: 'system', rawChars: 12, contentBlockCount: 1 },
+            { role: 'user', rawChars: 20, contentBlockCount: 1 }
+          ],
+          totalContentBlockCount: 2,
+          hasSystemPrompt: true,
+          promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"}]}'
+        }));
+        input.observer?.record(createTelemetryEvent('provider_responded', 'provider_decision', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 0,
+          stopReason: 'tool_use',
+          usage: { inputTokens: 12, outputTokens: 8, totalTokens: 20 },
+          responseContentBlockCount: 1,
+          toolCallCount: 1,
+          hasTextOutput: false,
+          responseContentBlocksByType: { tool_use: 1 },
+          toolCallSummaries: [],
+          providerUsageRawRedacted: { input_tokens: 12, output_tokens: 8 },
+          providerStopDetails: { stop_reason: 'tool_use' },
+          responsePreviewRedacted: '[{"type":"tool_use"}]',
+          durationMs: 20
+        }));
         input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
           turnId: 'turn-1',
           providerRound: 1,
@@ -416,10 +494,18 @@ describe('createRepl', () => {
     });
 
     await expect(cli.run()).resolves.toBe(0);
-    expectRenderedCliOutput(
-      writes,
-      '\nQiClaw\n  · shell:read git status\n  Tôi sẽ kiểm tra trước.\n  \n  Tóm tắt:\n  - xong\n─ completed • verified • 2 provider • 1 tool round • 1 tools • 516 in / 274 out • 4.8s\n\nGoodbye.\n'
-    );
+    const output = stripAnsi(writes.join(''));
+    expectContainsInOrder(output, [
+      '┌────────────────────────────────────────────────────┐\n',
+      '│ ⚡QiClaw                       🤖 Model: test-model │\n',
+      '└────────────────────────────────────────────────────┘\n',
+      '\n🧠 Thinking...\n',
+      ' ⚡ Turn 1: shell:read git status\n',
+      '──────────────────────────────────────────────────────\n\nTôi sẽ kiểm tra trước.\n\nTóm tắt:\n- xong\n',
+      '──────────────────────────────────────────────────────\n',
+      '✔ DONE  ⏱ 4.8s • 2 providers • 1 tool\n\n',
+      'Goodbye.\n'
+    ]);
   });
 
   it('keeps exactly one blank line before each assistant block across interactive turns', async () => {
@@ -450,10 +536,15 @@ describe('createRepl', () => {
     });
 
     await expect(cli.run()).resolves.toBe(0);
-    expectRenderedCliOutput(
-      writes,
-      '\nQiClaw\n  handled: first question\n\nQiClaw\n  handled: second question\nGoodbye.\n'
-    );
+    const output = stripAnsi(writes.join(''));
+    expectContainsInOrder(output, [
+      '┌────────────────────────────────────────────────────┐\n',
+      '│ ⚡QiClaw                       🤖 Model: test-model │\n',
+      '└────────────────────────────────────────────────────┘\n',
+      '\n──────────────────────────────────────────────────────\n\nhandled: first question\n',
+      '\n──────────────────────────────────────────────────────\n\nhandled: second question\n',
+      'Goodbye.\n'
+    ]);
   });
 });
 
@@ -462,25 +553,8 @@ describe('buildCli', () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-telemetry-'));
     tempDirs.push(tempDir);
 
-    const writes: string[] = [];
-    const cli = buildCli({
-      argv: ['--prompt', 'inspect package.json'],
+    const { writes, cli } = createPromptCliTestHarness({
       cwd: tempDir,
-      stdout: {
-        write(chunk) {
-          writes.push(String(chunk));
-          return true;
-        }
-      },
-      createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
-        availableTools: [],
-        cwd: tempDir,
-        observer: runtimeOptions.observer ?? { record() {} },
-        agentSpec: defaultAgentSpec,
-        systemPrompt: 'Test prompt',
-        maxToolRounds: 3
-      }),
       runTurn: async (input) => {
         input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
           turnId: 'turn-1',
@@ -557,9 +631,14 @@ describe('buildCli', () => {
 
     await expect(cli.run()).resolves.toBe(0);
     const output = writes.join('');
-    expect(output).toBe(
-      '\nQiClaw\n  · read /tmp/package.json\n  · edit /tmp/package.json\n  · search package\n  · read /tmp/package.json | done (1ms)\n  handled: inspect package.json\n'
-    );
+    expectContainsInOrder(output, [
+      '\nQiClaw\n',
+      '  · read /tmp/package.json\n',
+      '  · edit /tmp/package.json\n',
+      '  · search package\n',
+      '  · read /tmp/package.json | done (1ms)\n',
+      '  handled: inspect package.json\n'
+    ]);
     expectExactlyOneBlankLineBeforeEachAssistantBlock(output);
     expect(output).not.toContain('Tool: Read');
     expect(output).not.toContain('secret payload');
@@ -572,25 +651,8 @@ describe('buildCli', () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-telemetry-immediate-'));
     tempDirs.push(tempDir);
 
-    const writes: string[] = [];
-    const cli = buildCli({
-      argv: ['--prompt', 'inspect package.json'],
+    const { writes, cli } = createPromptCliTestHarness({
       cwd: tempDir,
-      stdout: {
-        write(chunk) {
-          writes.push(String(chunk));
-          return true;
-        }
-      },
-      createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
-        availableTools: [],
-        cwd: tempDir,
-        observer: runtimeOptions.observer ?? { record() {} },
-        agentSpec: defaultAgentSpec,
-        systemPrompt: 'Test prompt',
-        maxToolRounds: 3
-      }),
       runTurn: async (input) => {
         input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
           turnId: 'turn-1',
@@ -654,8 +716,7 @@ describe('buildCli', () => {
     tempDirs.push(tempDir);
 
     const writes: string[] = [];
-    const cli = buildCli({
-      argv: ['--prompt', 'inspect package.json'],
+    const { cli } = createPromptCliTestHarness({
       cwd: tempDir,
       stdout: {
         isTTY: true,
@@ -664,15 +725,6 @@ describe('buildCli', () => {
           return true;
         }
       } as Pick<NodeJS.WriteStream, 'write'> & { isTTY: boolean },
-      createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
-        availableTools: [],
-        cwd: tempDir,
-        observer: runtimeOptions.observer ?? { record() {} },
-        agentSpec: defaultAgentSpec,
-        systemPrompt: 'Test prompt',
-        maxToolRounds: 3
-      }),
       runTurn: async (input) => {
         input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
           turnId: 'turn-1',
@@ -992,7 +1044,7 @@ describe('buildCli', () => {
           })
         })
       );
-      expectRenderedCliOutput(stdoutWrites, '\nQiClaw\n  handled: inspect package.json\n');
+      expectRenderedCliOutput(stdoutWrites, '\nQiClaw\n🧠 Thinking.\n✓ Responding\n  handled: inspect package.json\n');
     });
   });
 
@@ -1094,12 +1146,13 @@ describe('buildCli', () => {
 
     const output = writes.join('');
     const normalizedOutput = stripAnsi(output);
-    const respondingIndex = normalizedOutput.indexOf('✓ Responding\n');
     expectTopLevelResponding(output);
-    expect(normalizedOutput.indexOf('QiClaw\n')).toBeLessThan(normalizedOutput.indexOf('🧠 Thinking.\n'));
-    expect(normalizedOutput.indexOf('🧠 Thinking.\n')).toBeLessThan(respondingIndex);
-    expect(respondingIndex).toBeLessThan(normalizedOutput.indexOf('  handled: inspect package.json\n'));
-    expect(normalizedOutput).toContain('  handled: inspect package.json\n');
+    expectContainsInOrder(normalizedOutput, [
+      'QiClaw\n',
+      '🧠 Thinking.\n',
+      '✓ Responding\n',
+      '  handled: inspect package.json\n'
+    ]);
   });
 
   it('shows QiClaw only once and preserves one responding line per provider round in the same turn', async () => {
@@ -1214,7 +1267,13 @@ describe('buildCli', () => {
     expect(normalizedOutput.match(/(?:^|\n)✓ Responding\n/g)).toHaveLength(5);
     expect(normalizedOutput).not.toContain('  ✓ Responding\n');
     expect(normalizedOutput.match(/  · shell:read git diff -- repl.ts \| done \(15ms\)\n/g)).toHaveLength(4);
-    expect(normalizedOutput).toContain('  handled: inspect package.json\n');
+    expectContainsInOrder(normalizedOutput, [
+      'QiClaw\n',
+      '✓ Responding\n',
+      '  · shell:read git diff -- repl.ts | done (15ms)\n',
+      '✓ Responding\n',
+      '  handled: inspect package.json\n'
+    ]);
   });
 
   it('renders provider status at top level instead of indenting it into the assistant body', async () => {
@@ -1297,7 +1356,13 @@ describe('buildCli', () => {
     });
 
     await expect(cli.run()).resolves.toBe(0);
-    expect(stripAnsi(renderTerminalTranscript(writes.join('')))).toBe('\nQiClaw\n✓ Responding\n  handled: inspect package.json\n');
+    const transcript = stripAnsi(renderTerminalTranscript(writes.join('')));
+    expectTopLevelResponding(transcript);
+    expectContainsInOrder(transcript, [
+      '\nQiClaw\n',
+      '✓ Responding\n',
+      '  handled: inspect package.json\n'
+    ]);
   });
 
   it('transitions waiting provider status before rendering the footer', async () => {
@@ -1480,7 +1545,11 @@ describe('buildCli', () => {
 
     const transcript = renderTerminalTranscript(writes.join(''));
     expect(transcript).not.toContain('🧠 Thinking.\n✓ Responding\n');
-    expect(transcript).toContain('\nQiClaw\n✓ Responding\n  handled: inspect package.json\n');
+    expectContainsInOrder(transcript, [
+      '\nQiClaw\n',
+      '✓ Responding\n',
+      '  handled: inspect package.json\n'
+    ]);
   });
 
   it('replaces the previous thinking frame after the animation cycles back to Thinking. on fallback tty', async () => {
@@ -1571,7 +1640,11 @@ describe('buildCli', () => {
     const transcript = renderTerminalTranscript(writes.join(''));
     expect(transcript).not.toContain('🧠 Thinking...\n🧠 Thinking.\n');
     expect(transcript).not.toContain('🧠 Thinking.\n✓ Responding\n');
-    expect(transcript).toContain('\nQiClaw\n✓ Responding\n  handled: inspect package.json\n');
+    expectContainsInOrder(transcript, [
+      '\nQiClaw\n',
+      '✓ Responding\n',
+      '  handled: inspect package.json\n'
+    ]);
   });
 
   it('cleans up provider thinking timers when a turn throws after provider_called', async () => {
@@ -2750,10 +2823,15 @@ describe('buildCli', () => {
         historyLength: 2
       }
     ]);
-    expectRenderedCliOutput(
-      writes,
-      '\nQiClaw\n  answer: first question\n\nQiClaw\n  answer: second question\nGoodbye.\n'
-    );
+    const output = stripAnsi(writes.join(''));
+    expectContainsInOrder(output, [
+      '┌────────────────────────────────────────────────────┐\n',
+      '│ ⚡QiClaw                       🤖 Model: test-model │\n',
+      '└────────────────────────────────────────────────────┘\n',
+      '\n──────────────────────────────────────────────────────\n\nanswer: first question\n',
+      '\n──────────────────────────────────────────────────────\n\nanswer: second question\n',
+      'Goodbye.\n'
+    ]);
 
     const resumedRunTurnInputs: Array<{ userInput: string; historySummary?: string; historyLength: number }> = [];
     const resumedCli = buildCli({

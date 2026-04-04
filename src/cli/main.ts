@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
+import pc from 'picocolors';
 import { createAgentRuntime, type AgentRuntime } from '../agent/runtime.js';
 import { runAgentTurn, type RunAgentTurnInput, type RunAgentTurnResult } from '../agent/loop.js';
 import { parseProviderId, resolveProviderConfig } from '../provider/config.js';
@@ -28,13 +29,18 @@ export type Cli = {
 interface AssistantBlockWriter {
   startProviderThinking(): void;
   markResponding(): void;
-  clearProviderStatus(): void;
   writeAssistantLine(text: string, toolCallId?: string): void;
   replaceAssistantLine(toolCallId: string, text: string): void;
   writeAssistantTextBlock(text: string): void;
   writeFooterLine(text: string): void;
   resetTurn(): void;
 }
+
+interface InteractiveChromeOptions {
+  modelLabel?: string;
+}
+
+type CliDisplayMode = 'compact' | 'interactive';
 
 interface PendingFooterRenderState {
   isVerified: boolean;
@@ -93,21 +99,24 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
           baseUrl: parsed.baseUrl,
           apiKey: parsed.apiKey
         });
-        assistantBlockWriter = createAssistantBlockWriter(stdout);
+        const runtime = createRuntime({
+          ...providerConfig,
+          cwd,
+          observer: undefined,
+          agentSpecName: parsed.agentSpecName
+        });
+
+        assistantBlockWriter = createAssistantBlockWriter(stdout, parsed.prompt ? 'compact' : 'interactive');
         const cliObserver = createCliObserver({
           cwd,
           metrics,
           debugLogPath: parsed.debugLogPath,
           envDebugLogPath: process.env.QICLAW_DEBUG_LOG,
           showCompactToolStatus: true,
-          assistantBlockWriter
+          assistantBlockWriter,
+          mode: parsed.prompt ? 'compact' : 'interactive'
         });
-        const runtime = createRuntime({
-          ...providerConfig,
-          cwd,
-          observer: cliObserver.observer,
-          agentSpecName: parsed.agentSpecName
-        });
+        runtime.observer = cliObserver.observer;
 
         if (parsed.prompt) {
           const repl = createRepl({
@@ -154,7 +163,12 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
         let historySummary = restored?.historySummary;
 
         const repl = createRepl({
-          promptLabel: '> ',
+          promptLabel: pc.cyan('» '),
+          multilinePromptLabel: pc.cyan('» '),
+          startupLines: formatInteractiveChrome({ modelLabel: runtime.provider.model }),
+          helpText: formatInteractiveInfoLine('Commands: /help, /multiline, /skills, /exit'),
+          multilineNoticeText: formatInteractiveInfoLine('Multiline mode on. Enter /send to submit or /cancel to discard.'),
+          multilineDiscardedText: formatInteractiveInfoLine('Multiline draft discarded.'),
           readLine: options.readLine,
           async runTurn(userInput) {
             const result = await executeTurn({
@@ -216,7 +230,8 @@ function readTurnHistorySummary(result: RunAgentTurnResult): string | undefined 
   return maybeResult.historySummary;
 }
 
-function createAssistantBlockWriter(stdout: CliStdout): AssistantBlockWriter {
+function createAssistantBlockWriter(stdout: CliStdout, mode: CliDisplayMode): AssistantBlockWriter {
+  const showAssistantLabel = mode === 'compact';
   let hasStartedTurn = false;
   let hasWrittenOutput = false;
   let trailingNewlineCount = 0;
@@ -227,7 +242,11 @@ function createAssistantBlockWriter(stdout: CliStdout): AssistantBlockWriter {
   let providerStatusTimer: ReturnType<typeof setInterval> | undefined;
   const activityLineIndexes = new Map<string, number>();
   const renderedActivityLines: string[] = [];
-  const providerThinkingFrames = ['🧠 Thinking.', '🧠 Thinking..', '🧠 Thinking...'];
+  const providerThinkingFrames = [
+    `${pc.cyan('🧠 Thinking.')}`,
+    `${pc.cyan('🧠 Thinking..')}`,
+    `${pc.cyan('🧠 Thinking...')}`
+  ]
 
   function write(text: string): void {
     stdout.write(text);
@@ -264,7 +283,8 @@ function createAssistantBlockWriter(stdout: CliStdout): AssistantBlockWriter {
   }
 
   function writeRenderedActivityLine(text: string): void {
-    writeRaw(`  ${text}\n`);
+    const line = mode === 'interactive' ? `${text}\n` : `  ${text}\n`;
+    writeRaw(line);
     activeActivityLineCount += 1;
   }
 
@@ -327,7 +347,10 @@ function createAssistantBlockWriter(stdout: CliStdout): AssistantBlockWriter {
       write('\n');
     }
 
-    write('QiClaw\n');
+    if (showAssistantLabel) {
+      write(`${pc.bold('QiClaw')}\n`);
+    }
+
     hasStartedTurn = true;
   }
 
@@ -376,7 +399,7 @@ function createAssistantBlockWriter(stdout: CliStdout): AssistantBlockWriter {
       rewriteProviderStatusLine();
       writeProviderStatusLine('\u001b[32m✓\u001b[39m Responding');
     } else {
-      writeProviderStatusLine('✓ Responding');
+      writeProviderStatusLine(pc.green('✓ Responding'));
     }
 
     providerStatus = 'responding';
@@ -385,16 +408,15 @@ function createAssistantBlockWriter(stdout: CliStdout): AssistantBlockWriter {
   return {
     startProviderThinking() {
       clearProviderStatusTimer();
-
-      if (!stdout.isTTY) {
-        providerStatus = undefined;
-        return;
-      }
-
       prepareForProviderRound();
       providerStatus = 'thinking';
       providerStatusFrameIndex = 0;
       renderThinkingFrame();
+
+      if (!stdout.isTTY) {
+        return;
+      }
+
       providerStatusTimer = setInterval(() => {
         if (providerStatus !== 'thinking') {
           clearProviderStatusTimer();
@@ -406,11 +428,6 @@ function createAssistantBlockWriter(stdout: CliStdout): AssistantBlockWriter {
     },
     markResponding() {
       ensureRespondingStatus();
-    },
-    clearProviderStatus() {
-      clearProviderStatusTimer();
-      providerStatus = undefined;
-      hasRenderedProviderStatusLine = false;
     },
     writeAssistantLine(text: string, toolCallId?: string) {
       ensureTurnPrelude();
@@ -440,8 +457,17 @@ function createAssistantBlockWriter(stdout: CliStdout): AssistantBlockWriter {
       ensureRespondingStatus();
       activeActivityLineCount = 0;
 
-      for (const line of text.split('\n')) {
-        write(`  ${line}\n`);
+      if (mode === 'interactive') {
+        write(`${pc.dim('─'.repeat(54))}\n`);
+        write('\n');
+
+        for (const line of text.split('\n')) {
+          write(`${line}\n`);
+        }
+      } else {
+        for (const line of text.split('\n')) {
+          write(`  ${line}\n`);
+        }
       }
 
       providerStatus = undefined;
@@ -473,6 +499,7 @@ function createCliObserver(options: {
   envDebugLogPath?: string;
   showCompactToolStatus?: boolean;
   assistantBlockWriter: AssistantBlockWriter;
+  mode?: 'compact' | 'interactive';
 }): {
   observer: TelemetryObserver;
   flushPendingFooter(): void;
@@ -483,6 +510,7 @@ function createCliObserver(options: {
 
   if (options.showCompactToolStatus) {
     compactObserver = createCompactCliTelemetryObserver({
+      mode: options.mode,
       writeActivityLine(text, toolCallId) {
         options.assistantBlockWriter.writeAssistantLine(text, toolCallId);
       },
@@ -492,15 +520,17 @@ function createCliObserver(options: {
       writeFooterLine(text) {
         let renderedText = text;
 
-        if (pendingFooterRenderState?.isVerified) {
-          renderedText = renderedText.replace('─ completed', '─ completed • verified');
-        }
+        if ((options.mode ?? 'compact') === 'compact') {
+          if (pendingFooterRenderState?.isVerified) {
+            renderedText = renderedText.replace('─ completed', '─ completed • verified');
+          }
 
-        if (pendingFooterRenderState && pendingFooterRenderState.toolRoundsUsed > 0) {
-          renderedText = renderedText.replace(
-            ' provider',
-            ` provider • ${pendingFooterRenderState.toolRoundsUsed} tool round`
-          );
+          if (pendingFooterRenderState && pendingFooterRenderState.toolRoundsUsed > 0) {
+            renderedText = renderedText.replace(
+              ' provider',
+              ` provider • ${pendingFooterRenderState.toolRoundsUsed} tool round`
+            );
+          }
         }
 
         options.assistantBlockWriter.writeFooterLine(renderedText);
@@ -544,6 +574,24 @@ function createCliObserver(options: {
 
 function resolveCliPath(cwd: string, filePath: string): string {
   return isAbsolute(filePath) ? filePath : join(cwd, filePath);
+}
+
+function formatInteractiveChrome(options: InteractiveChromeOptions): string[] {
+  const width = 54;
+  const innerWidth = width - 5;
+  const leftPlain = '⚡QiClaw';
+  const rightPlain = `🤖 Model: ${options.modelLabel ?? 'unknown'}`;
+  const spaces = ' '.repeat(Math.max(1, innerWidth - leftPlain.length - rightPlain.length));
+
+  return [
+    `${pc.cyan('┌')}${pc.cyan('─'.repeat(width - 2))}${pc.cyan('┐')}`,
+    `${pc.cyan('│')} ${pc.bold(pc.cyan(leftPlain))}${spaces}${pc.dim(rightPlain)} ${pc.cyan('│')}`,
+    `${pc.cyan('└')}${pc.cyan('─'.repeat(width - 2))}${pc.cyan('┘')}`
+  ];
+}
+
+function formatInteractiveInfoLine(text: string): string {
+  return `${pc.cyan('ℹ')} ${pc.dim(text)}`;
 }
 
 function parseArgs(argv: string[]): {

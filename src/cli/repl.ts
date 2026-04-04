@@ -10,6 +10,11 @@ export interface ReplTurnResult {
 
 export interface CreateReplOptions {
   promptLabel: string;
+  multilinePromptLabel?: string;
+  startupLines?: string[];
+  helpText?: string;
+  multilineNoticeText?: string;
+  multilineDiscardedText?: string;
   runTurn(input: string): Promise<Pick<RunAgentTurnResult, 'finalAnswer' | 'stopReason' | 'toolRoundsUsed' | 'verification'>>;
   readLine?(promptLabel: string): Promise<string | undefined>;
   writeLine?(text: string): void;
@@ -30,7 +35,7 @@ export function createRepl(options: CreateReplOptions): Repl {
   let multilineBuffer: string[] = [];
 
   function formatHelpText(): string {
-    return 'Commands: /help, /multiline, /skills, /exit';
+    return options.helpText ?? 'Commands: /help, /multiline, /skills, /exit';
   }
 
   function isExitCommand(trimmed: string): boolean {
@@ -64,8 +69,12 @@ export function createRepl(options: CreateReplOptions): Repl {
       };
     },
     async runInteractive(): Promise<number> {
+      for (const startupLine of options.startupLines ?? []) {
+        writeLine(startupLine);
+      }
+
       while (true) {
-        const line = await readLine(isMultilineActive() ? '… ' : options.promptLabel);
+        const line = await readLine(isMultilineActive() ? (options.multilinePromptLabel ?? '… ') : options.promptLabel);
 
         if (line === undefined) {
           writeLine('Goodbye.');
@@ -91,7 +100,7 @@ export function createRepl(options: CreateReplOptions): Repl {
 
           if (trimmed === '/cancel') {
             clearMultilineBuffer();
-            writeLine('Multiline draft discarded.');
+            writeLine(options.multilineDiscardedText ?? 'Multiline draft discarded.');
             continue;
           }
 
@@ -121,7 +130,7 @@ export function createRepl(options: CreateReplOptions): Repl {
         if (trimmed === '/multiline') {
           multilineMode = true;
           multilineBuffer = [];
-          writeLine('Multiline mode on. Enter /send to submit or /cancel to discard.');
+          writeLine(options.multilineNoticeText ?? 'Multiline mode on. Enter /send to submit or /cancel to discard.');
           continue;
         }
 

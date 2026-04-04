@@ -12,6 +12,7 @@ import type {
 export interface CompactCliTelemetryObserverOptions {
   mode?: 'compact' | 'interactive';
   writeActivityLine(text: string, toolCallId?: string): void;
+  writeActivityLineBelow?(toolCallId: string, text: string): void;
   replaceActivityLine?(toolCallId: string, text: string): void;
   writeFooterLine(text: string): void;
 }
@@ -26,12 +27,71 @@ interface PendingFooterState {
   durationMs?: number;
 }
 
+interface ToolActivityAnimationState {
+  intervalId: ReturnType<typeof setInterval>;
+  label: string;
+  frameIndex: number;
+}
+
+const interactiveToolPulseFrames = [
+  pc.cyan('✦'),
+  pc.blue('✧'),
+  pc.magenta('✱'),
+  pc.yellow('✲'),
+  pc.green('✳'),
+  pc.white('✴')
+];
+const interactiveToolPulseIntervalMs = 80;
+
 export function createCompactCliTelemetryObserver(
   options: CompactCliTelemetryObserverOptions
 ): CompactCliTelemetryObserver {
   let pendingFooter: PendingFooterState | undefined;
   const toolActivityLabels = new Map<string, string>();
+  const toolActivityAnimations = new Map<string, ToolActivityAnimationState>();
   const mode = options.mode ?? 'compact';
+
+  function stopToolActivityAnimation(toolCallId: string): void {
+    const animation = toolActivityAnimations.get(toolCallId);
+
+    if (!animation) {
+      return;
+    }
+
+    clearInterval(animation.intervalId);
+    toolActivityAnimations.delete(toolCallId);
+  }
+
+  function stopAllToolActivityAnimations(): void {
+    for (const toolCallId of toolActivityAnimations.keys()) {
+      stopToolActivityAnimation(toolCallId);
+    }
+  }
+
+  function startToolActivityAnimation(toolCallId: string, label: string): void {
+    if (mode !== 'interactive' || !options.replaceActivityLine) {
+      return;
+    }
+
+    stopToolActivityAnimation(toolCallId);
+
+    const animationState: ToolActivityAnimationState = {
+      intervalId: setInterval(() => {
+        const activeAnimation = toolActivityAnimations.get(toolCallId);
+
+        if (!activeAnimation) {
+          return;
+        }
+
+        options.replaceActivityLine?.(toolCallId, formatToolActivityLine(activeAnimation.label, mode, activeAnimation.frameIndex));
+        activeAnimation.frameIndex = (activeAnimation.frameIndex + 1) % interactiveToolPulseFrames.length;
+      }, interactiveToolPulseIntervalMs),
+      label,
+      frameIndex: 0
+    };
+
+    toolActivityAnimations.set(toolCallId, animationState);
+  }
 
   return {
     record(event: TelemetryEvent) {
@@ -41,18 +101,22 @@ export function createCompactCliTelemetryObserver(
         if (label) {
           toolActivityLabels.set(event.data.toolCallId, label);
           options.writeActivityLine(formatToolActivityLine(label, mode), event.data.toolCallId);
+          startToolActivityAnimation(event.data.toolCallId, label);
         }
         return;
       }
 
       if (event.type === 'tool_call_completed') {
+        stopToolActivityAnimation(event.data.toolCallId);
         const activityLabel = toolActivityLabels.get(event.data.toolCallId);
         const line = formatToolCompletionLine(event.data, activityLabel, mode);
         toolActivityLabels.delete(event.data.toolCallId);
 
         if (line) {
-          if (options.replaceActivityLine && mode === 'compact') {
+          if (mode === 'compact' && options.replaceActivityLine) {
             options.replaceActivityLine(event.data.toolCallId, line);
+          } else if (mode === 'interactive' && options.writeActivityLineBelow) {
+            options.writeActivityLineBelow(event.data.toolCallId, line);
           } else {
             options.writeActivityLine(line);
           }
@@ -61,6 +125,7 @@ export function createCompactCliTelemetryObserver(
       }
 
       if (event.type === 'turn_completed' || event.type === 'turn_stopped') {
+        stopAllToolActivityAnimations();
         toolActivityLabels.clear();
         pendingFooter = createPendingFooterState(event.data, pendingFooter?.summary);
         return;
@@ -139,9 +204,14 @@ function createPendingFooterState(
   };
 }
 
-function formatToolActivityLine(label: string, mode: 'compact' | 'interactive'): string {
+function formatToolActivityLine(
+  label: string,
+  mode: 'compact' | 'interactive',
+  frameIndex = 0
+): string {
   if (mode === 'interactive') {
-    return ` ${pc.cyan('⚡')} ${label}`;
+    const icon = interactiveToolPulseFrames[frameIndex] ?? interactiveToolPulseFrames[0];
+    return ` ${icon} ${label}`;
   }
 
   return `· ${label}`;

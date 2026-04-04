@@ -30,6 +30,7 @@ interface AssistantBlockWriter {
   startProviderThinking(): void;
   markResponding(): void;
   writeAssistantLine(text: string, toolCallId?: string): void;
+  writeAssistantLineBelow(toolCallId: string, text: string): void;
   replaceAssistantLine(toolCallId: string, text: string): void;
   writeAssistantTextBlock(text: string): void;
   writeFooterLine(text: string): void;
@@ -282,6 +283,14 @@ function createAssistantBlockWriter(stdout: CliStdout, mode: CliDisplayMode): As
     renderedActivityLines.length = 0;
   }
 
+  function updateActivityLineIndexes(startIndex: number): void {
+    for (const [toolCallId, index] of activityLineIndexes) {
+      if (index >= startIndex) {
+        activityLineIndexes.set(toolCallId, index + 1);
+      }
+    }
+  }
+
   function writeRenderedActivityLine(text: string): void {
     const line = mode === 'interactive' ? `${text}\n` : `  ${text}\n`;
     writeRaw(line);
@@ -438,9 +447,33 @@ function createAssistantBlockWriter(stdout: CliStdout, mode: CliDisplayMode): As
       renderedActivityLines.push(text);
       writeRenderedActivityLine(text);
     },
+    writeAssistantLineBelow(toolCallId: string, text: string) {
+      ensureTurnPrelude();
+      ensureRespondingStatus();
+      const index = activityLineIndexes.get(toolCallId);
+
+      if (index !== undefined) {
+        const insertIndex = index + 1;
+        renderedActivityLines.splice(insertIndex, 0, text);
+        updateActivityLineIndexes(insertIndex);
+
+        if (stdout.isTTY) {
+          rerenderActivityLines();
+          return;
+        }
+      }
+
+      renderedActivityLines.push(text);
+      writeRenderedActivityLine(text);
+    },
     replaceAssistantLine(toolCallId: string, text: string) {
       ensureTurnPrelude();
       ensureRespondingStatus();
+
+      if (mode === 'interactive' && !stdout.isTTY) {
+        return;
+      }
+
       const index = activityLineIndexes.get(toolCallId);
       if (index !== undefined) {
         renderedActivityLines[index] = text;
@@ -513,6 +546,9 @@ function createCliObserver(options: {
       mode: options.mode,
       writeActivityLine(text, toolCallId) {
         options.assistantBlockWriter.writeAssistantLine(text, toolCallId);
+      },
+      writeActivityLineBelow(toolCallId, text) {
+        options.assistantBlockWriter.writeAssistantLineBelow(toolCallId, text);
       },
       replaceActivityLine(toolCallId, text) {
         options.assistantBlockWriter.replaceAssistantLine(toolCallId, text);

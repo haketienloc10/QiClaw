@@ -1,7 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createCompactCliTelemetryObserver } from '../../src/telemetry/display.js';
 import { createTelemetryEvent } from '../../src/telemetry/observer.js';
+
+const INTERACTIVE_PULSE_REDRAW_MS = 80;
+const INTERACTIVE_PULSE_SETTLE_MS = 240;
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('createCompactCliTelemetryObserver', () => {
   it('replaces shell tool activity lines with completion lines that reuse the original command', () => {
@@ -198,6 +205,331 @@ describe('createCompactCliTelemetryObserver', () => {
     ]);
     expect(lines.join('\n')).not.toContain('secret old text');
     expect(lines.join('\n')).not.toContain('secret new text');
+  });
+
+  it('redraws the active interactive tool line while the tool is still running', () => {
+    vi.useFakeTimers();
+
+    const activityLines: string[] = [];
+    const redraws = new Map<string, string[]>();
+    const observer = createCompactCliTelemetryObserver({
+      mode: 'interactive',
+      writeActivityLine(text) {
+        activityLines.push(text);
+      },
+      replaceActivityLine(toolCallId, text) {
+        const entries = redraws.get(toolCallId) ?? [];
+        entries.push(text);
+        redraws.set(toolCallId, entries);
+      },
+      writeFooterLine(text) {
+        activityLines.push(text);
+      }
+    });
+
+    observer.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      toolName: 'read_file',
+      toolCallId: 'call-1',
+      inputPreview: '{"path":"src/cli/main.ts"}',
+      inputRawRedacted: { path: 'src/cli/main.ts' }
+    }));
+
+    const initialActivityLine = activityLines[0];
+    expect(initialActivityLine).toContain('✦');
+    expect(initialActivityLine).toContain('read src/cli/main.ts');
+    expect(redraws.get('call-1')).toBeUndefined();
+
+    const redrawIntervalMs = INTERACTIVE_PULSE_REDRAW_MS;
+    vi.advanceTimersByTime(redrawIntervalMs);
+
+    const redrawHistory = redraws.get('call-1') ?? [];
+    expect(redrawHistory.length).toBeGreaterThan(0);
+    expect(redrawHistory[0]).toBe(initialActivityLine);
+  });
+
+  it('does not animate interactive tool activity when replaceActivityLine is unavailable', () => {
+    vi.useFakeTimers();
+
+    const activityLines: string[] = [];
+    const observer = createCompactCliTelemetryObserver({
+      mode: 'interactive',
+      writeActivityLine(text) {
+        activityLines.push(text);
+      },
+      writeFooterLine(text) {
+        activityLines.push(text);
+      }
+    });
+
+    observer.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      toolName: 'read_file',
+      toolCallId: 'call-fallback',
+      inputPreview: '{"path":"src/cli/main.ts"}',
+      inputRawRedacted: { path: 'src/cli/main.ts' }
+    }));
+
+    expect(activityLines).toHaveLength(1);
+    expect(activityLines[0]).toContain('✦');
+    expect(activityLines[0]).toContain('read src/cli/main.ts');
+    expect(vi.getTimerCount()).toBe(0);
+
+    vi.advanceTimersByTime(INTERACTIVE_PULSE_SETTLE_MS);
+
+    expect(activityLines).toHaveLength(1);
+  });
+
+  it('stops interactive animation after tool_call_completed and finalizes the same tool line', () => {
+    vi.useFakeTimers();
+
+    const fastRedrawIntervalMs = INTERACTIVE_PULSE_REDRAW_MS;
+    const postCompletionWaitMs = INTERACTIVE_PULSE_SETTLE_MS;
+    const activityLines: string[] = [];
+    const redraws = new Map<string, string[]>();
+    const observer = createCompactCliTelemetryObserver({
+      mode: 'interactive',
+      writeActivityLine(text) {
+        activityLines.push(text);
+      },
+      replaceActivityLine(toolCallId, text) {
+        const entries = redraws.get(toolCallId) ?? [];
+        entries.push(text);
+        redraws.set(toolCallId, entries);
+      },
+      writeFooterLine(text) {
+        activityLines.push(text);
+      }
+    });
+
+    observer.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      toolName: 'read_file',
+      toolCallId: 'call-completed',
+      inputPreview: '{"path":"src/cli/main.ts"}',
+      inputRawRedacted: { path: 'src/cli/main.ts' }
+    }));
+
+    const originalToolLine = activityLines[0]!;
+
+    vi.advanceTimersByTime(fastRedrawIntervalMs);
+
+    const redrawsBeforeCompletion = redraws.get('call-completed') ?? [];
+    expect(redrawsBeforeCompletion.length).toBeGreaterThan(0);
+    expect(redrawsBeforeCompletion[0]).toContain('✦');
+
+    const redrawHistoryAtCompletion = [...redrawsBeforeCompletion];
+
+    observer.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      toolName: 'read_file',
+      toolCallId: 'call-completed',
+      isError: false,
+      resultPreview: 'ok',
+      resultRawRedacted: { content: 'ok' },
+      durationMs: 5,
+      resultSizeChars: 2,
+      resultSizeBucket: 'small'
+    }));
+
+    const redrawsAtCompletion = [...(redraws.get('call-completed') ?? [])];
+
+    expect(vi.getTimerCount()).toBe(0);
+    expect(redrawsAtCompletion).toEqual(redrawHistoryAtCompletion);
+    expect(activityLines).toEqual([
+      originalToolLine,
+      expect.stringContaining('Success')
+    ]);
+
+    vi.advanceTimersByTime(postCompletionWaitMs);
+
+    expect(redraws.get('call-completed')).toEqual(redrawsAtCompletion);
+    expect(activityLines).toEqual([
+      originalToolLine,
+      expect.stringContaining('Success')
+    ]);
+  });
+
+  it('places interactive completion directly below the matching tool line when multiple tools are active', () => {
+    vi.useFakeTimers();
+
+    const activityLines: string[] = [];
+    const redraws = new Map<string, string[]>();
+    const observer = createCompactCliTelemetryObserver({
+      mode: 'interactive',
+      writeActivityLine(text) {
+        activityLines.push(text);
+      },
+      writeActivityLineBelow(toolCallId, text) {
+        const insertIndex = toolCallId === 'call-1' ? 1 : activityLines.length;
+        activityLines.splice(insertIndex, 0, text);
+      },
+      replaceActivityLine(toolCallId, text) {
+        const entries = redraws.get(toolCallId) ?? [];
+        entries.push(text);
+        redraws.set(toolCallId, entries);
+      },
+      writeFooterLine(text) {
+        activityLines.push(text);
+      }
+    });
+
+    observer.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      toolName: 'read_file',
+      toolCallId: 'call-1',
+      inputPreview: '{"path":"src/cli/main.ts"}',
+      inputRawRedacted: { path: 'src/cli/main.ts' }
+    }));
+    observer.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      toolName: 'search',
+      toolCallId: 'call-2',
+      inputPreview: '{"pattern":"promptLabel"}',
+      inputRawRedacted: { pattern: 'promptLabel' }
+    }));
+
+    const firstToolLine = activityLines[0]!;
+    const secondToolLine = activityLines[1]!;
+
+    observer.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      toolName: 'read_file',
+      toolCallId: 'call-1',
+      isError: false,
+      resultPreview: 'ok',
+      resultRawRedacted: { content: 'ok' },
+      durationMs: 5,
+      resultSizeChars: 2,
+      resultSizeBucket: 'small'
+    }));
+
+    expect(redraws.get('call-1')).toBeUndefined();
+    expect(activityLines).toEqual([
+      firstToolLine,
+      expect.stringContaining('Success'),
+      secondToolLine
+    ]);
+  });
+
+  it('stops interactive animation after turn_completed cleanup', () => {
+    vi.useFakeTimers();
+
+    const activityLines: string[] = [];
+    const redraws = new Map<string, string[]>();
+    const observer = createCompactCliTelemetryObserver({
+      mode: 'interactive',
+      writeActivityLine(text) {
+        activityLines.push(text);
+      },
+      replaceActivityLine(toolCallId, text) {
+        const entries = redraws.get(toolCallId) ?? [];
+        entries.push(text);
+        redraws.set(toolCallId, entries);
+      },
+      writeFooterLine(text) {
+        activityLines.push(text);
+      }
+    });
+
+    observer.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      toolName: 'read_file',
+      toolCallId: 'call-turn-completed',
+      inputPreview: '{"path":"src/cli/main.ts"}',
+      inputRawRedacted: { path: 'src/cli/main.ts' }
+    }));
+
+    vi.advanceTimersByTime(INTERACTIVE_PULSE_REDRAW_MS);
+    const redrawHistoryBeforeCleanup = redraws.get('call-turn-completed') ?? [];
+    expect(redrawHistoryBeforeCleanup.length).toBeGreaterThan(0);
+    expect(redrawHistoryBeforeCleanup[0]).toContain('✦');
+
+    observer.record(createTelemetryEvent('turn_completed', 'completion_check', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      stopReason: 'completed',
+      toolRoundsUsed: 1,
+      isVerified: true,
+      durationMs: 10
+    }));
+
+    const redrawHistoryAtCleanup = [...(redraws.get('call-turn-completed') ?? [])];
+    expect(vi.getTimerCount()).toBe(0);
+
+    vi.advanceTimersByTime(INTERACTIVE_PULSE_SETTLE_MS);
+
+    expect(redraws.get('call-turn-completed')).toEqual(redrawHistoryAtCleanup);
+  });
+
+  it('stops interactive animation after turn_stopped cleanup', () => {
+    vi.useFakeTimers();
+
+    const activityLines: string[] = [];
+    const redraws = new Map<string, string[]>();
+    const observer = createCompactCliTelemetryObserver({
+      mode: 'interactive',
+      writeActivityLine(text) {
+        activityLines.push(text);
+      },
+      replaceActivityLine(toolCallId, text) {
+        const entries = redraws.get(toolCallId) ?? [];
+        entries.push(text);
+        redraws.set(toolCallId, entries);
+      },
+      writeFooterLine(text) {
+        activityLines.push(text);
+      }
+    });
+
+    observer.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      toolName: 'read_file',
+      toolCallId: 'call-turn-stopped',
+      inputPreview: '{"path":"src/cli/main.ts"}',
+      inputRawRedacted: { path: 'src/cli/main.ts' }
+    }));
+
+    vi.advanceTimersByTime(INTERACTIVE_PULSE_REDRAW_MS);
+    const redrawHistoryBeforeCleanup = redraws.get('call-turn-stopped') ?? [];
+    expect(redrawHistoryBeforeCleanup.length).toBeGreaterThan(0);
+    expect(redrawHistoryBeforeCleanup[0]).toContain('✦');
+
+    observer.record(createTelemetryEvent('turn_stopped', 'completion_check', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      stopReason: 'interrupted',
+      toolRoundsUsed: 1,
+      isVerified: false,
+      durationMs: 10
+    }));
+
+    const redrawHistoryAtCleanup = [...(redraws.get('call-turn-stopped') ?? [])];
+    expect(vi.getTimerCount()).toBe(0);
+
+    vi.advanceTimersByTime(INTERACTIVE_PULSE_SETTLE_MS);
+
+    expect(redraws.get('call-turn-stopped')).toEqual(redrawHistoryAtCleanup);
   });
 
   it('suppresses unknown tool activity lines', () => {

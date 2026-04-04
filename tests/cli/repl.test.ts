@@ -784,6 +784,285 @@ describe('buildCli', () => {
     await expect(cli.run()).resolves.toBe(0);
   });
 
+  async function runInteractiveCompletionPlacementScenario(stdout: Pick<NodeJS.WriteStream, 'write'> & { isTTY: boolean }): Promise<string[]> {
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: [],
+      cwd: '/tmp/qiclaw-interactive-tool-placement',
+      readLine: (() => {
+        const inputs = ['inspect package.json', '/exit'];
+        return async () => inputs.shift();
+      })(),
+      stdout: {
+        ...stdout,
+        write(chunk) {
+          writes.push(String(chunk));
+          return stdout.write(chunk);
+        }
+      },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: '/tmp/qiclaw-interactive-tool-placement',
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      runTurn: async (input) => {
+        input.observer?.record(createTelemetryEvent('provider_called', 'provider_decision', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 0,
+          messageCount: 2,
+          promptRawChars: 42,
+          toolNames: [],
+          messageSummaries: [
+            { role: 'system', rawChars: 12, contentBlockCount: 1 },
+            { role: 'user', rawChars: 20, contentBlockCount: 1 }
+          ],
+          totalContentBlockCount: 2,
+          hasSystemPrompt: true,
+          promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"}]}'
+        }));
+        input.observer?.record(createTelemetryEvent('provider_responded', 'provider_decision', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 0,
+          stopReason: 'tool_use',
+          usage: { inputTokens: 12, outputTokens: 8, totalTokens: 20 },
+          responseContentBlockCount: 1,
+          toolCallCount: 2,
+          hasTextOutput: false,
+          responseContentBlocksByType: { tool_use: 1 },
+          toolCallSummaries: [],
+          providerUsageRawRedacted: { input_tokens: 12, output_tokens: 8 },
+          providerStopDetails: { stop_reason: 'tool_use' },
+          responsePreviewRedacted: '[{"type":"tool_use"}]',
+          durationMs: 20
+        }));
+
+        input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          toolName: 'read_file',
+          toolCallId: 'toolu_1',
+          inputPreview: '{"path":"src/cli/main.ts"}',
+          inputRawRedacted: { path: 'src/cli/main.ts' }
+        }));
+        input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          toolName: 'search',
+          toolCallId: 'toolu_2',
+          inputPreview: '{"pattern":"promptLabel"}',
+          inputRawRedacted: { pattern: 'promptLabel' }
+        }));
+        input.observer?.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          toolName: 'read_file',
+          toolCallId: 'toolu_1',
+          isError: false,
+          resultPreview: 'ok',
+          resultRawRedacted: { content: 'ok' },
+          durationMs: 5,
+          resultSizeChars: 2,
+          resultSizeBucket: 'small'
+        }));
+        input.observer?.record(createTelemetryEvent('turn_completed', 'completion_check', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          stopReason: 'completed',
+          toolRoundsUsed: 1,
+          isVerified: true,
+          durationMs: 4800
+        }));
+        input.observer?.record(createTelemetryEvent('turn_summary', 'completion_check', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          providerRounds: 1,
+          toolRoundsUsed: 1,
+          toolCallsTotal: 2,
+          toolCallsByName: { read_file: 1, search: 1 },
+          inputTokensTotal: 185,
+          outputTokensTotal: 15,
+          promptCharsMax: 100,
+          toolResultCharsInFinalPrompt: 0,
+          assistantToolCallCharsInFinalPrompt: 0,
+          toolResultPromptGrowthCharsTotal: 0,
+          toolResultCharsAddedAcrossTurn: 0,
+          turnCompleted: true,
+          stopReason: 'completed'
+        }));
+
+        return {
+          stopReason: 'completed',
+          finalAnswer: `handled: ${input.userInput}`,
+          history: [],
+          toolRoundsUsed: 1,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            toolEvidenceSatisfied: true,
+            toolMessagesCount: 2,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+    return writes;
+  }
+
+  it('inserts interactive completion below the matching tool line on TTY output', async () => {
+    const writes = await runInteractiveCompletionPlacementScenario({
+      isTTY: true,
+      write() {
+        return true;
+      }
+    } as Pick<NodeJS.WriteStream, 'write'> & { isTTY: boolean });
+
+    const transcript = renderTerminalTranscript(writes.join(''));
+    expectContainsInOrder(transcript, [
+      '✓ Responding\n',
+      ' ✦ read src/cli/main.ts\n',
+      ' └─ ✔ Success (5ms)\n',
+      ' ✦ search promptLabel\n',
+      '──────────────────────────────────────────────────────\n\nhandled: inspect package.json\n'
+    ]);
+  });
+
+  it('does not animate interactive tool lines in non-tty output', async () => {
+    vi.useFakeTimers();
+
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: [],
+      cwd: '/tmp/qiclaw-interactive-tool-non-tty',
+      readLine: (() => {
+        const inputs = ['inspect package.json', '/exit'];
+        return async () => inputs.shift();
+      })(),
+      stdout: {
+        isTTY: false,
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      } as Pick<NodeJS.WriteStream, 'write'> & { isTTY: boolean },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: '/tmp/qiclaw-interactive-tool-non-tty',
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      runTurn: async (input) => {
+        input.observer?.record(createTelemetryEvent('provider_called', 'provider_decision', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 0,
+          messageCount: 2,
+          promptRawChars: 42,
+          toolNames: [],
+          messageSummaries: [
+            { role: 'system', rawChars: 12, contentBlockCount: 1 },
+            { role: 'user', rawChars: 20, contentBlockCount: 1 }
+          ],
+          totalContentBlockCount: 2,
+          hasSystemPrompt: true,
+          promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"}]}'
+        }));
+        input.observer?.record(createTelemetryEvent('provider_responded', 'provider_decision', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 0,
+          stopReason: 'tool_use',
+          usage: { inputTokens: 12, outputTokens: 8, totalTokens: 20 },
+          responseContentBlockCount: 1,
+          toolCallCount: 1,
+          hasTextOutput: false,
+          responseContentBlocksByType: { tool_use: 1 },
+          toolCallSummaries: [],
+          providerUsageRawRedacted: { input_tokens: 12, output_tokens: 8 },
+          providerStopDetails: { stop_reason: 'tool_use' },
+          responsePreviewRedacted: '[{"type":"tool_use"}]',
+          durationMs: 20
+        }));
+        input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          toolName: 'read_file',
+          toolCallId: 'toolu_non_tty',
+          inputPreview: '{"path":"src/cli/main.ts"}',
+          inputRawRedacted: { path: 'src/cli/main.ts' }
+        }));
+
+        await vi.advanceTimersByTimeAsync(240);
+
+        input.observer?.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          toolName: 'read_file',
+          toolCallId: 'toolu_non_tty',
+          isError: false,
+          resultPreview: 'ok',
+          resultRawRedacted: { content: 'ok' },
+          durationMs: 5,
+          resultSizeChars: 2,
+          resultSizeBucket: 'small'
+        }));
+
+        return {
+          stopReason: 'completed',
+          finalAnswer: `handled: ${input.userInput}`,
+          history: [],
+          toolRoundsUsed: 1,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            toolEvidenceSatisfied: true,
+            toolMessagesCount: 1,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+
+    const output = stripAnsi(writes.join(''));
+    expect(output.match(/ [✦✧✱✲✳✴] read src\/cli\/main\.ts\n/g)).toHaveLength(1);
+    expect(output.match(/ └─ ✔ Success \(5ms\)\n/g)).toHaveLength(1);
+  });
+
   it('prefers --debug-log over QICLAW_DEBUG_LOG and writes JSONL events to the selected file', async () => {
     await withProviderEnvSnapshot(async () => {
       const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-debug-log-'));

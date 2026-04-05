@@ -84,7 +84,8 @@ describe('telemetry typing', () => {
       resultPreview: '{}',
       resultRawRedacted: {},
       durationMs: 0,
-      resultSizeChars: 2
+      resultSizeChars: 2,
+      resultSizeBucket: 'small'
     });
 
     if (event.type !== 'tool_call_completed') {

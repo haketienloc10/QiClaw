@@ -14,7 +14,8 @@ export type TelemetryEventType =
   | 'turn_completed'
   | 'turn_stopped'
   | 'turn_summary'
-  | 'turn_failed';
+  | 'turn_failed'
+  | 'interactive_memory_fallback';
 
 export type TelemetryStage =
   | 'input_received'
@@ -169,6 +170,12 @@ export interface TurnFailedTelemetryData extends TelemetryEventContextData {
   message: string;
 }
 
+export interface InteractiveMemoryFallbackTelemetryData {
+  sessionId: string;
+  phase: 'prepare' | 'capture';
+  message: string;
+}
+
 export interface TelemetryEventDataMap {
   user_input_received: UserInputReceivedTelemetryData;
   turn_started: TurnStartedTelemetryData;
@@ -184,6 +191,7 @@ export interface TelemetryEventDataMap {
   turn_stopped: TurnFinishedTelemetryData;
   turn_summary: TurnSummaryTelemetryData;
   turn_failed: TurnFailedTelemetryData;
+  interactive_memory_fallback: InteractiveMemoryFallbackTelemetryData;
 }
 
 export type TelemetryEvent<TType extends TelemetryEventType = TelemetryEventType> = {

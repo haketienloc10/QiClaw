@@ -12,6 +12,10 @@ import {
   getCheckpointStorePath,
   parseInteractiveCheckpointJson
 } from '../session/session.js';
+import {
+  captureInteractiveTurnMemory,
+  prepareInteractiveSessionMemory
+} from '../memory/sessionMemoryEngine.js';
 import { createCompositeObserver } from '../telemetry/composite.js';
 import {
   createCompactCliTelemetryObserver,
@@ -21,6 +25,7 @@ import { createFileJsonLineWriter, createJsonLineLogger } from '../telemetry/log
 import { createInMemoryMetricsObserver } from '../telemetry/metrics.js';
 import type { TelemetryObserver } from '../telemetry/observer.js';
 import { createRepl } from './repl.js';
+import { createTelemetryEvent } from '../telemetry/observer.js';
 
 export type Cli = {
   run(): Promise<number>;
@@ -72,6 +77,8 @@ export interface BuildCliOptions {
   createCheckpointStore?: (filename: string) => CheckpointStore;
   createSessionId?: () => string;
   runTurn?: (input: CliRunTurnInput) => Promise<CliRunTurnResult>;
+  prepareSessionMemory?: typeof prepareInteractiveSessionMemory;
+  captureTurnMemory?: typeof captureInteractiveTurnMemory;
 }
 
 export function buildCli(options: BuildCliOptions = {}): Cli {
@@ -83,6 +90,8 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
   const createRuntime = options.createRuntime ?? ((runtimeOptions) => createAgentRuntime(runtimeOptions));
   const checkpointStoreFactory = options.createCheckpointStore ?? ((filename) => new CheckpointStore(filename));
   const sessionIdFactory = options.createSessionId ?? createSessionId;
+  const prepareSessionMemory = options.prepareSessionMemory ?? prepareInteractiveSessionMemory;
+  const captureTurnMemory = options.captureTurnMemory ?? captureInteractiveTurnMemory;
   const executeTurn: (input: CliRunTurnInput) => Promise<CliRunTurnResult> = options.runTurn
     ? options.runTurn
     : async ({ sessionId: _sessionId, ...input }) => runAgentTurn(input);
@@ -162,6 +171,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
         let sessionId = restored ? latestCheckpoint?.sessionId ?? sessionIdFactory() : sessionIdFactory();
         let history = restored?.history ?? [];
         let historySummary = restored?.historySummary;
+        let sessionMemoryState = restored?.sessionMemory ?? { storeSessionId: sessionId };
 
         const repl = createRepl({
           promptLabel: pc.cyan('» '),
@@ -172,6 +182,27 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
           multilineDiscardedText: formatInteractiveInfoLine('Multiline draft discarded.'),
           readLine: options.readLine,
           async runTurn(userInput) {
+            let preparedMemory:
+              | Awaited<ReturnType<typeof prepareInteractiveSessionMemory>>
+              | undefined;
+
+            try {
+              preparedMemory = await prepareSessionMemory({
+                cwd: runtime.cwd,
+                sessionId: sessionMemoryState.storeSessionId,
+                userInput,
+                historySummary,
+                checkpointState: sessionMemoryState
+              });
+            } catch (error) {
+              preparedMemory = undefined;
+              recordInteractiveMemoryFallback(cliObserver.observer, {
+                sessionId,
+                message: formatCliError(error),
+                kind: 'prepare'
+              });
+            }
+
             const result = await executeTurn({
               provider: runtime.provider,
               availableTools: runtime.availableTools,
@@ -183,12 +214,37 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
               observer: cliObserver.observer,
               history,
               historySummary,
+              memoryText: preparedMemory?.memoryText ?? '',
               sessionId
             });
 
             if (result.stopReason === 'completed' || result.stopReason === 'max_tool_rounds_reached') {
               history = result.history;
               historySummary = readTurnHistorySummary(result) ?? historySummary;
+
+              if (preparedMemory) {
+                try {
+                  const captureResult = await captureTurnMemory({
+                    store: preparedMemory.store,
+                    sessionId: sessionMemoryState.storeSessionId,
+                    userInput,
+                    finalAnswer: result.finalAnswer,
+                    history: result.history
+                  });
+
+                  sessionMemoryState = captureResult.saved
+                    ? captureResult.checkpointState
+                    : preparedMemory.checkpointState;
+                } catch (error) {
+                  sessionMemoryState = preparedMemory.checkpointState;
+                  recordInteractiveMemoryFallback(cliObserver.observer, {
+                    sessionId,
+                    message: formatCliError(error),
+                    kind: 'capture'
+                  });
+                }
+              }
+
               checkpointStore.save({
                 sessionId,
                 taskId: 'interactive',
@@ -196,7 +252,8 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
                 checkpointJson: createInteractiveCheckpointJson({
                   version: 1,
                   history,
-                  historySummary
+                  historySummary,
+                  sessionMemory: sessionMemoryState
                 })
               });
             }
@@ -229,6 +286,21 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
 function readTurnHistorySummary(result: RunAgentTurnResult): string | undefined {
   const maybeResult = result as RunAgentTurnResult & { historySummary?: string };
   return maybeResult.historySummary;
+}
+
+function recordInteractiveMemoryFallback(
+  observer: TelemetryObserver,
+  options: {
+    sessionId: string;
+    message: string;
+    kind: 'prepare' | 'capture';
+  }
+): void {
+  observer.record(createTelemetryEvent('interactive_memory_fallback', 'input_received', {
+    sessionId: options.sessionId,
+    phase: options.kind,
+    message: options.message
+  }));
 }
 
 function createAssistantBlockWriter(stdout: CliStdout, mode: CliDisplayMode): AssistantBlockWriter {

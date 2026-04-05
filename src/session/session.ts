@@ -6,6 +6,10 @@ export interface InteractiveCheckpointPayload {
   version: 1;
   history: Message[];
   historySummary?: string;
+  sessionMemory?: {
+    storeSessionId: string;
+    latestSummaryText?: string;
+  };
 }
 
 export function createSessionId() {
@@ -49,6 +53,21 @@ function isInteractiveCheckpointPayload(value: unknown): value is InteractiveChe
 
   if (payload.historySummary !== undefined && typeof payload.historySummary !== 'string') {
     return false;
+  }
+
+  if (payload.sessionMemory !== undefined) {
+    if (!payload.sessionMemory || typeof payload.sessionMemory !== 'object') {
+      return false;
+    }
+
+    const sessionMemory = payload.sessionMemory as Record<string, unknown>;
+    if (typeof sessionMemory.storeSessionId !== 'string') {
+      return false;
+    }
+
+    if (sessionMemory.latestSummaryText !== undefined && typeof sessionMemory.latestSummaryText !== 'string') {
+      return false;
+    }
   }
 
   return payload.history.every(isMessage);

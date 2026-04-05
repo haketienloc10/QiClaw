@@ -2,8 +2,15 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createInteractiveCheckpointJson,
+  createSessionId,
   parseInteractiveCheckpointJson
 } from '../../src/session/session.js';
+
+describe('createSessionId', () => {
+  it('creates ids with the session_ prefix for session-scoped stores', () => {
+    expect(createSessionId()).toMatch(/^session_\d+$/);
+  });
+});
 
 describe('parseInteractiveCheckpointJson', () => {
   it('accepts tool messages with the runtime fields required for restore', () => {

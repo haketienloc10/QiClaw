@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { MemoryStore } from '../../src/memory/memoryStore.js';
-import { renderRecalledMemories } from '../../src/memory/recall.js';
+import { renderRecalledMemories, shouldUseCompactMemoryRendering } from '../../src/memory/recall.js';
 
 describe('MemoryStore', () => {
   const tempDirs: string[] = [];
@@ -150,35 +150,52 @@ describe('MemoryStore', () => {
   });
 });
 
+describe('shouldUseCompactMemoryRendering', () => {
+  it('returns true only when the compact text fits within a tight budget', () => {
+    expect(shouldUseCompactMemoryRendering('Mem:\n- Fact: short', 120)).toBe(true);
+    expect(shouldUseCompactMemoryRendering('Mem:\n- Fact: short', 121)).toBe(false);
+    expect(shouldUseCompactMemoryRendering('Mem:\n- Fact: this line is too long for the budget', 10)).toBe(false);
+  });
+});
+
 describe('renderRecalledMemories', () => {
-  it('renders recalled memories into deterministic prompt text grouped by kind labels', () => {
-    expect(renderRecalledMemories([
-      {
-        id: 2,
-        kind: 'fact',
-        content: 'User prefers Vietnamese responses.',
-        source: 'profile',
-        createdAt: '2026-03-30T10:01:00.000Z'
-      },
-      {
-        id: 3,
-        kind: 'procedure',
-        content: 'Use TDD for new runtime features.',
-        source: 'process',
-        createdAt: '2026-03-30T10:02:00.000Z'
-      },
-      {
-        id: 4,
-        kind: 'failure',
-        content: 'Skipping typecheck caused avoidable regressions.',
-        source: 'postmortem',
-        createdAt: '2026-03-30T10:03:00.000Z'
-      }
-    ])).toBe([
+  const recalled = [
+    {
+      id: 2,
+      kind: 'fact' as const,
+      content: 'User prefers Vietnamese responses.',
+      source: 'profile',
+      createdAt: '2026-03-30T10:01:00.000Z'
+    },
+    {
+      id: 3,
+      kind: 'procedure' as const,
+      content: 'Use TDD for new runtime features.',
+      source: 'process',
+      createdAt: '2026-03-30T10:02:00.000Z'
+    },
+    {
+      id: 4,
+      kind: 'failure' as const,
+      content: 'Skipping typecheck caused avoidable regressions.',
+      source: 'postmortem',
+      createdAt: '2026-03-30T10:03:00.000Z'
+    }
+  ];
+
+  it('uses compact Mem: rendering when a tight budget can still fit all recalled lines', () => {
+    expect(renderRecalledMemories(recalled.slice(0, 1), { budgetChars: 120 })).toBe([
+      'Mem:',
+      '- Fact: User prefers Vietnamese responses.'
+    ].join('\n'));
+  });
+
+  it('falls back to the full Memory: heading when the budget is roomy', () => {
+    expect(renderRecalledMemories(recalled, { budgetChars: 400 })).toBe([
       'Memory:',
-      '- Fact: User prefers Vietnamese responses. (source: profile)',
-      '- Procedure: Use TDD for new runtime features. (source: process)',
-      '- Failure: Skipping typecheck caused avoidable regressions. (source: postmortem)'
+      '- Fact: User prefers Vietnamese responses.',
+      '- Procedure: Use TDD for new runtime features.',
+      '- Failure: Skipping typecheck caused avoidable regressions.'
     ].join('\n'));
   });
 

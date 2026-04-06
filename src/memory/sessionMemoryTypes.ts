@@ -18,6 +18,36 @@ export interface SessionMemoryEntry {
   explicitSave: boolean;
 }
 
+export interface SessionMemoryAccessStat {
+  accessCount: number;
+  lastAccessed: string;
+}
+
+export interface SessionMemoryMeta {
+  version: number;
+  engine: string;
+  sessionId: string;
+  memoryPath: string;
+  metaPath: string;
+  totalEntries: number;
+  lastCompactedAt: string | null;
+  lastVerifiedAt: string | null;
+  lastDoctorAt: string | null;
+  lastSealedAt: string | null;
+  accessStatsByHash: Record<string, SessionMemoryAccessStat>;
+}
+
+export interface SessionMemoryCheckpointMetadata {
+  storeSessionId: string;
+  engine: string;
+  version: number;
+  memoryPath: string;
+  metaPath: string;
+  totalEntries: number;
+  lastCompactedAt: string | null;
+  latestSummaryText?: string;
+}
+
 export interface SessionMemoryCandidate extends SessionMemoryEntry {
   retrievalScore: number;
   finalScore: number;

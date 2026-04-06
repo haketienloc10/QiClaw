@@ -1,11 +1,13 @@
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { defaultAgentSpec } from '../../src/agent/defaultAgentSpec.js';
 import { buildCli } from '../../src/cli/main.js';
+import { CheckpointStore } from '../../src/session/checkpointStore.js';
+import { createInteractiveCheckpointJson, getCheckpointStorePath } from '../../src/session/session.js';
 
 const tempDirs: string[] = [];
 
@@ -303,6 +305,121 @@ describe('interactive session memory flow', () => {
         userInput: 'where do i deploy first?',
         sessionId: 'session-memory-restore',
         memoryText: expect.stringContaining('deploy to staging first')
+      }
+    ]);
+  });
+
+  it('does not bleed restored memory from another session when a newer checkpoint in the same cwd has no session memory state', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'qiclaw-session-memory-'));
+    tempDirs.push(tempDir);
+
+    const checkpointStorePath = getCheckpointStorePath(tempDir);
+    await mkdir(join(tempDir, '.qiclaw'), { recursive: true });
+    const checkpointStore = new CheckpointStore(checkpointStorePath);
+
+    checkpointStore.save({
+      sessionId: 'session-with-memory',
+      taskId: 'interactive',
+      status: 'completed',
+      checkpointJson: createInteractiveCheckpointJson({
+        version: 1,
+        history: [
+          { role: 'user', content: 'remember that i prefer tmux' },
+          { role: 'assistant', content: 'I will remember that you prefer tmux.' }
+        ],
+        historySummary: 'tmux preference stored',
+        sessionMemory: {
+          storeSessionId: 'session-with-memory',
+          engine: 'memvid-session-store',
+          version: 1,
+          memoryPath: join(tempDir, '.qiclaw', 'sessions', 'session-with-memory', 'memory.mv2'),
+          metaPath: join(tempDir, '.qiclaw', 'sessions', 'session-with-memory', 'memory.meta.json'),
+          totalEntries: 1,
+          lastCompactedAt: null,
+          latestSummaryText: 'prefer tmux'
+        }
+      }),
+      updatedAt: '2026-04-05T10:00:00.000Z'
+    });
+
+    checkpointStore.save({
+      sessionId: 'session-without-memory',
+      taskId: 'interactive',
+      status: 'completed',
+      checkpointJson: createInteractiveCheckpointJson({
+        version: 1,
+        history: [
+          { role: 'user', content: 'new clean session' },
+          { role: 'assistant', content: 'clean slate' }
+        ],
+        historySummary: 'fresh unrelated summary'
+      }),
+      updatedAt: '2026-04-05T10:05:00.000Z'
+    });
+
+    const restoredInputs: Array<{ userInput: string; sessionId?: string; memoryText?: string }> = [];
+    const restoredCli = buildCli({
+      argv: [],
+      cwd: tempDir,
+      stdout: { write() { return true; } },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: tempDir,
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      createSessionId: () => 'new-session-id-should-not-be-used',
+      readLine: (() => {
+        const inputs = ['what do i prefer?', '/exit'];
+        return async () => inputs.shift();
+      })(),
+      runTurn: async (input) => {
+        restoredInputs.push({
+          userInput: input.userInput,
+          sessionId: input.sessionId,
+          memoryText: input.memoryText
+        });
+
+        return {
+          stopReason: 'completed',
+          finalAnswer: 'No stored preference in this session.',
+          history: [
+            ...(input.history ?? []),
+            { role: 'user', content: input.userInput },
+            { role: 'assistant', content: 'No stored preference in this session.' }
+          ],
+          historySummary: 'no restored memory bleed',
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
+            toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
+            toolMessagesCount: 0,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(restoredCli.run()).resolves.toBe(0);
+    expect(restoredInputs).toEqual([
+      {
+        userInput: 'what do i prefer?',
+        sessionId: 'session-without-memory',
+        memoryText: ''
       }
     ]);
   });

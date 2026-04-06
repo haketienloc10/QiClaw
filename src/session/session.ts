@@ -1,15 +1,13 @@
 import { join } from 'node:path';
 
 import type { Message } from '../core/types.js';
+import type { SessionMemoryCheckpointMetadata } from '../memory/sessionMemoryTypes.js';
 
 export interface InteractiveCheckpointPayload {
   version: 1;
   history: Message[];
   historySummary?: string;
-  sessionMemory?: {
-    storeSessionId: string;
-    latestSummaryText?: string;
-  };
+  sessionMemory?: SessionMemoryCheckpointMetadata;
 }
 
 export function createSessionId() {
@@ -61,7 +59,18 @@ function isInteractiveCheckpointPayload(value: unknown): value is InteractiveChe
     }
 
     const sessionMemory = payload.sessionMemory as Record<string, unknown>;
-    if (typeof sessionMemory.storeSessionId !== 'string') {
+    if (
+      typeof sessionMemory.storeSessionId !== 'string'
+      || typeof sessionMemory.engine !== 'string'
+      || typeof sessionMemory.version !== 'number'
+      || typeof sessionMemory.memoryPath !== 'string'
+      || typeof sessionMemory.metaPath !== 'string'
+      || typeof sessionMemory.totalEntries !== 'number'
+    ) {
+      return false;
+    }
+
+    if (sessionMemory.lastCompactedAt !== null && sessionMemory.lastCompactedAt !== undefined && typeof sessionMemory.lastCompactedAt !== 'string') {
       return false;
     }
 

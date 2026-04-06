@@ -3567,7 +3567,7 @@ describe('buildCli', () => {
     await expect(cli.run()).resolves.toBe(0);
   });
 
-  it('continues interactive turns and logs debug telemetry when memory preparation or capture fails', async () => {
+  it('continues interactive turns and logs debug telemetry when memory maintenance preflight fails on prepare or capture', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-memory-failure-'));
     tempDirs.push(tempDir);
 

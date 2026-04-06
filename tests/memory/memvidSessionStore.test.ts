@@ -53,8 +53,16 @@ describe('MemvidSessionStore', () => {
     expect(meta).toMatchObject({
       version: 1,
       engine: 'memvid-session-store',
-      sessionId: 'session_1'
+      sessionId: 'session_1',
+      memoryPath: paths.memoryPath,
+      metaPath: paths.metaPath,
+      totalEntries: 1,
+      lastCompactedAt: null,
+      lastVerifiedAt: null,
+      lastDoctorAt: null,
+      accessStatsByHash: {}
     });
+    expect(meta.lastSealedAt).toEqual(expect.any(String));
 
     const hits = await store.find('Vietnamese', { k: 5 });
     expect(hits.total_hits).toBe(1);
@@ -92,5 +100,39 @@ describe('MemvidSessionStore', () => {
         fidelity: 'summary'
       })
     ]);
+  });
+
+  it('recalls by hash prefix only within the current session and updates touch metadata', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'memvid-session-store-'));
+    tempDirs.push(tempDir);
+
+    const store = new MemvidSessionStore({
+      cwd: tempDir,
+      sessionId: 'session_hash'
+    });
+
+    await store.open();
+    await store.put(createEntry({ sessionId: 'session_hash', hash: 'abc123def456' }));
+    await store.put(createEntry({ sessionId: 'session_hash', hash: 'def789abc000', summaryText: 'Different memory.' }));
+    await store.seal();
+
+    const matched = await store.recallByHashPrefix('abc123', { k: 5 });
+    expect(matched).toEqual([
+      expect.objectContaining({
+        sessionId: 'session_hash',
+        hash: 'abc123def456'
+      })
+    ]);
+
+    const touched = await store.touchByHashes(['abc123def456'], '2026-04-06T01:00:00.000Z');
+    expect(touched).toEqual(['abc123def456']);
+
+    const meta = await store.readMeta();
+    expect(meta.accessStatsByHash).toEqual({
+      abc123def456: {
+        accessCount: 1,
+        lastAccessed: '2026-04-06T01:00:00.000Z'
+      }
+    });
   });
 });

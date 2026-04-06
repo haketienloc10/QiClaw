@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 
 import { create, open, type FindResult, type Memvid } from '@memvid/sdk';
@@ -8,8 +8,10 @@ import {
   buildSessionMemoryUri,
   parseSessionMemoryUri,
   type SessionMemoryCandidate,
-  type SessionMemoryEntry
+  type SessionMemoryEntry,
+  type SessionMemoryMeta
 } from './sessionMemoryTypes.js';
+import { isHashPrefixMatch } from './hash.js';
 
 export interface MemvidSessionStoreOptions {
   cwd: string;
@@ -39,19 +41,39 @@ export class MemvidSessionStore {
     return this.artifactPaths;
   }
 
+  memvidInstance(): Memvid | undefined {
+    return this.memvid;
+  }
+
   async open(): Promise<void> {
     await mkdir(this.artifactPaths.directoryPath, { recursive: true });
     this.memvid = existsSync(this.artifactPaths.memoryPath)
       ? await open(this.artifactPaths.memoryPath, 'basic', { enableLex: true, enableVec: false })
       : await create(this.artifactPaths.memoryPath, 'basic', { enableLex: true, enableVec: false });
-    await this.writeMeta();
+    await this.writeMeta(await this.readMeta());
+  }
+
+  async readMeta(): Promise<SessionMemoryMeta> {
+    if (!existsSync(this.artifactPaths.metaPath)) {
+      return buildDefaultMeta(this.sessionId, this.artifactPaths);
+    }
+
+    try {
+      const parsed = JSON.parse(await readFile(this.artifactPaths.metaPath, 'utf8')) as Partial<SessionMemoryMeta>;
+      return mergeMeta(buildDefaultMeta(this.sessionId, this.artifactPaths), parsed);
+    } catch {
+      return buildDefaultMeta(this.sessionId, this.artifactPaths);
+    }
+  }
+
+  async writeMeta(meta: SessionMemoryMeta): Promise<void> {
+    await writeFile(this.artifactPaths.metaPath, JSON.stringify(meta, null, 2));
   }
 
   async put(entry: SessionMemoryEntry): Promise<string> {
     const memvid = this.requireMemvid();
     const uri = buildSessionMemoryUri(entry.sessionId, entry.hash);
-
-    return memvid.put({
+    const result = await memvid.put({
       title: entry.summaryText,
       text: serializeEntry(entry),
       uri,
@@ -75,10 +97,21 @@ export class MemvidSessionStore {
         explicitSave: entry.explicitSave
       }
     });
+    const meta = await this.readMeta();
+    await this.writeMeta({
+      ...meta,
+      totalEntries: meta.totalEntries + 1
+    });
+    return result;
   }
 
   async seal(): Promise<void> {
     await this.requireMemvid().seal();
+    const meta = await this.readMeta();
+    await this.writeMeta({
+      ...meta,
+      lastSealedAt: new Date().toISOString()
+    });
   }
 
   async find(query: string, options: MemvidSessionFindOptions): Promise<FindResult> {
@@ -91,33 +124,72 @@ export class MemvidSessionStore {
 
   async recall(query: string, options: MemvidSessionFindOptions): Promise<SessionMemoryCandidate[]> {
     const result = await this.find(query, options);
-    const candidates: Array<SessionMemoryCandidate | undefined> = result.hits
+    const meta = await this.readMeta();
+    const candidates = result.hits
       .filter((hit) => hit.track === `session:${this.sessionId}`)
-      .map((hit) => {
-        const uriParts = parseSessionMemoryUri(hit.uri);
-
-        if (!uriParts || uriParts.sessionId !== this.sessionId) {
-          return undefined;
-        }
-
-        const hitText = (hit as typeof hit & { text?: string }).text;
-        const entry = deserializeEntry(hit.snippet) ?? deserializeEntry(hitText ?? '');
-
-        if (!entry || entry.sessionId !== this.sessionId) {
-          return undefined;
-        }
-
-        const candidate: SessionMemoryCandidate = {
-          ...entry,
-          retrievalScore: hit.score,
-          finalScore: hit.score,
-          fidelity: 'summary'
-        };
-
-        return candidate;
-      });
+      .map((hit) => toSessionMemoryCandidate(hit, this.sessionId, meta));
 
     return candidates.filter((candidate): candidate is SessionMemoryCandidate => candidate !== undefined);
+  }
+
+  async recallByHashPrefix(prefix: string, options: MemvidSessionFindOptions): Promise<SessionMemoryCandidate[]> {
+    const normalizedPrefix = prefix.trim().toLowerCase();
+
+    if (normalizedPrefix.length === 0) {
+      return [];
+    }
+
+    const meta = await this.readMeta();
+    const timeline = await this.requireMemvid().timeline({
+      limit: Math.max(options.k, meta.totalEntries)
+    });
+    const matchedHashes = timeline
+      .map((entry) => parseSessionMemoryUri(entry.uri))
+      .filter((parts): parts is { sessionId: string; hash: string } => parts !== undefined)
+      .filter((parts) => parts.sessionId === this.sessionId && isHashPrefixMatch(parts.hash, normalizedPrefix))
+      .map((parts) => parts.hash)
+      .slice(0, options.k);
+
+    if (matchedHashes.length === 0) {
+      return [];
+    }
+
+    const candidates: SessionMemoryCandidate[] = [];
+
+    for (const hash of matchedHashes) {
+      const result = await this.find(hash, { k: 1 });
+      const candidate = result.hits
+        .filter((hit) => hit.track === `session:${this.sessionId}`)
+        .map((hit) => toSessionMemoryCandidate(hit, this.sessionId, meta))
+        .find((match): match is SessionMemoryCandidate => match !== undefined && match.hash === hash);
+
+      if (candidate) {
+        candidates.push(candidate);
+      }
+    }
+
+    return candidates;
+  }
+
+  async touchByHashes(hashes: string[], now = new Date().toISOString()): Promise<string[]> {
+    const normalized = [...new Set(hashes.map((hash) => hash.trim().toLowerCase()).filter(Boolean))];
+
+    if (normalized.length === 0) {
+      return [];
+    }
+
+    const meta = await this.readMeta();
+
+    for (const hash of normalized) {
+      const current = meta.accessStatsByHash[hash];
+      meta.accessStatsByHash[hash] = {
+        accessCount: (current?.accessCount ?? 0) + 1,
+        lastAccessed: now
+      };
+    }
+
+    await this.writeMeta(meta);
+    return normalized;
   }
 
   private requireMemvid(): Memvid {
@@ -127,26 +199,55 @@ export class MemvidSessionStore {
 
     return this.memvid;
   }
+}
 
-  private async writeMeta(): Promise<void> {
-    await writeFile(
-      this.artifactPaths.metaPath,
-      JSON.stringify(
-        {
-          version: META_VERSION,
-          engine: META_ENGINE,
-          sessionId: this.sessionId,
-          lastCompactedAt: null
-        },
-        null,
-        2
-      )
-    );
+function buildDefaultMeta(sessionId: string, artifactPaths: SessionMemoryArtifactPaths): SessionMemoryMeta {
+  return {
+    version: META_VERSION,
+    engine: META_ENGINE,
+    sessionId,
+    memoryPath: artifactPaths.memoryPath,
+    metaPath: artifactPaths.metaPath,
+    totalEntries: 0,
+    lastCompactedAt: null,
+    lastVerifiedAt: null,
+    lastDoctorAt: null,
+    lastSealedAt: null,
+    accessStatsByHash: {}
+  };
+}
+
+function mergeMeta(base: SessionMemoryMeta, parsed: Partial<SessionMemoryMeta>): SessionMemoryMeta {
+  const accessStatsByHash: SessionMemoryMeta['accessStatsByHash'] = {};
+
+  for (const [hash, stat] of Object.entries(parsed.accessStatsByHash ?? {})) {
+    if (!stat || typeof stat !== 'object' || typeof stat.lastAccessed !== 'string') {
+      continue;
+    }
+
+    accessStatsByHash[hash.toLowerCase()] = {
+      accessCount: typeof stat.accessCount === 'number' ? stat.accessCount : 0,
+      lastAccessed: stat.lastAccessed
+    };
   }
+
+  return {
+    version: typeof parsed.version === 'number' ? parsed.version : base.version,
+    engine: typeof parsed.engine === 'string' ? parsed.engine : base.engine,
+    sessionId: typeof parsed.sessionId === 'string' ? parsed.sessionId : base.sessionId,
+    memoryPath: typeof parsed.memoryPath === 'string' ? parsed.memoryPath : base.memoryPath,
+    metaPath: typeof parsed.metaPath === 'string' ? parsed.metaPath : base.metaPath,
+    totalEntries: typeof parsed.totalEntries === 'number' ? parsed.totalEntries : base.totalEntries,
+    lastCompactedAt: typeof parsed.lastCompactedAt === 'string' || parsed.lastCompactedAt === null ? parsed.lastCompactedAt : base.lastCompactedAt,
+    lastVerifiedAt: typeof parsed.lastVerifiedAt === 'string' || parsed.lastVerifiedAt === null ? parsed.lastVerifiedAt : base.lastVerifiedAt,
+    lastDoctorAt: typeof parsed.lastDoctorAt === 'string' || parsed.lastDoctorAt === null ? parsed.lastDoctorAt : base.lastDoctorAt,
+    lastSealedAt: typeof parsed.lastSealedAt === 'string' || parsed.lastSealedAt === null ? parsed.lastSealedAt : base.lastSealedAt,
+    accessStatsByHash
+  };
 }
 
 function buildSearchText(entry: SessionMemoryEntry): string {
-  return [entry.summaryText, entry.essenceText, entry.tags.join(' '), entry.fullText].filter(Boolean).join('\n');
+  return [entry.hash, entry.summaryText, entry.essenceText, entry.tags.join(' '), entry.fullText].filter(Boolean).join('\n');
 }
 
 const ENVELOPE_PREFIX = 'QICLAW_SESSION_MEMORY::';
@@ -256,4 +357,36 @@ function toMemvidTimestamp(value: string): number | string {
   }
 
   return Math.floor(timestamp / 1000);
+}
+
+function toSessionMemoryCandidate(
+  hit: FindResult['hits'][number],
+  sessionId: string,
+  meta: SessionMemoryMeta
+): SessionMemoryCandidate | undefined {
+  const uriParts = typeof hit.uri === 'string' ? parseSessionMemoryUri(hit.uri) : undefined;
+
+  if (!uriParts || uriParts.sessionId !== sessionId) {
+    return undefined;
+  }
+
+  const rawText = 'text' in hit && typeof hit.text === 'string' && hit.text.length > 0
+    ? hit.text
+    : hit.snippet;
+  const parsed = deserializeEntry(rawText);
+
+  if (!parsed || parsed.sessionId !== sessionId || parsed.hash !== uriParts.hash) {
+    return undefined;
+  }
+
+  const stat = meta.accessStatsByHash[parsed.hash.toLowerCase()];
+
+  return {
+    ...parsed,
+    lastAccessed: stat?.lastAccessed ?? parsed.lastAccessed,
+    accessCount: stat?.accessCount ?? parsed.accessCount,
+    retrievalScore: typeof hit.score === 'number' ? hit.score : 0,
+    finalScore: 0,
+    fidelity: 'summary'
+  };
 }

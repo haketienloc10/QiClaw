@@ -171,7 +171,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
         let sessionId = restored ? latestCheckpoint?.sessionId ?? sessionIdFactory() : sessionIdFactory();
         let history = restored?.history ?? [];
         let historySummary = restored?.historySummary;
-        let sessionMemoryState = restored?.sessionMemory ?? { storeSessionId: sessionId };
+        let sessionMemoryState = restored?.sessionMemory;
 
         const repl = createRepl({
           promptLabel: pc.cyan('» '),
@@ -189,7 +189,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
             try {
               preparedMemory = await prepareSessionMemory({
                 cwd: runtime.cwd,
-                sessionId: sessionMemoryState.storeSessionId,
+                sessionId: sessionMemoryState?.storeSessionId ?? sessionId,
                 userInput,
                 historySummary,
                 checkpointState: sessionMemoryState
@@ -226,7 +226,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
                 try {
                   const captureResult = await captureTurnMemory({
                     store: preparedMemory.store,
-                    sessionId: sessionMemoryState.storeSessionId,
+                    sessionId: sessionMemoryState?.storeSessionId ?? sessionId,
                     userInput,
                     finalAnswer: result.finalAnswer,
                     history: result.history

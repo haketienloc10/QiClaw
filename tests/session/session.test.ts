@@ -13,7 +13,7 @@ describe('createSessionId', () => {
 });
 
 describe('parseInteractiveCheckpointJson', () => {
-  it('accepts tool messages with the runtime fields required for restore', () => {
+  it('accepts tool messages with lightweight session memory metadata required for restore', () => {
     const checkpointJson = createInteractiveCheckpointJson({
       version: 1,
       history: [
@@ -37,7 +37,17 @@ describe('parseInteractiveCheckpointJson', () => {
           isError: false
         }
       ],
-      historySummary: 'Read package.json successfully.'
+      historySummary: 'Read package.json successfully.',
+      sessionMemory: {
+        storeSessionId: 'session_123',
+        engine: 'memvid-session-store',
+        version: 1,
+        memoryPath: '/tmp/.qiclaw/sessions/session_123/memory.mv2',
+        metaPath: '/tmp/.qiclaw/sessions/session_123/memory.meta.json',
+        totalEntries: 4,
+        lastCompactedAt: '2026-04-06T00:00:00.000Z',
+        latestSummaryText: 'package summary'
+      }
     });
 
     expect(parseInteractiveCheckpointJson(checkpointJson)).toEqual({
@@ -63,7 +73,17 @@ describe('parseInteractiveCheckpointJson', () => {
           isError: false
         }
       ],
-      historySummary: 'Read package.json successfully.'
+      historySummary: 'Read package.json successfully.',
+      sessionMemory: {
+        storeSessionId: 'session_123',
+        engine: 'memvid-session-store',
+        version: 1,
+        memoryPath: '/tmp/.qiclaw/sessions/session_123/memory.mv2',
+        metaPath: '/tmp/.qiclaw/sessions/session_123/memory.meta.json',
+        totalEntries: 4,
+        lastCompactedAt: '2026-04-06T00:00:00.000Z',
+        latestSummaryText: 'package summary'
+      }
     });
   });
 
@@ -83,6 +103,23 @@ describe('parseInteractiveCheckpointJson', () => {
           ]
         }
       ]
+    });
+
+    expect(parseInteractiveCheckpointJson(checkpointJson)).toBeUndefined();
+  });
+
+  it('rejects malformed session memory metadata when restoring checkpoints', () => {
+    const checkpointJson = JSON.stringify({
+      version: 1,
+      history: [],
+      sessionMemory: {
+        storeSessionId: 'session_123',
+        engine: 'memvid-session-store',
+        version: '1',
+        memoryPath: '/tmp/memory.mv2',
+        metaPath: '/tmp/memory.meta.json',
+        totalEntries: 4
+      }
     });
 
     expect(parseInteractiveCheckpointJson(checkpointJson)).toBeUndefined();

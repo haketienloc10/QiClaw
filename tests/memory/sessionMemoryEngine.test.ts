@@ -5,6 +5,8 @@ import {
   prepareInteractiveSessionMemory,
   recallSessionMemories
 } from '../../src/memory/sessionMemoryEngine.js';
+import * as sessionMemoryMaintenance from '../../src/memory/sessionMemoryMaintenance.js';
+import { MemvidSessionStore } from '../../src/memory/memvidSessionStore.js';
 import type { SessionMemoryCandidate } from '../../src/memory/sessionMemoryTypes.js';
 
 function createCandidate(overrides: Partial<SessionMemoryCandidate> = {}): SessionMemoryCandidate {
@@ -31,12 +33,68 @@ function createCandidate(overrides: Partial<SessionMemoryCandidate> = {}): Sessi
 }
 
 describe('captureInteractiveTurnMemory', () => {
+  it('runs write maintenance preflight before persisting or sealing', async () => {
+    const put = vi.fn(async () => undefined);
+    const seal = vi.fn(async () => undefined);
+    const ensureWriteReady = vi.spyOn(sessionMemoryMaintenance, 'ensureSessionStoreWriteReady').mockResolvedValue({ ok: true });
+
+    try {
+      const result = await captureInteractiveTurnMemory({
+        store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory.mv2' }) } as never,
+        sessionId: 'session_1',
+        userInput: 'remember that i use pnpm',
+        finalAnswer: 'I will remember that you use pnpm.'
+      });
+
+      expect(result.saved).toBe(true);
+      expect(ensureWriteReady).toHaveBeenCalledTimes(1);
+      expect(put).toHaveBeenCalledTimes(1);
+      expect(seal).toHaveBeenCalledTimes(1);
+    } finally {
+      ensureWriteReady.mockRestore();
+    }
+  });
+
+  it('fails when write maintenance preflight rejects before persisting', async () => {
+    const put = vi.fn(async () => undefined);
+    const seal = vi.fn(async () => undefined);
+    const ensureWriteReady = vi.spyOn(sessionMemoryMaintenance, 'ensureSessionStoreWriteReady').mockRejectedValue(new Error('write preflight failed'));
+
+    try {
+      await expect(captureInteractiveTurnMemory({
+        store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory.mv2' }) } as never,
+        sessionId: 'session_1',
+        userInput: 'remember that i use pnpm',
+        finalAnswer: 'I will remember that you use pnpm.'
+      })).rejects.toThrow('write preflight failed');
+
+      expect(put).not.toHaveBeenCalled();
+      expect(seal).not.toHaveBeenCalled();
+    } finally {
+      ensureWriteReady.mockRestore();
+    }
+  });
+
+  const readMeta = vi.fn(async () => ({
+    version: 1,
+    engine: 'memvid-session-store',
+    sessionId: 'session_1',
+    memoryPath: '/tmp/memory.mv2',
+    metaPath: '/tmp/memory.meta.json',
+    totalEntries: 0,
+    lastCompactedAt: null,
+    lastVerifiedAt: null,
+    lastDoctorAt: null,
+    lastSealedAt: null,
+    accessStatsByHash: {}
+  }));
+
   it('does not persist question-style remember phrasing as an explicit save', async () => {
     const put = vi.fn(async () => undefined);
     const seal = vi.fn(async () => undefined);
 
     const result = await captureInteractiveTurnMemory({
-      store: { put, seal } as never,
+      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory.mv2' }) } as never,
       sessionId: 'session_1',
       userInput: 'do you remember that I prefer concise answers?',
       finalAnswer: 'Yes, I remember that preference.'
@@ -52,7 +110,7 @@ describe('captureInteractiveTurnMemory', () => {
     const seal = vi.fn(async () => undefined);
 
     const result = await captureInteractiveTurnMemory({
-      store: { put, seal } as never,
+      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory.mv2' }) } as never,
       sessionId: 'session_1',
       userInput: 'show me the package version',
       finalAnswer: 'package.json shows version 1.2.3.',
@@ -90,7 +148,7 @@ describe('captureInteractiveTurnMemory', () => {
     const seal = vi.fn(async () => undefined);
 
     const result = await captureInteractiveTurnMemory({
-      store: { put, seal } as never,
+      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory.mv2' }) } as never,
       sessionId: 'session_1',
       userInput: 'how should you check package version next time?',
       finalAnswer: 'You can read package.json to confirm the version quickly.',
@@ -121,23 +179,220 @@ describe('captureInteractiveTurnMemory', () => {
 });
 
 describe('prepareInteractiveSessionMemory', () => {
-  it('keeps latestSummaryText from the checkpoint when no new memory is recalled', async () => {
-    const result = await prepareInteractiveSessionMemory({
-      cwd: '/tmp/session-memory-engine-empty',
+  it('runs best-effort maintenance verify when opening an existing store and continues on success', async () => {
+    const open = vi.spyOn(MemvidSessionStore.prototype, 'open').mockResolvedValue(undefined);
+    const writeMeta = vi.spyOn(MemvidSessionStore.prototype, 'writeMeta').mockResolvedValue(undefined);
+    const readMeta = vi.spyOn(MemvidSessionStore.prototype, 'readMeta').mockResolvedValue({
+      version: 1,
+      engine: 'memvid-session-store',
       sessionId: 'session_1',
-      userInput: 'brand new question',
-      checkpointState: {
-        storeSessionId: 'session_1',
-        latestSummaryText: 'remembered summary'
-      },
-      totalBudgetChars: 200
+      memoryPath: '/tmp/existing.mv2',
+      metaPath: '/tmp/meta.json',
+      totalEntries: 0,
+      lastCompactedAt: null,
+      lastVerifiedAt: null,
+      lastDoctorAt: null,
+      lastSealedAt: null,
+      accessStatsByHash: {}
+    });
+    const recall = vi.spyOn(MemvidSessionStore.prototype, 'recall').mockResolvedValue([]);
+    const touchByHashes = vi.spyOn(MemvidSessionStore.prototype, 'touchByHashes').mockResolvedValue([]);
+    const verifyOpen = vi.spyOn(sessionMemoryMaintenance, 'verifySessionStoreOnOpen').mockResolvedValue({
+      ok: true,
+      verified: true,
+      meta: {
+        lastVerifiedAt: '2026-04-06T08:00:00.000Z'
+      }
     });
 
-    expect(result.memoryText).toBe('');
-    expect(result.checkpointState).toEqual({
-      storeSessionId: 'session_1',
-      latestSummaryText: 'remembered summary'
+    try {
+      const result = await prepareInteractiveSessionMemory({
+        cwd: '/tmp/session-memory-engine-verify',
+        sessionId: 'session_1',
+        userInput: 'do you remember anything about me?',
+        checkpointState: {
+          storeSessionId: 'session_1',
+          engine: 'memvid-session-store',
+          version: 1,
+          memoryPath: '/tmp/existing.mv2',
+          metaPath: '/tmp/meta.json',
+          totalEntries: 0,
+          lastCompactedAt: null
+        }
+      });
+
+      expect(result.memoryText).toBe('');
+      expect(verifyOpen).toHaveBeenCalledTimes(1);
+      expect(verifyOpen).toHaveBeenCalledWith(expect.objectContaining({
+        store: expect.any(MemvidSessionStore),
+        meta: expect.objectContaining({ memoryPath: '/tmp/existing.mv2' })
+      }));
+    } finally {
+      open.mockRestore();
+      writeMeta.mockRestore();
+      readMeta.mockRestore();
+      recall.mockRestore();
+      touchByHashes.mockRestore();
+      verifyOpen.mockRestore();
+    }
+  });
+
+  it('propagates maintenance verify failures so the CLI layer can fail open', async () => {
+    const open = vi.spyOn(MemvidSessionStore.prototype, 'open').mockResolvedValue(undefined);
+    const readMeta = vi.spyOn(MemvidSessionStore.prototype, 'readMeta').mockResolvedValue({
+      version: 1,
+      engine: 'memvid-session-store',
+      sessionId: 'session_1',
+      memoryPath: '/tmp/existing.mv2',
+      metaPath: '/tmp/meta.json',
+      totalEntries: 0,
+      lastCompactedAt: null,
+      lastVerifiedAt: null,
+      lastDoctorAt: null,
+      lastSealedAt: null,
+      accessStatsByHash: {}
     });
+    const writeMeta = vi.spyOn(MemvidSessionStore.prototype, 'writeMeta').mockResolvedValue(undefined);
+    const recall = vi.spyOn(MemvidSessionStore.prototype, 'recall').mockResolvedValue([]);
+    const touchByHashes = vi.spyOn(MemvidSessionStore.prototype, 'touchByHashes').mockResolvedValue([]);
+    const verifyOpen = vi.spyOn(sessionMemoryMaintenance, 'verifySessionStoreOnOpen').mockRejectedValue(new Error('verify failed'));
+
+    try {
+      await expect(prepareInteractiveSessionMemory({
+        cwd: '/tmp/session-memory-engine-verify-fail',
+        sessionId: 'session_1',
+        userInput: 'do you remember anything about me?',
+        checkpointState: {
+          storeSessionId: 'session_1',
+          engine: 'memvid-session-store',
+          version: 1,
+          memoryPath: '/tmp/existing.mv2',
+          metaPath: '/tmp/meta.json',
+          totalEntries: 0,
+          lastCompactedAt: null
+        }
+      })).rejects.toThrow('verify failed');
+
+      expect(recall).not.toHaveBeenCalled();
+      expect(touchByHashes).not.toHaveBeenCalled();
+    } finally {
+      open.mockRestore();
+      writeMeta.mockRestore();
+      readMeta.mockRestore();
+      recall.mockRestore();
+      touchByHashes.mockRestore();
+      verifyOpen.mockRestore();
+    }
+  });
+
+  it('touches only hashes that survive final recall packing', async () => {
+    const open = vi.spyOn(MemvidSessionStore.prototype, 'open').mockResolvedValue(undefined);
+    const readMeta = vi.spyOn(MemvidSessionStore.prototype, 'readMeta').mockResolvedValue({
+      version: 1,
+      engine: 'memvid-session-store',
+      sessionId: 'session_1',
+      memoryPath: '/tmp/memory.json',
+      metaPath: '/tmp/meta.json',
+      totalEntries: 2,
+      lastCompactedAt: null,
+      lastVerifiedAt: null,
+      lastDoctorAt: null,
+      lastSealedAt: null,
+      accessStatsByHash: {}
+    });
+    const recall = vi.spyOn(MemvidSessionStore.prototype, 'recall')
+      .mockResolvedValueOnce([
+        createCandidate({
+          hash: 'full123def456',
+          retrievalScore: 0.95,
+          importance: 0.9,
+          explicitSave: true,
+          fullText: 'Pinned pref.',
+          summaryText: 'Pinned pref.',
+          essenceText: 'Pinned pref.'
+        }),
+        createCandidate({
+          hash: 'trim123def456',
+          retrievalScore: 0.4,
+          importance: 0.2,
+          explicitSave: false,
+          fullText: 'This lower-priority memory should be dropped by the final budget packing step because it needs much more room than remains.',
+          summaryText: 'This lower-priority memory should be dropped by the final budget packing step because it needs much more room than remains.',
+          essenceText: 'Dropped memory still too large for the remaining packed budget.'
+        })
+      ]);
+    const touchByHashes = vi.spyOn(MemvidSessionStore.prototype, 'touchByHashes').mockResolvedValue([]);
+
+    try {
+      const result = await prepareInteractiveSessionMemory({
+        cwd: '/tmp/session-memory-engine-touch',
+        sessionId: 'session_1',
+        userInput: 'remind me of my pinned preference',
+        totalBudgetChars: 130,
+        now: '2026-04-05T12:00:00.000Z'
+      });
+
+      expect(result.recalled.map((candidate) => candidate.hash)).toEqual(['full123def456']);
+      expect(touchByHashes).toHaveBeenCalledTimes(1);
+      expect(touchByHashes).toHaveBeenCalledWith(['full123def456']);
+    } finally {
+      open.mockRestore();
+      readMeta.mockRestore();
+      recall.mockRestore();
+      touchByHashes.mockRestore();
+    }
+  });
+
+  it('does not touch any hash when no memory is recalled', async () => {
+    const open = vi.spyOn(MemvidSessionStore.prototype, 'open').mockResolvedValue(undefined);
+    const readMeta = vi.spyOn(MemvidSessionStore.prototype, 'readMeta').mockResolvedValue({
+      version: 1,
+      engine: 'memvid-session-store',
+      sessionId: 'session_1',
+      memoryPath: '/tmp/memory.json',
+      metaPath: '/tmp/meta.json',
+      totalEntries: 0,
+      lastCompactedAt: null,
+      lastVerifiedAt: null,
+      lastDoctorAt: null,
+      lastSealedAt: null,
+      accessStatsByHash: {}
+    });
+    const verifyOpen = vi.spyOn(sessionMemoryMaintenance, 'verifySessionStoreOnOpen').mockResolvedValue({ ok: true, verified: false });
+    const recall = vi.spyOn(MemvidSessionStore.prototype, 'recall').mockResolvedValue([]);
+    const touchByHashes = vi.spyOn(MemvidSessionStore.prototype, 'touchByHashes').mockResolvedValue([]);
+
+    try {
+      const result = await prepareInteractiveSessionMemory({
+        cwd: '/tmp/session-memory-engine-empty',
+        sessionId: 'session_1',
+        userInput: 'brand new question',
+        checkpointState: {
+          storeSessionId: 'session_1',
+          engine: 'memvid-session-store',
+          version: 1,
+          memoryPath: '/tmp/memory.json',
+          metaPath: '/tmp/meta.json',
+          totalEntries: 0,
+          lastCompactedAt: null,
+          latestSummaryText: 'remembered summary'
+        },
+        totalBudgetChars: 200
+      });
+
+      expect(result.memoryText).toBe('');
+      expect(result.checkpointState).toMatchObject({
+        storeSessionId: 'session_1',
+        latestSummaryText: 'remembered summary'
+      });
+      expect(touchByHashes).not.toHaveBeenCalled();
+    } finally {
+      open.mockRestore();
+      readMeta.mockRestore();
+      verifyOpen.mockRestore();
+      recall.mockRestore();
+      touchByHashes.mockRestore();
+    }
   });
 });
 
@@ -158,9 +413,8 @@ describe('recallSessionMemories', () => {
 
     expect(result.memoryText).toContain('Memory:');
     expect(result.memoryText).toContain('Hot memories:');
-    expect(result.memoryText).toContain('Warm summaries:');
     expect(result.memoryText).toContain('Faded references:');
-    expect(result.memoryText).toMatch(/Cool essence\.|#cool33def456/u);
+    expect(result.memoryText).toMatch(/Warm summary\.|Cool essence\.|#cool33def456/u);
   });
 
   it('does not overflow the final assembled memory text budget or render empty headers', () => {

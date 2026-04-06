@@ -1,19 +1,23 @@
+import { existsSync } from 'node:fs';
+
 import { allocateContextBudget } from '../context/budgetManager.js';
 import type { Message } from '../core/types.js';
 import { MemvidSessionStore } from './memvidSessionStore.js';
+import { ensureSessionStoreWriteReady, verifySessionStoreOnOpen } from './sessionMemoryMaintenance.js';
 import { scoreSessionMemoryCandidate } from './decay.js';
 import { assignMemoryFidelity } from './fidelity.js';
 import { buildInteractiveTurnMemoryEntry, shouldCapture } from './capture.js';
 import { shouldUseCompactMemoryRendering } from './recall.js';
-import type { SessionMemoryCandidate, SessionMemoryEntry } from './sessionMemoryTypes.js';
+import type {
+  SessionMemoryCandidate,
+  SessionMemoryCheckpointMetadata,
+  SessionMemoryEntry
+} from './sessionMemoryTypes.js';
 
 const DEFAULT_MEMORY_CONTEXT_TOTAL_CHARS = 4_000;
 const DEFAULT_RECALL_LIMIT = 5;
 
-export interface SessionMemoryCheckpointState {
-  storeSessionId: string;
-  latestSummaryText?: string;
-}
+export interface SessionMemoryCheckpointState extends SessionMemoryCheckpointMetadata {}
 
 export interface RecallSessionMemoriesInput {
   candidates: SessionMemoryCandidate[];
@@ -65,7 +69,26 @@ export async function prepareInteractiveSessionMemory(
   input: PrepareInteractiveSessionMemoryInput
 ): Promise<PrepareInteractiveSessionMemoryResult> {
   const store = new MemvidSessionStore({ cwd: input.cwd, sessionId: input.sessionId });
+  const memoryPath = store.paths().memoryPath;
+  const hadExistingStore = Boolean(input.checkpointState?.memoryPath) || existsSync(memoryPath);
+
   await store.open();
+  let meta = await store.readMeta();
+
+  const verifyResult = await verifySessionStoreOnOpen({
+    store,
+    meta,
+    exists: hadExistingStore,
+    now: input.now
+  });
+
+  if (verifyResult.meta?.lastVerifiedAt) {
+    meta = {
+      ...meta,
+      lastVerifiedAt: verifyResult.meta.lastVerifiedAt
+    };
+    await store.writeMeta(meta);
+  }
 
   const recallLimit = Math.max(1, input.recallLimit ?? DEFAULT_RECALL_LIMIT);
   const candidates = await recallInteractiveCandidates({
@@ -82,12 +105,22 @@ export async function prepareInteractiveSessionMemory(
     now: input.now
   });
 
+  if (recall.recalled.length > 0) {
+    await store.touchByHashes(recall.recalled.map((candidate) => candidate.hash));
+  }
+
   return {
     memoryText: recall.memoryText,
     store,
     recalled: recall.recalled,
     checkpointState: {
       storeSessionId: input.sessionId,
+      engine: meta.engine,
+      version: meta.version,
+      memoryPath: meta.memoryPath,
+      metaPath: meta.metaPath,
+      totalEntries: meta.totalEntries,
+      lastCompactedAt: meta.lastCompactedAt,
       latestSummaryText: input.checkpointState?.latestSummaryText
     }
   };
@@ -106,22 +139,45 @@ export async function captureInteractiveTurnMemory(
   });
 
   if (!entry || !shouldCapture(entry)) {
+    const meta = await input.store.readMeta();
+
     return {
       saved: false,
       checkpointState: {
-        storeSessionId: input.sessionId
+        storeSessionId: input.sessionId,
+        engine: meta.engine,
+        version: meta.version,
+        memoryPath: meta.memoryPath,
+        metaPath: meta.metaPath,
+        totalEntries: meta.totalEntries,
+        lastCompactedAt: meta.lastCompactedAt
       }
     };
   }
 
+  const memoryPath = input.store.paths().memoryPath;
+  await ensureSessionStoreWriteReady({
+    store: input.store,
+    meta: { memoryPath },
+    exists: existsSync(memoryPath),
+    now: input.now
+  });
+
   await input.store.put(entry);
   await input.store.seal();
+  const meta = await input.store.readMeta();
 
   return {
     saved: true,
     entry,
     checkpointState: {
       storeSessionId: input.sessionId,
+      engine: meta.engine,
+      version: meta.version,
+      memoryPath: meta.memoryPath,
+      metaPath: meta.metaPath,
+      totalEntries: meta.totalEntries,
+      lastCompactedAt: meta.lastCompactedAt,
       latestSummaryText: entry.summaryText
     }
   };

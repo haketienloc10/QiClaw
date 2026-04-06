@@ -13,7 +13,9 @@ const demoTool: Tool = {
       args: {
         type: 'array',
         items: { type: 'string' }
-      }
+      },
+      lineLimit: { type: 'number' },
+      includeContent: { type: 'boolean' }
     },
     required: ['path'],
     additionalProperties: false
@@ -50,5 +52,21 @@ describe('validateToolInput', () => {
 
   it('rejects non-string array items', () => {
     expect(() => validateToolInput(demoTool, { path: 'note.txt', args: ['ok', 2] })).toThrow(/args\[\]: expected a string/i);
+  });
+
+  it('accepts finite number values for number properties', () => {
+    expect(() => validateToolInput(demoTool, { path: 'note.txt', lineLimit: 10 })).not.toThrow();
+  });
+
+  it('rejects non-number values for number properties', () => {
+    expect(() => validateToolInput(demoTool, { path: 'note.txt', lineLimit: '10' })).toThrow(/lineLimit: expected a number/i);
+  });
+
+  it('accepts boolean values for boolean properties', () => {
+    expect(() => validateToolInput(demoTool, { path: 'note.txt', includeContent: true })).not.toThrow();
+  });
+
+  it('rejects non-boolean values for boolean properties', () => {
+    expect(() => validateToolInput(demoTool, { path: 'note.txt', includeContent: 'yes' })).toThrow(/includeContent: expected a boolean/i);
   });
 });

@@ -6,6 +6,7 @@ import {
   normalizeOpenAIResponseMetadata,
   readOpenAITextContent
 } from '../../src/provider/openai.js';
+import { searchTool } from '../../src/tools/search.js';
 
 describe('buildOpenAIResponsesRequest', () => {
   it('includes the matching function call before a retained tool result after pruning', () => {
@@ -102,6 +103,31 @@ describe('buildOpenAIResponsesRequest', () => {
         role: 'assistant',
         content: 'I will inspect it.'
       }
+    ]);
+  });
+
+  it('advertises optional smart search inputs without strict OpenAI schema mode', () => {
+    const request = buildOpenAIResponsesRequest({
+      model: 'gpt-4.1',
+      messages: [],
+      availableTools: [searchTool]
+    });
+
+    expect(request.tools).toEqual([
+      expect.objectContaining({
+        type: 'function',
+        name: 'search',
+        parameters: expect.objectContaining({
+          properties: expect.objectContaining({
+            pattern: { type: 'string' },
+            contextLines: { type: 'number' },
+            maxMatches: { type: 'number' },
+            maxFiles: { type: 'number' }
+          }),
+          required: ['pattern']
+        }),
+        strict: false
+      })
     ]);
   });
 });

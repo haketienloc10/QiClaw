@@ -192,6 +192,7 @@ function createPendingFooterState(
       toolCallsByName: {},
       inputTokensTotal: 0,
       outputTokensTotal: 0,
+      cacheReadInputTokens: 0,
       promptCharsMax: 0,
       toolResultCharsInFinalPrompt: 0,
       assistantToolCallCharsInFinalPrompt: 0,
@@ -333,7 +334,7 @@ function formatFooterLine(
     formatCompactStatus(summary.stopReason),
     `${summary.providerRounds} provider`,
     summary.toolCallsTotal > 0 ? `${summary.toolCallsTotal} tools` : undefined,
-    `${summary.inputTokensTotal} in / ${summary.outputTokensTotal} out`,
+    formatTokenFooter(summary, mode),
     durationMs === undefined ? undefined : formatDurationSeconds(durationMs)
   ].filter((part): part is string => Boolean(part));
 
@@ -348,7 +349,7 @@ function formatInteractiveFooterLine(summary: TurnSummaryTelemetryData, duration
   const parts = [
     `${summary.providerRounds} provider`,
     summary.toolCallsTotal > 0 ? `${summary.toolCallsTotal} tools` : undefined,
-    `${summary.inputTokensTotal} in / ${summary.outputTokensTotal} out`,
+    formatTokenFooter(summary, 'interactive'),
     durationMs === undefined ? undefined : `⏱️` + formatDurationSeconds(durationMs)
   ].filter((part): part is string => Boolean(part));
 
@@ -357,6 +358,29 @@ function formatInteractiveFooterLine(summary: TurnSummaryTelemetryData, duration
 
 function formatCompactStatus(stopReason: string): string {
   return stopReason === 'completed' ? 'completed' : `stopped: ${stopReason}`;
+}
+
+function formatTokenFooter(
+  summary: TurnSummaryTelemetryData,
+  mode: 'compact' | 'interactive'
+): string {
+  const base = `${summary.inputTokensTotal} in / ${summary.outputTokensTotal} out`;
+  const cachedTokens = summary.cacheReadInputTokens ?? 0;
+
+  if (cachedTokens <= 0) {
+    return base;
+  }
+
+  const cacheRatio = summary.inputTokensTotal > 0
+    ? Math.round((cachedTokens / summary.inputTokensTotal) * 100)
+    : 0;
+  const cacheText = `${cachedTokens} cached (${cacheRatio}%)`;
+
+  if (mode === 'interactive') {
+    return `${base} / ${pc.dim(cacheText)}`;
+  }
+
+  return `${base} / ${cacheText}`;
 }
 
 function formatDurationSeconds(durationMs: number): string {

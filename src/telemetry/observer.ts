@@ -157,6 +157,7 @@ export interface TurnSummaryTelemetryData extends TelemetryEventContextData {
   toolCallsByName: Record<string, number>;
   inputTokensTotal: number;
   outputTokensTotal: number;
+  cacheReadInputTokens: number;
   promptCharsMax: number;
   toolResultCharsInFinalPrompt: number;
   assistantToolCallCharsInFinalPrompt: number;

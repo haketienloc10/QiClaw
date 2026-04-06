@@ -26,6 +26,7 @@ import { createInMemoryMetricsObserver } from '../telemetry/metrics.js';
 import type { TelemetryObserver } from '../telemetry/observer.js';
 import { createRepl } from './repl.js';
 import { createTelemetryEvent } from '../telemetry/observer.js';
+import type { Message } from '../core/types.js';
 
 export type Cli = {
   run(): Promise<number>;
@@ -44,6 +45,12 @@ interface AssistantBlockWriter {
 
 interface InteractiveChromeOptions {
   modelLabel?: string;
+}
+
+interface InteractiveStartupLinesOptions extends InteractiveChromeOptions {
+  history: Message[];
+  historySummary?: string;
+  restored: boolean;
 }
 
 type CliDisplayMode = 'compact' | 'interactive';
@@ -176,7 +183,12 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
         const repl = createRepl({
           promptLabel: pc.cyan('» '),
           multilinePromptLabel: pc.cyan('» '),
-          startupLines: formatInteractiveChrome({ modelLabel: runtime.provider.model }),
+          startupLines: formatInteractiveStartupLines({
+            modelLabel: runtime.provider.model,
+            history,
+            historySummary,
+            restored: Boolean(restored)
+          }),
           helpText: formatInteractiveInfoLine('Commands: /help, /multiline, /skills, /exit'),
           multilineNoticeText: formatInteractiveInfoLine('Multiline mode on. Enter /send to submit or /cancel to discard.'),
           multilineDiscardedText: formatInteractiveInfoLine('Multiline draft discarded.'),
@@ -696,6 +708,33 @@ function formatInteractiveChrome(options: InteractiveChromeOptions): string[] {
     `${pc.cyan('│')} ${pc.bold(pc.cyan(leftPlain))}${spaces}${pc.dim(rightPlain)} ${pc.cyan('│')}`,
     `${pc.cyan('└')}${pc.cyan('─'.repeat(width - 2))}${pc.cyan('┘')}`
   ];
+}
+
+function formatInteractiveStartupLines(options: InteractiveStartupLinesOptions): string[] {
+  const startupLines = formatInteractiveChrome(options);
+
+  if (!options.restored) {
+    return startupLines;
+  }
+
+  const summaryAvailability = options.historySummary ? 'summary available' : 'summary unavailable';
+  const previewLines = options.history.slice(-3).map((message) => formatCheckpointPreviewLine(message));
+
+  return [
+    ...startupLines,
+    formatInteractiveInfoLine(`Resumed checkpoint • ${options.history.length} messages • ${summaryAvailability}`),
+    ...previewLines
+  ];
+}
+
+function formatCheckpointPreviewLine(message: Message): string {
+  const content = message.content.trim();
+
+  if (message.role === 'tool') {
+    return `${pc.dim(`tool(${message.name ?? 'unknown'})`)}: ${content}`;
+  }
+
+  return `${pc.dim(message.role)}: ${content}`;
 }
 
 function formatInteractiveInfoLine(text: string): string {

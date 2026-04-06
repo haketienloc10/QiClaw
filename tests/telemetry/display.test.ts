@@ -1,3 +1,4 @@
+import pc from 'picocolors';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createCompactCliTelemetryObserver } from '../../src/telemetry/display.js';
@@ -598,6 +599,99 @@ describe('createCompactCliTelemetryObserver', () => {
     observer.flushPendingFooter?.();
 
     expect(lines).toEqual(['─ completed • 1 provider • 185 in / 15 out • 6.3s']);
+  });
+
+  it('renders cached input tokens in the footer when present', () => {
+    const lines: string[] = [];
+    const observer = createCompactCliTelemetryObserver({
+      writeActivityLine(text) {
+        lines.push(text);
+      },
+      writeFooterLine(text) {
+        lines.push(text);
+      }
+    }) as ReturnType<typeof createCompactCliTelemetryObserver> & { flushPendingFooter?: () => void };
+
+    observer.record(createTelemetryEvent('turn_completed', 'completion_check', {
+      turnId: 'turn-cache',
+      providerRound: 2,
+      toolRound: 0,
+      stopReason: 'completed',
+      toolRoundsUsed: 0,
+      isVerified: true,
+      durationMs: 2100
+    }));
+    observer.record(createTelemetryEvent('turn_summary', 'completion_check', {
+      turnId: 'turn-cache',
+      providerRound: 2,
+      toolRound: 0,
+      providerRounds: 2,
+      toolRoundsUsed: 0,
+      toolCallsTotal: 0,
+      toolCallsByName: {},
+      inputTokensTotal: 516,
+      outputTokensTotal: 274,
+      cacheReadInputTokens: 128,
+      promptCharsMax: 100,
+      toolResultCharsInFinalPrompt: 0,
+      assistantToolCallCharsInFinalPrompt: 0,
+      toolResultPromptGrowthCharsTotal: 0,
+      toolResultCharsAddedAcrossTurn: 0,
+      turnCompleted: true,
+      stopReason: 'completed'
+    }));
+
+    observer.flushPendingFooter?.();
+
+    expect(lines).toEqual(['─ completed • 2 provider • 516 in / 274 out / 128 cached (25%) • 2.1s']);
+  });
+
+  it('renders cached input tokens with a dimmed ratio in interactive mode', () => {
+    const lines: string[] = [];
+    const observer = createCompactCliTelemetryObserver({
+      mode: 'interactive',
+      writeActivityLine(text) {
+        lines.push(text);
+      },
+      writeFooterLine(text) {
+        lines.push(text);
+      }
+    }) as ReturnType<typeof createCompactCliTelemetryObserver> & { flushPendingFooter?: () => void };
+
+    observer.record(createTelemetryEvent('turn_completed', 'completion_check', {
+      turnId: 'turn-interactive-cache',
+      providerRound: 2,
+      toolRound: 0,
+      stopReason: 'completed',
+      toolRoundsUsed: 0,
+      isVerified: true,
+      durationMs: 2100
+    }));
+    observer.record(createTelemetryEvent('turn_summary', 'completion_check', {
+      turnId: 'turn-interactive-cache',
+      providerRound: 2,
+      toolRound: 0,
+      providerRounds: 2,
+      toolRoundsUsed: 0,
+      toolCallsTotal: 0,
+      toolCallsByName: {},
+      inputTokensTotal: 516,
+      outputTokensTotal: 274,
+      cacheReadInputTokens: 128,
+      promptCharsMax: 100,
+      toolResultCharsInFinalPrompt: 0,
+      assistantToolCallCharsInFinalPrompt: 0,
+      toolResultPromptGrowthCharsTotal: 0,
+      toolResultCharsAddedAcrossTurn: 0,
+      turnCompleted: true,
+      stopReason: 'completed'
+    }));
+
+    observer.flushPendingFooter?.();
+
+    expect(lines).toEqual([
+      `${pc.dim('─'.repeat(54))}\n${pc.green('✔')} ${pc.green(pc.bold('DONE'))} • 2 provider${pc.dim(' • ')}516 in / 274 out / ${pc.dim('128 cached (25%)')}${pc.dim(' • ')}⏱️2.1s`
+    ]);
   });
 
   it('renders the compact base footer without CLI-only verification and tool-round details', () => {

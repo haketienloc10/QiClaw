@@ -62,6 +62,7 @@ interface TurnTelemetryState {
   toolCallsByName: Record<string, number>;
   inputTokensTotal: number;
   outputTokensTotal: number;
+  cacheReadInputTokens: number;
   hasToolErrors: boolean;
   lastPromptRawChars: number;
   lastToolResultChars: number;
@@ -88,6 +89,7 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTu
     toolCallsByName: {},
     inputTokensTotal: 0,
     outputTokensTotal: 0,
+    cacheReadInputTokens: 0,
     hasToolErrors: false,
     lastPromptRawChars: 0,
     lastToolResultChars: 0,
@@ -342,6 +344,7 @@ function buildResult(
       toolCallsByName: telemetry.toolCallsByName,
       inputTokensTotal: telemetry.inputTokensTotal,
       outputTokensTotal: telemetry.outputTokensTotal,
+      cacheReadInputTokens: telemetry.cacheReadInputTokens,
       promptCharsMax: telemetry.promptCharsMax,
       toolResultCharsInFinalPrompt: telemetry.finalToolResultChars,
       assistantToolCallCharsInFinalPrompt: telemetry.finalAssistantToolCallChars,
@@ -506,7 +509,8 @@ function normalizeUsageSummary(usage?: ProviderUsageSummary): ProviderUsageSumma
   return {
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
-    totalTokens: usage.totalTokens
+    totalTokens: usage.totalTokens,
+    cacheReadInputTokens: usage.cacheReadInputTokens
   };
 }
 
@@ -540,6 +544,7 @@ function accumulateUsageTotals(telemetry: TurnTelemetryState, usage?: ProviderUs
 
   telemetry.inputTokensTotal += usage.inputTokens ?? 0;
   telemetry.outputTokensTotal += usage.outputTokens ?? 0;
+  telemetry.cacheReadInputTokens += usage.cacheReadInputTokens ?? 0;
 }
 
 function countToolCallsByName(toolCalls: ToolCallRequest[]): Record<string, number> {

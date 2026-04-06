@@ -3405,11 +3405,13 @@ describe('buildCli', () => {
       updatedAt: '2026-03-30T12:00:00.000Z'
     });
 
+    const writes: string[] = [];
     const cli = buildCli({
       argv: [],
       cwd: tempDir,
       stdout: {
-        write() {
+        write(chunk) {
+          writes.push(String(chunk));
           return true;
         }
       },
@@ -3485,6 +3487,146 @@ describe('buildCli', () => {
     });
 
     await expect(cli.run()).resolves.toBe(0);
+    const output = stripAnsi(writes.join(''));
+    expectContainsInOrder(output, [
+      '┌────────────────────────────────────────────────────┐\n',
+      '│ ⚡QiClaw                      🤖 Model: test-model │\n',
+      '└────────────────────────────────────────────────────┘\n',
+      'Resumed checkpoint • 4 messages • summary available\n',
+      'assistant: Calling Read tool.\n',
+      'tool(Read): {"path":"/tmp/package.json"}\n',
+      'assistant: package.json inspected\n',
+      '\n──────────────────────────────────────────────────────\n\nfollow-up answer\n'
+    ]);
+  });
+
+  it('renders full multiline checkpoint preview content instead of truncating to the first line', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-'));
+    tempDirs.push(tempDir);
+
+    const checkpointDir = join(tempDir, '.qiclaw');
+    const checkpointStoreFilename = join(checkpointDir, 'checkpoint.sqlite');
+    const { mkdir } = await import('node:fs/promises');
+    const { CheckpointStore } = await import('../../src/session/checkpointStore.js');
+    const { createInteractiveCheckpointJson } = await import('../../src/session/session.js');
+
+    await mkdir(checkpointDir, { recursive: true });
+    const store = new CheckpointStore(checkpointStoreFilename);
+    store.save({
+      sessionId: 'restored-session-multiline',
+      taskId: 'interactive',
+      status: 'completed',
+      checkpointJson: createInteractiveCheckpointJson({
+        version: 1,
+        history: [
+          { role: 'user', content: 'first line\nsecond line' },
+          { role: 'assistant', content: 'assistant line one\nassistant line two' }
+        ],
+        historySummary: 'Multiline checkpoint preview'
+      }),
+      updatedAt: '2026-03-30T12:00:00.000Z'
+    });
+
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: [],
+      cwd: tempDir,
+      stdout: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: tempDir,
+        observer: runtimeOptions.observer ?? createNoopObserver(),
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      createSessionId: () => 'fresh-session',
+      readLine: (() => {
+        const inputs = ['/exit'];
+        return async () => inputs.shift();
+      })(),
+      runTurn: async () => {
+        throw new Error('runTurn should not be called');
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+    const output = stripAnsi(writes.join(''));
+    expectContainsInOrder(output, [
+      'Resumed checkpoint • 2 messages • summary available\n',
+      'user: first line\nsecond line\n',
+      'assistant: assistant line one\nassistant line two\n'
+    ]);
+  });
+
+  it('shows summary unavailable when resuming a checkpoint without a history summary', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-'));
+    tempDirs.push(tempDir);
+
+    const checkpointDir = join(tempDir, '.qiclaw');
+    const checkpointStoreFilename = join(checkpointDir, 'checkpoint.sqlite');
+    const { mkdir } = await import('node:fs/promises');
+    const { CheckpointStore } = await import('../../src/session/checkpointStore.js');
+    const { createInteractiveCheckpointJson } = await import('../../src/session/session.js');
+
+    await mkdir(checkpointDir, { recursive: true });
+    const store = new CheckpointStore(checkpointStoreFilename);
+    store.save({
+      sessionId: 'restored-session-no-summary',
+      taskId: 'interactive',
+      status: 'completed',
+      checkpointJson: createInteractiveCheckpointJson({
+        version: 1,
+        history: [
+          { role: 'user', content: 'first restored message' },
+          { role: 'assistant', content: 'second restored message' }
+        ]
+      }),
+      updatedAt: '2026-03-30T12:00:00.000Z'
+    });
+
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: [],
+      cwd: tempDir,
+      stdout: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: tempDir,
+        observer: runtimeOptions.observer ?? createNoopObserver(),
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      createSessionId: () => 'fresh-session',
+      readLine: (() => {
+        const inputs = ['/exit'];
+        return async () => inputs.shift();
+      })(),
+      runTurn: async () => {
+        throw new Error('runTurn should not be called');
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+    const output = stripAnsi(writes.join(''));
+    expectContainsInOrder(output, [
+      'Resumed checkpoint • 2 messages • summary unavailable\n',
+      'user: first restored message\n',
+      'assistant: second restored message\n'
+    ]);
   });
 
   it('ignores invalid interactive checkpoints and starts a new session', async () => {

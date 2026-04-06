@@ -162,6 +162,47 @@ describe('CheckpointStore', () => {
     });
   });
 
+  it('returns session_b as the latest checkpoint when timestamps tie and session ids sort descending', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'checkpoint-store-'));
+    tempDirs.push(tempDir);
+
+    const filename = join(tempDir, 'checkpoint.sqlite');
+    const store = new CheckpointStore(filename);
+
+    store.save({
+      sessionId: 'session_a',
+      taskId: 't1',
+      status: 'completed',
+      checkpointJson: createInteractiveCheckpointJson({
+        version: 1,
+        history: [],
+        historySummary: 'alpha summary'
+      }),
+      updatedAt: '2026-03-30T11:00:00.000Z'
+    });
+
+    store.save({
+      sessionId: 'session_b',
+      taskId: 't2',
+      status: 'completed',
+      checkpointJson: createInteractiveCheckpointJson({
+        version: 1,
+        history: [],
+        historySummary: 'beta summary'
+      }),
+      updatedAt: '2026-03-30T11:00:00.000Z'
+    });
+
+    const latest = store.getLatest();
+
+    expect(latest?.sessionId).toBe('session_b');
+    expect(latest).toMatchObject({
+      taskId: 't2',
+      status: 'completed',
+      updatedAt: '2026-03-30T11:00:00.000Z'
+    });
+  });
+
   it('returns undefined when the session id does not exist', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'checkpoint-store-'));
     tempDirs.push(tempDir);

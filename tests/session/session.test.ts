@@ -39,7 +39,7 @@ describe('parseInteractiveCheckpointJson', () => {
       ],
       historySummary: 'Read package.json successfully.',
       sessionMemory: {
-        storeSessionId: 'session_123',
+        storeSessionId: 'session-memory-1',
         engine: 'memvid-session-store',
         version: 1,
         memoryPath: '/tmp/.qiclaw/sessions/session_123/memory.mv2',
@@ -50,7 +50,9 @@ describe('parseInteractiveCheckpointJson', () => {
       }
     });
 
-    expect(parseInteractiveCheckpointJson(checkpointJson)).toEqual({
+    const parsed = parseInteractiveCheckpointJson(checkpointJson);
+
+    expect(parsed).toEqual({
       version: 1,
       history: [
         { role: 'user', content: 'inspect package.json' },
@@ -75,7 +77,7 @@ describe('parseInteractiveCheckpointJson', () => {
       ],
       historySummary: 'Read package.json successfully.',
       sessionMemory: {
-        storeSessionId: 'session_123',
+        storeSessionId: 'session-memory-1',
         engine: 'memvid-session-store',
         version: 1,
         memoryPath: '/tmp/.qiclaw/sessions/session_123/memory.mv2',
@@ -85,6 +87,8 @@ describe('parseInteractiveCheckpointJson', () => {
         latestSummaryText: 'package summary'
       }
     });
+    expect(parsed?.sessionMemory?.storeSessionId).toBe('session-memory-1');
+    expect(parsed?.sessionMemory?.memoryPath).toContain('.qiclaw');
   });
 
   it('rejects malformed assistant toolCalls when restoring checkpoints', () => {

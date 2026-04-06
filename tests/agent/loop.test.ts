@@ -820,6 +820,87 @@ describe('agent loop', () => {
     ]);
   });
 
+  it('preserves user -> assistant tool call -> tool result -> assistant final answer order', async () => {
+    const provider = createScriptedProvider([
+      {
+        message: {
+          role: 'assistant',
+          content: 'I will inspect package.json.',
+          toolCalls: [
+            {
+              id: 'tool_read_1',
+              name: 'Read',
+              input: { file_path: '/tmp/package.json' }
+            }
+          ]
+        },
+        toolCalls: [
+          {
+            id: 'tool_read_1',
+            name: 'Read',
+            input: { file_path: '/tmp/package.json' }
+          }
+        ]
+      },
+      {
+        message: {
+          role: 'assistant',
+          content: 'package.json shows version 1.2.3.'
+        },
+        toolCalls: []
+      }
+    ]);
+
+    const result = await runAgentTurn({
+      provider,
+      availableTools: [
+        {
+          name: 'Read',
+          description: 'Read a file',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              file_path: { type: 'string' }
+            },
+            required: ['file_path'],
+            additionalProperties: false
+          },
+          async execute() {
+            return { content: '{"version":"1.2.3"}' };
+          }
+        }
+      ],
+      baseSystemPrompt: 'Base system prompt',
+      userInput: 'show me the package version',
+      cwd: '/tmp',
+      maxToolRounds: 2
+    });
+
+    expect(result.history).toEqual([
+      { role: 'user', content: 'show me the package version' },
+      {
+        role: 'assistant',
+        content: 'I will inspect package.json.',
+        toolCalls: [
+          {
+            id: 'tool_read_1',
+            name: 'Read',
+            input: { file_path: '/tmp/package.json' }
+          }
+        ]
+      },
+      {
+        role: 'tool',
+        name: 'Read',
+        toolCallId: 'tool_read_1',
+        content: '{"version":"1.2.3"}',
+        isError: false
+      },
+      { role: 'assistant', content: 'package.json shows version 1.2.3.' }
+    ]);
+    expect(result.history.map((entry) => entry.role)).toEqual(['user', 'assistant', 'tool', 'assistant']);
+  });
+
   it('includes prompt assembly context when optional prompt inputs are provided', async () => {
     const seenRequests: string[][] = [];
     const provider = createScriptedProvider(

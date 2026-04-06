@@ -50,6 +50,9 @@ export interface RunAgentTurnResult {
   verification: AgentTurnVerification;
 }
 
+const DEFAULT_PROVIDER_TIMEOUT_MS = 120_000;
+const MAX_TOOL_RESULT_CONTENT_CHARS = 12_000;
+
 interface TurnTelemetryState {
   turnId: string;
   providerRound: number;
@@ -155,10 +158,14 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTu
       );
 
       const providerStartedAt = Date.now();
-      const response = await input.provider.generate({
-        messages: prompt.messages,
-        availableTools: input.availableTools
-      });
+      const response = await withProviderTimeout(
+        input.provider.generate({
+          messages: prompt.messages,
+          availableTools: input.availableTools
+        }),
+        getProviderTimeoutMs(),
+        input.provider.name
+      );
 
       if (response.toolCalls.length > 0) {
         telemetry.toolRound += 1;
@@ -215,7 +222,10 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTu
         );
 
         const toolStartedAt = Date.now();
-        const toolResult = await dispatchAllowedToolCall(toolCall, input.availableTools, input.cwd);
+        const toolResult = truncateToolResultMessage(
+          await dispatchAllowedToolCall(toolCall, input.availableTools, input.cwd),
+          MAX_TOOL_RESULT_CONTENT_CHARS
+        );
         history.push(toolResult);
         telemetry.toolCallsTotal += 1;
         telemetry.toolCallsByName[toolCall.name] = (telemetry.toolCallsByName[toolCall.name] ?? 0) + 1;
@@ -564,6 +574,50 @@ function detectRedundancyHint(
   }
 
   return undefined;
+}
+
+function truncateToolResultMessage(toolResult: ToolResultMessage, maxChars: number): ToolResultMessage {
+  if (toolResult.content.length <= maxChars) {
+    return toolResult;
+  }
+
+  return {
+    ...toolResult,
+    content: `${toolResult.content.slice(0, Math.max(0, maxChars - 64))}\n… truncated from ${toolResult.content.length} chars`
+  };
+}
+
+function getProviderTimeoutMs(): number {
+  const raw = process.env.QICLAW_PROVIDER_TIMEOUT_MS;
+  if (!raw) {
+    return DEFAULT_PROVIDER_TIMEOUT_MS;
+  }
+
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_PROVIDER_TIMEOUT_MS;
+  }
+
+  return Math.floor(parsed);
+}
+
+function withProviderTimeout<T>(promise: Promise<T>, timeoutMs: number, providerName: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${providerName} provider timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
 }
 
 function createTurnId(): string {

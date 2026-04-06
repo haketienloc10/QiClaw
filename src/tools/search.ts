@@ -1,106 +1,136 @@
-import { readdir, readFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { resolve, relative } from 'node:path';
 
+import { readFileTool } from './readFile.js';
+import { shellReadonlyTool } from './shell.js';
 import type { Tool } from './tool.js';
 
 type SearchInput = {
   pattern: string;
 };
 
-const skippedDirectoryNames = new Set(['.git', 'node_modules', 'dist', '.worktrees']);
-const contextLinesBefore = 2;
-const contextLinesAfter = 2;
-
-type LineRange = {
-  start: number;
-  end: number;
+type ParsedMatch = {
+  filePath: string;
+  lineNumber: number;
 };
 
-function mergeOverlappingRanges(ranges: LineRange[]): LineRange[] {
+const SEARCH_OUTPUT_CHAR_LIMIT = 12_000;
+const SEARCH_OUTPUT_LINE_LIMIT = 200;
+const CONTEXT_LINES_BEFORE = 2;
+const CONTEXT_LINES_AFTER = 2;
+const skippedGlobs = ['!.git/**', '!node_modules/**', '!dist/**', '!.worktrees/**'];
+
+function buildSearchInvocation(commandName: 'rg' | 'grep', pattern: string) {
+  if (commandName === 'rg') {
+    return {
+      command: 'rg' as const,
+      args: ['-n', '--no-heading', ...skippedGlobs.flatMap((glob) => ['-g', glob]), pattern, '.']
+    };
+  }
+
+  return {
+    command: 'grep' as const,
+    args: ['-R', '-n', '--binary-files=without-match', '--exclude-dir=.git', '--exclude-dir=node_modules', '--exclude-dir=dist', '--exclude-dir=.worktrees', pattern, '.']
+  };
+}
+
+function isCommandMissingError(error: unknown, commandName: string): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return message.includes(`command failed: ${commandName}`) && message.includes('enoent');
+}
+
+function parseSearchMatches(rawOutput: string, cwd: string): ParsedMatch[] {
+  return rawOutput
+    .trim()
+    .split(/\r?\n/)
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const match = line.match(/^(.*?):(\d+):(.*)$/);
+      if (!match) {
+        return null;
+      }
+
+      const [, rawPath, rawLineNumber] = match;
+      return {
+        filePath: resolve(cwd, rawPath),
+        lineNumber: Number(rawLineNumber)
+      } satisfies ParsedMatch;
+    })
+    .filter((match): match is ParsedMatch => match !== null);
+}
+
+function mergeOverlappingRanges(ranges: Array<{ start: number; end: number }>): Array<{ start: number; end: number }> {
   if (ranges.length === 0) {
     return [];
   }
 
   const sortedRanges = [...ranges].sort((left, right) => left.start - right.start);
-  const mergedRanges: LineRange[] = [sortedRanges[0]!];
+  const merged = [sortedRanges[0]!];
 
   for (const range of sortedRanges.slice(1)) {
-    const previousRange = mergedRanges.at(-1)!;
-
-    if (range.start <= previousRange.end + 1) {
-      previousRange.end = Math.max(previousRange.end, range.end);
+    const previous = merged.at(-1)!;
+    if (range.start <= previous.end + 1) {
+      previous.end = Math.max(previous.end, range.end);
       continue;
     }
 
-    mergedRanges.push({ ...range });
+    merged.push({ ...range });
   }
 
-  return mergedRanges;
+  return merged;
 }
 
-function formatMatchBlock(fullPath: string, content: string, pattern: string): string | null {
-  const lines = content.split(/\r?\n/);
-  const ranges: LineRange[] = [];
-
-  for (const [index, line] of lines.entries()) {
-    if (!line.includes(pattern)) {
-      continue;
-    }
-
-    ranges.push({
-      start: Math.max(0, index - contextLinesBefore),
-      end: Math.min(lines.length - 1, index + contextLinesAfter)
-    });
+async function formatSearchMatches(matches: ParsedMatch[], cwd: string): Promise<string> {
+  if (matches.length === 0) {
+    return 'No matches found.';
   }
 
-  if (ranges.length === 0) {
-    return null;
+  const matchesByFile = new Map<string, ParsedMatch[]>();
+  for (const match of matches) {
+    const fileMatches = matchesByFile.get(match.filePath) ?? [];
+    fileMatches.push(match);
+    matchesByFile.set(match.filePath, fileMatches);
   }
 
-  const mergedRanges = mergeOverlappingRanges(ranges);
-  const snippets = mergedRanges.map((range) => {
-    const snippetLines: string[] = [];
+  const blocks: string[] = [];
 
-    for (let index = range.start; index <= range.end; index += 1) {
-      snippetLines.push(`${index + 1}: ${lines[index]}`);
+  for (const [filePath, fileMatches] of matchesByFile) {
+    const ranges = mergeOverlappingRanges(
+      fileMatches.map((match) => ({
+        start: Math.max(1, match.lineNumber - CONTEXT_LINES_BEFORE),
+        end: match.lineNumber + CONTEXT_LINES_AFTER
+      }))
+    );
+
+    const snippetLines: string[] = [filePath];
+    const relativePath = relative(cwd, filePath) || filePath;
+
+    for (const range of ranges) {
+      const snippet = await readFileTool.execute(
+        {
+          path: relativePath,
+          startLine: range.start,
+          endLine: range.end
+        },
+        { cwd }
+      );
+      snippetLines.push(snippet.content);
     }
 
-    return snippetLines.join('\n');
-  });
-
-  return `${fullPath}\n${snippets.join('\n--\n')}`;
-}
-
-async function searchDirectory(rootDir: string, pattern: string, matches: string[]): Promise<void> {
-  const entries = await readdir(rootDir, { withFileTypes: true });
-
-  for (const entry of entries) {
-    if (entry.isDirectory() && skippedDirectoryNames.has(entry.name)) {
-      continue;
-    }
-
-    const fullPath = join(rootDir, entry.name);
-
-    if (entry.isDirectory()) {
-      await searchDirectory(fullPath, pattern, matches);
-      continue;
-    }
-
-    if (!entry.isFile()) {
-      continue;
-    }
-
-    try {
-      const content = await readFile(fullPath, 'utf8');
-      const matchBlock = formatMatchBlock(fullPath, content, pattern);
-
-      if (matchBlock) {
-        matches.push(matchBlock);
-      }
-    } catch {
-      // Ignore unreadable or binary-like files in this MVP implementation.
-    }
+    blocks.push(snippetLines.join('\n'));
   }
+
+  const combined = blocks.join('\n\n');
+  if (combined.length <= SEARCH_OUTPUT_CHAR_LIMIT && combined.split(/\r?\n/).length <= SEARCH_OUTPUT_LINE_LIMIT) {
+    return combined;
+  }
+
+  const limitedLines = combined.split(/\r?\n/).slice(0, SEARCH_OUTPUT_LINE_LIMIT).join('\n');
+  const truncated = limitedLines.slice(0, SEARCH_OUTPUT_CHAR_LIMIT);
+  return `${truncated}\n… limit reached, truncated output`;
 }
 
 export const searchTool: Tool<SearchInput> = {
@@ -115,13 +145,39 @@ export const searchTool: Tool<SearchInput> = {
     additionalProperties: false
   },
   async execute(input, context) {
-    const rootDir = resolve(context.cwd);
-    const matches: string[] = [];
+    const commands: Array<'rg' | 'grep'> = ['rg', 'grep'];
+    let lastError: unknown;
 
-    await searchDirectory(rootDir, input.pattern, matches);
+    for (const commandName of commands) {
+      try {
+        const invocation = buildSearchInvocation(commandName, input.pattern);
+        const result = await shellReadonlyTool.execute(invocation, context);
+        const matches = parseSearchMatches(result.content, context.cwd);
+        return {
+          content: await formatSearchMatches(matches, context.cwd)
+        };
+      } catch (error) {
+        lastError = error;
+        if (commandName === 'rg' && isCommandMissingError(error, 'rg')) {
+          continue;
+        }
 
-    return {
-      content: matches.join('\n\n')
-    };
+        if (error instanceof Error && /exit code:\s*1/i.test(error.message)) {
+          return {
+            content: 'No matches found.'
+          };
+        }
+
+        throw error;
+      }
+    }
+
+    if (lastError instanceof Error && /exit code:\s*1/i.test(lastError.message)) {
+      return {
+        content: 'No matches found.'
+      };
+    }
+
+    throw lastError instanceof Error ? lastError : new Error(`Search failed for pattern: ${input.pattern}`);
   }
 };

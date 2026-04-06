@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { dispatchToolCall } from '../../src/agent/dispatcher.js';
 import { defaultAgentSpec } from '../../src/agent/defaultAgentSpec.js';
@@ -15,6 +15,7 @@ import {
   createAnthropicProvider,
   extractAnthropicToolCalls,
   getAnthropicApiKey,
+  normalizeAnthropicResponseMetadata,
   readAnthropicTextContent
 } from '../../src/provider/anthropic.js';
 import { createProvider } from '../../src/provider/factory.js';
@@ -23,7 +24,8 @@ import {
   createOpenAIProvider,
   extractOpenAIToolCalls,
   getOpenAIApiKey,
-  readOpenAITextContent
+  readOpenAITextContent,
+  normalizeOpenAIResponseMetadata
 } from '../../src/provider/openai.js';
 import {
   normalizeProviderResponse,
@@ -36,7 +38,13 @@ import { editFileTool } from '../../src/tools/editFile.js';
 import { getBuiltinToolNames, getBuiltinTools, getTool, hasTool, type Tool, type ToolContext } from '../../src/tools/registry.js';
 import { readFileTool } from '../../src/tools/readFile.js';
 import { searchTool } from '../../src/tools/search.js';
+import * as shellToolModule from '../../src/tools/shell.js';
 import { shellExecTool, shellReadonlyTool } from '../../src/tools/shell.js';
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 describe('telemetry typing', () => {
   it('requires payloads for events whose contracts need data', () => {
@@ -444,7 +452,7 @@ describe('provider normalization, provider, and dispatcher', () => {
     expect(request.tools?.[0]).toMatchObject({
       type: 'function',
       name: 'read_file',
-      strict: true
+      strict: false
     });
   });
 
@@ -2119,6 +2127,87 @@ describe('agent loop', () => {
       lastTurnDurationMs: expect.any(Number)
     });
   });
+
+  it('times out when provider.generate never resolves', async () => {
+    vi.useFakeTimers();
+
+    const provider: ModelProvider = {
+      name: 'hanging',
+      model: 'test-model',
+      async generate() {
+        return await new Promise<ProviderResponse>(() => undefined);
+      }
+    };
+
+    const turnPromise = runAgentTurn({
+      provider,
+      availableTools: getBuiltinTools(),
+      baseSystemPrompt: 'You are helpful.',
+      userInput: 'Answer briefly.',
+      cwd: '/tmp/runtime-timeout',
+      maxToolRounds: 1
+    });
+    const expectation = expect(turnPromise).rejects.toThrow(/provider.*timeout/i);
+
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    await expectation;
+  });
+
+  it('uses provider timeout from environment when configured', async () => {
+    vi.useFakeTimers();
+    process.env.QICLAW_PROVIDER_TIMEOUT_MS = '10';
+
+    const provider: ModelProvider = {
+      name: 'hanging',
+      model: 'test-model',
+      async generate() {
+        return await new Promise<ProviderResponse>(() => undefined);
+      }
+    };
+
+    const turnPromise = runAgentTurn({
+      provider,
+      availableTools: getBuiltinTools(),
+      baseSystemPrompt: 'You are helpful.',
+      userInput: 'Answer briefly.',
+      cwd: '/tmp/runtime-timeout-env',
+      maxToolRounds: 1
+    });
+    const expectation = expect(turnPromise).rejects.toThrow(/timeout after 10ms/i);
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    await expectation;
+    delete process.env.QICLAW_PROVIDER_TIMEOUT_MS;
+  });
+
+  it('marks openai incomplete responses in metadata', () => {
+    const metadata = normalizeOpenAIResponseMetadata({
+      id: 'resp-incomplete',
+      model: 'gpt-test',
+      status: 'incomplete',
+      incomplete_details: { reason: 'max_output_tokens' },
+      output: []
+    });
+
+    expect(metadata.finish.stopReason).toBe('max_output_tokens');
+    expect(metadata.responseMetrics.hasTextOutput).toBe(false);
+    expect(metadata.responseMetrics.toolCallCount).toBe(0);
+  });
+
+  it('marks anthropic empty responses in metadata', () => {
+    const metadata = normalizeAnthropicResponseMetadata({
+      id: 'msg-empty',
+      model: 'claude-test',
+      stop_reason: 'end_turn',
+      content: []
+    });
+
+    expect(metadata.finish.stopReason).toBe('end_turn');
+    expect(metadata.responseMetrics.hasTextOutput).toBe(false);
+    expect(metadata.responseMetrics.toolCallCount).toBe(0);
+  });
 });
 
 describe('built-in tool behavior', () => {
@@ -2140,6 +2229,18 @@ describe('built-in tool behavior', () => {
       /workspace/i
     );
     await expect(readFileTool.execute({ path: outsidePath }, { cwd: workspace })).rejects.toThrow(/workspace/i);
+  });
+
+  it('truncates oversized read_file output with a marker', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'tool-read-truncate-'));
+    const filePath = join(workspace, 'large.txt');
+
+    await writeFile(filePath, 'a'.repeat(40_000), 'utf8');
+
+    const result = await readFileTool.execute({ path: 'large.txt' }, { cwd: workspace });
+
+    expect(result.content.length).toBeLessThan(34_000);
+    expect(result.content).toMatch(/truncated/i);
   });
 
   it('keeps edit_file inside the workspace root and replaces only the first match', async () => {
@@ -2213,6 +2314,55 @@ describe('built-in tool behavior', () => {
       '5: line 5',
       '6: line 6'
     ].join('\n'));
+  });
+
+  it('falls back to grep when rg is unavailable and truncates oversized search output', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'tool-search-fallback-'));
+    const filePath = join(workspace, 'match.txt');
+
+    await writeFile(
+      filePath,
+      Array.from({ length: 400 }, (_, index) => `needle line ${index + 1} ${'x'.repeat(20)}`).join('\n'),
+      'utf8'
+    );
+
+    const shellSpy = vi.spyOn(shellToolModule.shellReadonlyTool, 'execute')
+      .mockRejectedValueOnce(new Error('Command failed: rg\nExit code: ENOENT'))
+      .mockResolvedValueOnce({
+        content: Array.from({ length: 400 }, (_, index) => `${filePath}:${index + 1}:needle line ${index + 1} ${'x'.repeat(20)}`).join('\n')
+      });
+
+    const result = await searchTool.execute({ pattern: 'needle' }, { cwd: workspace });
+
+    expect(shellSpy).toHaveBeenNthCalledWith(1, expect.objectContaining({ command: 'rg' }), { cwd: workspace });
+    expect(shellSpy).toHaveBeenNthCalledWith(2, expect.objectContaining({ command: 'grep' }), { cwd: workspace });
+    expect(result.content).toContain(filePath);
+    expect(result.content).toMatch(/truncated|limit reached/i);
+    expect(result.content.length).toBeLessThan(20_000);
+  });
+
+  it('supports partial line reads in read_file', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'tool-read-partial-'));
+    const filePath = join(workspace, 'match.txt');
+    const fileContent = Array.from({ length: 10 }, (_, index) => index === 4 ? 'needle here' : `line ${index + 1}`).join('\n');
+
+    await writeFile(filePath, fileContent, 'utf8');
+
+    const result = await readFileTool.execute({ path: 'match.txt', startLine: 4, endLine: 6 } as never, { cwd: workspace });
+
+    expect(result.content).toBe(['4: line 4', '5: needle here', '6: line 6'].join('\n'));
+  });
+
+  it('returns a compact message when search finds no matches', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'tool-search-empty-'));
+
+    vi.spyOn(shellToolModule.shellReadonlyTool, 'execute').mockResolvedValueOnce({
+      content: ''
+    });
+
+    const result = await searchTool.execute({ pattern: 'needle' }, { cwd: workspace });
+
+    expect(result.content).toMatch(/no matches/i);
   });
 
   it('wraps shell exec failures with command, exit code, stdout, and stderr', async () => {

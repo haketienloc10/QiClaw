@@ -157,10 +157,16 @@ export function createAnthropicProvider(options: AnthropicProviderOptions): Mode
       }));
 
       const metadata = normalizeAnthropicResponseMetadata(response);
+      const content = readAnthropicTextContent(response.content);
+      const toolCalls = extractAnthropicToolCalls(response.content);
+
+      if (!metadata.responseMetrics.hasTextOutput && toolCalls.length === 0) {
+        throw new Error(`Anthropic response contained no usable output${metadata.finish.stopReason ? `: ${metadata.finish.stopReason}` : ''}`);
+      }
 
       return normalizeProviderResponse({
-        content: readAnthropicTextContent(response.content),
-        toolCalls: extractAnthropicToolCalls(response.content),
+        content,
+        toolCalls,
         finish: metadata.finish,
         usage: metadata.usage,
         responseMetrics: metadata.responseMetrics,

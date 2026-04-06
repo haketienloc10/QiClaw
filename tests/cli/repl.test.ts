@@ -3604,7 +3604,15 @@ describe('buildCli', () => {
             seal: vi.fn(async () => undefined)
           } as never,
           recalled: [],
-          checkpointState: { storeSessionId: 'session-test-1' }
+          checkpointState: {
+            storeSessionId: 'session-test-1',
+            engine: 'memvid-session-store',
+            version: 1,
+            memoryPath: join(tempDir, 'session-memory.mv2'),
+            metaPath: join(tempDir, 'session-memory-meta.json'),
+            totalEntries: 0,
+            lastCompactedAt: null
+          }
         };
       },
       captureTurnMemory: async () => {

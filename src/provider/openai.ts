@@ -192,10 +192,16 @@ export function createOpenAIProvider(options: OpenAIProviderOptions): ModelProvi
       }));
 
       const metadata = normalizeOpenAIResponseMetadata(response);
+      const content = readOpenAITextContent(response.output);
+      const toolCalls = extractOpenAIToolCalls(response.output);
+
+      if (metadata.finish.stopReason && !metadata.responseMetrics.hasTextOutput && toolCalls.length === 0) {
+        throw new Error(`OpenAI response incomplete: ${metadata.finish.stopReason}`);
+      }
 
       return normalizeProviderResponse({
-        content: readOpenAITextContent(response.output),
-        toolCalls: extractOpenAIToolCalls(response.output),
+        content,
+        toolCalls,
         finish: metadata.finish,
         usage: metadata.usage,
         responseMetrics: metadata.responseMetrics,

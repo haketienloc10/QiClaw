@@ -14,12 +14,15 @@ export interface PromptWithContext {
 }
 
 export function buildPromptWithContext(input: BuildPromptWithContextInput): PromptWithContext {
-  const parts = [input.baseSystemPrompt, input.memoryText, input.skillsText, input.historySummary].filter(isPresent);
+  const parts = [input.baseSystemPrompt, input.skillsText, input.historySummary].filter(isPresent);
   const systemPrompt = parts.join('\n\n');
+  const memoryMessage = isPresent(input.memoryText)
+    ? [{ role: 'user', content: input.memoryText } satisfies Message]
+    : [];
 
   return {
     systemPrompt,
-    messages: [{ role: 'system', content: systemPrompt }, ...input.history]
+    messages: [{ role: 'system', content: systemPrompt }, ...memoryMessage, ...input.history]
   };
 }
 

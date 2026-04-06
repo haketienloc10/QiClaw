@@ -6,9 +6,12 @@ const SAFE_USAGE_COUNTER_KEYS = new Set([
   'total_tokens',
   'cache_creation_input_tokens',
   'cache_read_input_tokens',
+  'cached_tokens',
+  'prompt_tokens_details',
   'inputTokens',
   'outputTokens',
-  'totalTokens'
+  'totalTokens',
+  'cacheReadInputTokens'
 ]);
 const SENSITIVE_TEXT_PATTERNS = [
   /(authorization\s*:\s*)([^\r\n]+)/gi,

@@ -133,6 +133,9 @@ export function normalizeOpenAIResponseMetadata(response: {
     input_tokens?: number | null;
     output_tokens?: number | null;
     total_tokens?: number | null;
+    prompt_tokens_details?: {
+      cached_tokens?: number | null;
+    } | null;
   } | null;
   output: unknown[];
   incomplete_details?: {
@@ -154,7 +157,8 @@ export function normalizeOpenAIResponseMetadata(response: {
     usage: {
       inputTokens: response.usage?.input_tokens ?? undefined,
       outputTokens: response.usage?.output_tokens ?? undefined,
-      totalTokens: response.usage?.total_tokens ?? undefined
+      totalTokens: response.usage?.total_tokens ?? undefined,
+      cacheReadInputTokens: response.usage?.prompt_tokens_details?.cached_tokens ?? undefined
     },
     responseMetrics: {
       contentBlockCount: response.output.length,

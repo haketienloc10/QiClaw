@@ -852,7 +852,8 @@ describe('agent loop', () => {
     ]);
     expect(seenRequests).toEqual([
       [
-        'system:Base prompt\n\nMemory: user prefers concise answers\n\nSkills: concise_response\n\nSummary: prior attempt failed',
+        'system:Base prompt\n\nSkills: concise_response\n\nSummary: prior attempt failed',
+        'user:Memory: user prefers concise answers',
         'assistant:Earlier answer.',
         'user:Answer briefly.'
       ]

@@ -1,10 +1,55 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildOpenAIResponsesRequest,
   extractOpenAIToolCalls,
   normalizeOpenAIResponseMetadata,
   readOpenAITextContent
 } from '../../src/provider/openai.js';
+
+describe('buildOpenAIResponsesRequest', () => {
+  it('keeps system instructions stable and places recalled memory at the start of input', () => {
+    const request = buildOpenAIResponsesRequest({
+      model: 'gpt-4.1',
+      messages: [
+        { role: 'system', content: 'Base system prompt\n\nLoaded skills' },
+        { role: 'user', content: 'Mem:\n- stable recalled fact' },
+        { role: 'user', content: 'Inspect note.txt' },
+        { role: 'assistant', content: 'I will inspect it.' }
+      ],
+      availableTools: []
+    });
+
+    expect(request.instructions).toBe('Base system prompt\n\nLoaded skills');
+    expect(request.input).toEqual([
+      {
+        type: 'message',
+        role: 'user',
+        content: [
+          {
+            type: 'input_text',
+            text: 'Mem:\n- stable recalled fact'
+          }
+        ]
+      },
+      {
+        type: 'message',
+        role: 'user',
+        content: [
+          {
+            type: 'input_text',
+            text: 'Inspect note.txt'
+          }
+        ]
+      },
+      {
+        type: 'message',
+        role: 'assistant',
+        content: 'I will inspect it.'
+      }
+    ]);
+  });
+});
 
 describe('normalizeOpenAIResponseMetadata', () => {
   it('normalizes finish, usage, response metrics, and debug metadata for Task 3', () => {
@@ -34,7 +79,10 @@ describe('normalizeOpenAIResponseMetadata', () => {
       usage: {
         input_tokens: 80,
         output_tokens: 20,
-        total_tokens: 100
+        total_tokens: 100,
+        prompt_tokens_details: {
+          cached_tokens: 48
+        }
       },
       output,
       incomplete_details: {
@@ -47,7 +95,8 @@ describe('normalizeOpenAIResponseMetadata', () => {
       usage: {
         inputTokens: 80,
         outputTokens: 20,
-        totalTokens: 100
+        totalTokens: 100,
+        cacheReadInputTokens: 48
       },
       responseMetrics: {
         contentBlockCount: 2,
@@ -63,7 +112,10 @@ describe('normalizeOpenAIResponseMetadata', () => {
         providerUsageRawRedacted: {
           input_tokens: 80,
           output_tokens: 20,
-          total_tokens: 100
+          total_tokens: 100,
+          prompt_tokens_details: {
+            cached_tokens: 48
+          }
         },
         providerStopDetails: {
           incomplete_details: {

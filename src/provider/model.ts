@@ -33,6 +33,7 @@ export interface ProviderUsageSummary {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  cacheReadInputTokens?: number;
 }
 
 export interface ProviderFinishSummary {

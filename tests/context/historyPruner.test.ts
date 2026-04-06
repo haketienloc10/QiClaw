@@ -62,6 +62,39 @@ describe('compactHistoryMessages', () => {
   });
 });
 
+describe('buildPromptWithContext', () => {
+  it('keeps memory text out of the system prompt and inserts it before conversation history', () => {
+    const result = buildPromptWithContext({
+      baseSystemPrompt: 'Base system prompt',
+      memoryText: 'Mem:\n- stable recalled fact',
+      skillsText: 'Loaded skills',
+      historySummary: 'History summary: previous turns',
+      history: [
+        message('user', 'Current question'),
+        message('assistant', 'Current answer')
+      ]
+    });
+
+    expect(result.systemPrompt).toBe([
+      'Base system prompt',
+      'Loaded skills',
+      'History summary: previous turns'
+    ].join('\n\n'));
+    expect(result.messages).toEqual([
+      {
+        role: 'system',
+        content: ['Base system prompt', 'Loaded skills', 'History summary: previous turns'].join('\n\n')
+      },
+      {
+        role: 'user',
+        content: 'Mem:\n- stable recalled fact'
+      },
+      message('user', 'Current question'),
+      message('assistant', 'Current answer')
+    ]);
+  });
+});
+
 describe('pruneHistoryForContext', () => {
   it('keeps recent messages and returns a summary separately when older history exceeds the threshold', () => {
     const history = [
@@ -146,7 +179,7 @@ describe('pruneHistoryForContext', () => {
 });
 
 describe('buildPromptWithContext', () => {
-  it('combines prompt parts into one system prompt and prepends it to history', () => {
+  it('combines stable prompt parts into the system prompt and keeps memory as a separate user message', () => {
     const result = buildPromptWithContext({
       baseSystemPrompt: 'You are a focused coding assistant.',
       memoryText: 'Memory:\n- User prefers Vietnamese.',
@@ -160,12 +193,12 @@ describe('buildPromptWithContext', () => {
 
     expect(result.systemPrompt).toBe([
       'You are a focused coding assistant.',
-      'Memory:\n- User prefers Vietnamese.',
       'Skills:\n- Use TDD.',
       'History summary:\n- user: asked for Task 5.'
     ].join('\n\n'));
     expect(result.messages).toEqual([
       message('system', result.systemPrompt),
+      message('user', 'Memory:\n- User prefers Vietnamese.'),
       message('user', 'Please continue Task 5.'),
       message('assistant', 'I will start with tests.')
     ]);

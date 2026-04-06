@@ -740,13 +740,20 @@ function formatInteractiveStartupLines(options: InteractiveStartupLinesOptions):
   }
 
   const summaryAvailability = options.historySummary ? 'summary available' : 'summary unavailable';
-  const previewLines = options.history.slice(-3).map((message) => formatCheckpointPreviewLine(message));
+  const previewMessages = getCheckpointPreviewMessages(options.history, 3);
+  const previewLines = previewMessages.map((message) => formatCheckpointPreviewLine(message));
 
   return [
     ...startupLines,
-    formatInteractiveInfoLine(`Resumed checkpoint • ${options.history.length} messages • ${summaryAvailability}`),
+    formatInteractiveInfoLine(`Resumed checkpoint • ${previewMessages.length} messages • ${summaryAvailability}`),
     ...previewLines
   ];
+}
+
+function getCheckpointPreviewMessages(history: Message[], limit: number): Message[] {
+  return history
+    .filter((message) => message.role === 'user' || (message.role === 'assistant' && !message.toolCalls?.length))
+    .slice(-limit);
 }
 
 function formatCheckpointPreviewLine(message: Message): string {

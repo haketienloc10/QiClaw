@@ -96,6 +96,66 @@ describe('buildPromptWithContext', () => {
 });
 
 describe('pruneHistoryForContext', () => {
+  it('keeps the matching assistant tool call when the recent window starts on a tool result', () => {
+    const history: Message[] = [
+      message('user', 'Older context that should be compacted away because it is no longer needed.'),
+      {
+        role: 'assistant',
+        content: 'Calling read_file',
+        toolCalls: [
+          {
+            id: 'call_1',
+            name: 'read_file',
+            input: { path: 'note.txt' }
+          }
+        ]
+      },
+      {
+        role: 'tool',
+        content: 'note contents',
+        name: 'read_file',
+        toolCallId: 'call_1'
+      },
+      {
+        role: 'assistant',
+        content: 'Done reading.'
+      }
+    ];
+
+    const result = pruneHistoryForContext(history, {
+      recentMessageCount: 2,
+      oldHistoryBudgetChars: 20,
+      summaryMaxLines: 4,
+      summaryMaxChars: 80,
+      summarySnippetLength: 20
+    });
+
+    expect(result.didCompact).toBe(true);
+    expect(result.messages).toEqual([
+      {
+        role: 'assistant',
+        content: 'Calling read_file',
+        toolCalls: [
+          {
+            id: 'call_1',
+            name: 'read_file',
+            input: { path: 'note.txt' }
+          }
+        ]
+      },
+      {
+        role: 'tool',
+        content: 'note contents',
+        name: 'read_file',
+        toolCallId: 'call_1'
+      },
+      {
+        role: 'assistant',
+        content: 'Done reading.'
+      }
+    ]);
+  });
+
   it('keeps recent messages and returns a summary separately when older history exceeds the threshold', () => {
     const history = [
       message('user', 'User opening request with a lot of context about the project and goals.'),

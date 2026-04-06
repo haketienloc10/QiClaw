@@ -8,6 +8,61 @@ import {
 } from '../../src/provider/openai.js';
 
 describe('buildOpenAIResponsesRequest', () => {
+  it('includes the matching function call before a retained tool result after pruning', () => {
+    const request = buildOpenAIResponsesRequest({
+      model: 'gpt-4.1',
+      messages: [
+        {
+          role: 'assistant',
+          content: 'Calling read_file',
+          toolCalls: [
+            {
+              id: 'call_1',
+              name: 'read_file',
+              input: { path: 'note.txt' }
+            }
+          ]
+        },
+        {
+          role: 'tool',
+          content: 'note contents',
+          name: 'read_file',
+          toolCallId: 'call_1'
+        },
+        {
+          role: 'assistant',
+          content: 'Done reading.'
+        }
+      ],
+      availableTools: []
+    });
+
+    expect(request.instructions).toBeUndefined();
+    expect(request.input).toEqual([
+      {
+        type: 'message',
+        role: 'assistant',
+        content: 'Calling read_file'
+      },
+      {
+        type: 'function_call',
+        call_id: 'call_1',
+        name: 'read_file',
+        arguments: '{"path":"note.txt"}'
+      },
+      {
+        type: 'function_call_output',
+        call_id: 'call_1',
+        output: 'note contents'
+      },
+      {
+        type: 'message',
+        role: 'assistant',
+        content: 'Done reading.'
+      }
+    ]);
+  });
+
   it('keeps system instructions stable and places recalled memory at the start of input', () => {
     const request = buildOpenAIResponsesRequest({
       model: 'gpt-4.1',

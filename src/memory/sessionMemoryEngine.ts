@@ -222,7 +222,7 @@ export function recallSessionMemories(input: RecallSessionMemoriesInput): Recall
       ...candidate,
       finalScore: scoreSessionMemoryCandidate(candidate, { now: input.now })
     }))
-    .sort((left, right) => right.finalScore - left.finalScore);
+    .sort(compareSessionMemoryCandidates);
 
   const hot: string[] = [];
   const warm: string[] = [];
@@ -285,6 +285,38 @@ export function recallSessionMemories(input: RecallSessionMemoriesInput): Recall
     usedBudgetChars: memoryText.length,
     recalled
   };
+}
+
+function compareSessionMemoryCandidates(left: SessionMemoryCandidate, right: SessionMemoryCandidate): number {
+  const scoreComparison = right.finalScore - left.finalScore;
+
+  if (scoreComparison !== 0) {
+    return scoreComparison;
+  }
+
+  if (left.explicitSave !== right.explicitSave) {
+    return left.explicitSave ? -1 : 1;
+  }
+
+  const leftRecency = Math.max(safeTimestamp(Date.parse(left.lastAccessed)), safeTimestamp(Date.parse(left.createdAt)));
+  const rightRecency = Math.max(safeTimestamp(Date.parse(right.lastAccessed)), safeTimestamp(Date.parse(right.createdAt)));
+  const recencyComparison = rightRecency - leftRecency;
+
+  if (recencyComparison !== 0) {
+    return recencyComparison;
+  }
+
+  const hashComparison = left.hash.localeCompare(right.hash);
+
+  if (hashComparison !== 0) {
+    return hashComparison;
+  }
+
+  return left.source.localeCompare(right.source);
+}
+
+function safeTimestamp(value: number): number {
+  return Number.isNaN(value) ? 0 : value;
 }
 
 function formatMemoryLine(text: string): string {

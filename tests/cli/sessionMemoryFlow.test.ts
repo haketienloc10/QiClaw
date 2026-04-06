@@ -189,6 +189,107 @@ describe('interactive session memory flow', () => {
     expect(interactiveInputs[1].memoryText).toContain('1.2.3');
   });
 
+  it('does not recall a successful procedure after a turn whose tool result ended with isError true', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'qiclaw-session-memory-'));
+    tempDirs.push(tempDir);
+
+    const interactiveInputs: Array<{ userInput: string; sessionId?: string; memoryText?: string }> = [];
+    const interactiveCli = buildCli({
+      argv: [],
+      cwd: tempDir,
+      stdout: { write() { return true; } },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: tempDir,
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      createSessionId: () => 'session-memory-failed-procedure',
+      readLine: (() => {
+        const inputs = ['open the unavailable deployment runbook', 'what should you remember when deployment docs are unavailable?', '/exit'];
+        return async () => inputs.shift();
+      })(),
+      runTurn: async (input) => {
+        interactiveInputs.push({
+          userInput: input.userInput,
+          sessionId: input.sessionId,
+          memoryText: input.memoryText
+        });
+
+        const firstTurn = input.userInput === 'open the unavailable deployment runbook';
+        const finalAnswer = firstTurn
+          ? 'The runbook path failed to open; retry with a valid runbook path before giving deployment steps.'
+          : 'I should remember the failure recovery guidance, not invent a successful runbook-reading procedure.';
+        const priorHistory = input.history ?? [];
+        const toolMessages = firstTurn
+          ? [
+              {
+                role: 'assistant' as const,
+                content: 'I will try to open the deployment runbook.',
+                toolCalls: [{ id: 'tool_failed_runbook_read', name: 'Read', input: { file_path: '/tmp/deploy/runbook.md' } }]
+              },
+              {
+                role: 'tool' as const,
+                name: 'Read',
+                toolCallId: 'tool_failed_runbook_read',
+                content: 'ENOENT: no such file or directory',
+                isError: true
+              },
+              { role: 'assistant' as const, content: finalAnswer }
+            ]
+          : [{ role: 'assistant' as const, content: finalAnswer }];
+
+        return {
+          stopReason: 'completed' as const,
+          finalAnswer,
+          history: [
+            ...priorHistory,
+            { role: 'user' as const, content: input.userInput },
+            ...toolMessages
+          ],
+          historySummary: firstTurn ? 'deployment runbook read failed; retry with a valid path before giving steps' : 'checked failed procedure recall',
+          toolRoundsUsed: firstTurn ? 1 : 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
+            toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
+            toolMessagesCount: firstTurn ? 1 : 0,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(interactiveCli.run()).resolves.toBe(0);
+    expect(interactiveInputs).toHaveLength(2);
+    expect(interactiveInputs[0]).toEqual({
+      userInput: 'open the unavailable deployment runbook',
+      sessionId: 'session-memory-failed-procedure',
+      memoryText: ''
+    });
+
+    const recalledMemory = interactiveInputs[1].memoryText ?? '';
+    expect(recalledMemory).toContain('retry with a valid runbook path');
+    expect(recalledMemory).toContain('before giving deployment steps');
+    expect(recalledMemory).not.toMatch(/Read .* to confirm/i);
+    expect(recalledMemory).not.toMatch(/shows version/i);
+    expect(recalledMemory).not.toMatch(/package version/i);
+    expect(recalledMemory).not.toContain('package.json');
+  });
+
   it('keeps first Vietnamese explicit save turn empty then recalls stored memory on the next turn in the same session', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'qiclaw-session-memory-'));
     tempDirs.push(tempDir);
@@ -360,95 +461,41 @@ describe('interactive session memory flow', () => {
     expect(interactiveInputs[1].memoryText).toContain('phiên bản 1.2.3');
   });
 
-  it('recalls user-global memory from a different session on restart', async () => {
+  it('recalls user-global memory from a different session on restart without using the default global store', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'qiclaw-session-memory-'));
     tempDirs.push(tempDir);
+    const previousGlobalMemoryDir = process.env.QICLAW_GLOBAL_MEMORY_DIR;
+    process.env.QICLAW_GLOBAL_MEMORY_DIR = join(tempDir, 'global-memory');
 
-    const globalInputs: Array<{ userInput: string; sessionId?: string; memoryText?: string }> = [];
-    const firstRunCli = buildCli({
-      argv: [],
-      cwd: tempDir,
-      stdout: { write() { return true; } },
-      createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
-        availableTools: [],
+    try {
+      const globalInputs: Array<{ userInput: string; sessionId?: string; memoryText?: string }> = [];
+      const firstRunCli = buildCli({
+        argv: [],
         cwd: tempDir,
-        observer: runtimeOptions.observer ?? { record() {} },
-        agentSpec: defaultAgentSpec,
-        systemPrompt: 'Test prompt',
-        maxToolRounds: 3
-      }),
-      createSessionId: () => 'global-session-1',
-      readLine: (() => {
-        const inputs = ['remember that I always want concise answers', '/exit'];
-        return async () => inputs.shift();
-      })(),
-      runTurn: async (input) => ({
-        stopReason: 'completed',
-        finalAnswer: 'I will remember that you always want concise answers.',
-        history: [
-          ...(input.history ?? []),
-          { role: 'user', content: input.userInput },
-          { role: 'assistant', content: 'I will remember that you always want concise answers.' }
-        ],
-        historySummary: 'concise answer preference stored',
-        toolRoundsUsed: 0,
-        doneCriteria: {
-          goal: input.userInput,
-          checklist: [input.userInput],
-          requiresNonEmptyFinalAnswer: true,
-          requiresToolEvidence: false,
-          requiresSubstantiveFinalAnswer: false,
-          forbidSuccessAfterToolErrors: false
-        },
-        verification: {
-          isVerified: true,
-          finalAnswerIsNonEmpty: true,
-          finalAnswerIsSubstantive: true,
-          toolEvidenceSatisfied: true,
-          noUnresolvedToolErrors: true,
-          toolMessagesCount: 0,
-          checks: []
-        }
-      })
-    });
-
-    await expect(firstRunCli.run()).resolves.toBe(0);
-
-    const secondRunCli = buildCli({
-      argv: [],
-      cwd: tempDir,
-      stdout: { write() { return true; } },
-      createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
-        availableTools: [],
-        cwd: tempDir,
-        observer: runtimeOptions.observer ?? { record() {} },
-        agentSpec: defaultAgentSpec,
-        systemPrompt: 'Test prompt',
-        maxToolRounds: 3
-      }),
-      createSessionId: () => 'global-session-2',
-      readLine: (() => {
-        const inputs = ['how should you answer by default?', '/exit'];
-        return async () => inputs.shift();
-      })(),
-      runTurn: async (input) => {
-        globalInputs.push({
-          userInput: input.userInput,
-          sessionId: input.sessionId,
-          memoryText: input.memoryText
-        });
-
-        return {
+        stdout: { write() { return true; } },
+        createRuntime: (runtimeOptions) => ({
+          provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+          availableTools: [],
+          cwd: tempDir,
+          observer: runtimeOptions.observer ?? { record() {} },
+          agentSpec: defaultAgentSpec,
+          systemPrompt: 'Test prompt',
+          maxToolRounds: 3
+        }),
+        createSessionId: () => 'global-session-1',
+        readLine: (() => {
+          const inputs = ['remember that I always want concise answers', '/exit'];
+          return async () => inputs.shift();
+        })(),
+        runTurn: async (input) => ({
           stopReason: 'completed',
-          finalAnswer: 'I should answer concisely by default.',
+          finalAnswer: 'I will remember that you always want concise answers.',
           history: [
             ...(input.history ?? []),
             { role: 'user', content: input.userInput },
-            { role: 'assistant', content: 'I should answer concisely by default.' }
+            { role: 'assistant', content: 'I will remember that you always want concise answers.' }
           ],
-          historySummary: 'global preference recalled',
+          historySummary: 'concise answer preference stored',
           toolRoundsUsed: 0,
           doneCriteria: {
             goal: input.userInput,
@@ -467,18 +514,82 @@ describe('interactive session memory flow', () => {
             toolMessagesCount: 0,
             checks: []
           }
-        };
-      }
-    });
+        })
+      });
 
-    await expect(secondRunCli.run()).resolves.toBe(0);
-    expect(globalInputs).toEqual([
-      {
-        userInput: 'how should you answer by default?',
-        sessionId: 'global-session-1',
-        memoryText: expect.stringContaining('concise answers')
+      await expect(firstRunCli.run()).resolves.toBe(0);
+
+      const secondRunCli = buildCli({
+        argv: [],
+        cwd: tempDir,
+        stdout: { write() { return true; } },
+        createRuntime: (runtimeOptions) => ({
+          provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+          availableTools: [],
+          cwd: tempDir,
+          observer: runtimeOptions.observer ?? { record() {} },
+          agentSpec: defaultAgentSpec,
+          systemPrompt: 'Test prompt',
+          maxToolRounds: 3
+        }),
+        createSessionId: () => 'global-session-2',
+        readLine: (() => {
+          const inputs = ['how should you answer by default?', '/exit'];
+          return async () => inputs.shift();
+        })(),
+        runTurn: async (input) => {
+          globalInputs.push({
+            userInput: input.userInput,
+            sessionId: input.sessionId,
+            memoryText: input.memoryText
+          });
+
+          return {
+            stopReason: 'completed',
+            finalAnswer: 'I should answer concisely by default.',
+            history: [
+              ...(input.history ?? []),
+              { role: 'user', content: input.userInput },
+              { role: 'assistant', content: 'I should answer concisely by default.' }
+            ],
+            historySummary: 'global preference recalled',
+            toolRoundsUsed: 0,
+            doneCriteria: {
+              goal: input.userInput,
+              checklist: [input.userInput],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            },
+            verification: {
+              isVerified: true,
+              finalAnswerIsNonEmpty: true,
+              finalAnswerIsSubstantive: true,
+              toolEvidenceSatisfied: true,
+              noUnresolvedToolErrors: true,
+              toolMessagesCount: 0,
+              checks: []
+            }
+          };
+        }
+      });
+
+      await expect(secondRunCli.run()).resolves.toBe(0);
+      expect(globalInputs).toEqual([
+        {
+          userInput: 'how should you answer by default?',
+          sessionId: 'global-session-1',
+          memoryText: expect.stringContaining('concise answers')
+        }
+      ]);
+    } finally {
+      if (previousGlobalMemoryDir === undefined) {
+        delete process.env.QICLAW_GLOBAL_MEMORY_DIR;
+      } else {
+        process.env.QICLAW_GLOBAL_MEMORY_DIR = previousGlobalMemoryDir;
       }
-    ]);
+    }
   });
 
   it('restores the checkpoint sessionId and recalls the same session memory after restarting the CLI', async () => {

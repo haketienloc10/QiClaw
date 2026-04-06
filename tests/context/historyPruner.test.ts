@@ -63,6 +63,21 @@ describe('compactHistoryMessages', () => {
 });
 
 describe('buildPromptWithContext', () => {
+  it('does not inject a blank memory user message for empty memory text', () => {
+    const result = buildPromptWithContext({
+      baseSystemPrompt: 'Base system prompt',
+      memoryText: '   \n\t  ',
+      history: [
+        message('user', 'Current question')
+      ]
+    });
+
+    expect(result.messages).toEqual([
+      message('system', 'Base system prompt'),
+      message('user', 'Current question')
+    ]);
+  });
+
   it('keeps memory text out of the system prompt and inserts it before conversation history', () => {
     const result = buildPromptWithContext({
       baseSystemPrompt: 'Base system prompt',
@@ -232,5 +247,26 @@ describe('buildPromptWithContext', () => {
       message('assistant', 'Most recent response')
     ]);
     expect(prompt.messages.filter((entry) => entry.role === 'system')).toHaveLength(1);
+  });
+
+  it('places memory immediately after the system prompt and before all recent history', () => {
+    const result = buildPromptWithContext({
+      baseSystemPrompt: 'Base system prompt',
+      memoryText: 'Memory:\n- stable recalled fact',
+      historySummary: 'History summary:\n- older context',
+      history: [
+        message('user', 'Recent user question'),
+        message('assistant', 'Recent assistant reply'),
+        message('user', 'Newest user follow-up')
+      ]
+    });
+
+    expect(result.messages).toEqual([
+      message('system', 'Base system prompt\n\nHistory summary:\n- older context'),
+      message('user', 'Memory:\n- stable recalled fact'),
+      message('user', 'Recent user question'),
+      message('assistant', 'Recent assistant reply'),
+      message('user', 'Newest user follow-up')
+    ]);
   });
 });

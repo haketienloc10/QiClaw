@@ -6,6 +6,7 @@ import {
   recallSessionMemories
 } from '../../src/memory/sessionMemoryEngine.js';
 import * as sessionMemoryMaintenance from '../../src/memory/sessionMemoryMaintenance.js';
+import * as decay from '../../src/memory/decay.js';
 import { MemvidSessionStore } from '../../src/memory/memvidSessionStore.js';
 import type { SessionMemoryCandidate } from '../../src/memory/sessionMemoryTypes.js';
 
@@ -306,6 +307,44 @@ describe('captureInteractiveTurnMemory', () => {
     });
     expect(result.entry?.summaryText).toContain('thử lại');
   });
+
+  it('does not persist a successful procedure memory when the current tool result is an error', async () => {
+    const put = vi.fn(async () => undefined);
+    const seal = vi.fn(async () => undefined);
+
+    const result = await captureInteractiveTurnMemory({
+      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory.mv2' }) } as never,
+      sessionId: 'session_1',
+      userInput: 'read the package file',
+      finalAnswer: 'Try again with the correct path or verify the file name.',
+      history: [
+        { role: 'user', content: 'read the package file' },
+        {
+          role: 'assistant',
+          content: 'I will inspect the package file.',
+          toolCalls: [{ id: 'tool_err_1', name: 'Read', input: { file_path: '/tmp/missing-package.json' } }]
+        },
+        {
+          role: 'tool',
+          name: 'Read',
+          toolCallId: 'tool_err_1',
+          content: 'ENOENT: no such file or directory',
+          isError: true
+        },
+        { role: 'assistant', content: 'Try again with the correct path or verify the file name.' }
+      ]
+    });
+
+    expect(result.saved).toBe(true);
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(seal).toHaveBeenCalledTimes(1);
+    expect(result.entry).toMatchObject({
+      memoryType: 'failure',
+      explicitSave: false
+    });
+    expect(result.entry?.memoryType).not.toBe('procedure');
+    expect(result.entry?.summaryText.toLowerCase()).toContain('try again');
+  });
 });
 
 describe('prepareInteractiveSessionMemory', () => {
@@ -603,5 +642,205 @@ describe('recallSessionMemories', () => {
     expect(result.memoryText).not.toContain('Hot memories:');
     expect(result.memoryText).not.toContain('Warm summaries:');
     expect(result.memoryText).not.toContain('Faded references:');
+  });
+
+  it('prefers explicit saves when candidates have equal final scores', () => {
+    const score = vi.spyOn(decay, 'scoreSessionMemoryCandidate').mockReturnValue(1);
+    const explicit = createCandidate({
+      hash: 'aaa111def456',
+      source: 'turn-a',
+      sourceTurnId: 'turn-a',
+      summaryText: 'Explicit same-score memory.',
+      essenceText: 'Explicit same-score memory.',
+      retrievalScore: 0.1,
+      importance: 0.1,
+      explicitSave: true,
+      createdAt: '2026-04-05T10:00:00.000Z',
+      lastAccessed: '2026-04-05T10:00:00.000Z'
+    });
+    const regular = createCandidate({
+      hash: 'bbb222def456',
+      source: 'turn-b',
+      sourceTurnId: 'turn-b',
+      summaryText: 'Regular same-score memory.',
+      essenceText: 'Regular same-score memory.',
+      retrievalScore: 0.9,
+      importance: 0.9,
+      explicitSave: false,
+      createdAt: '2026-04-05T11:00:00.000Z',
+      lastAccessed: '2026-04-05T11:00:00.000Z'
+    });
+
+    try {
+      const result = recallSessionMemories({
+        candidates: [regular, explicit],
+        budgetChars: 4000,
+        now: '2026-04-07T00:00:00.000Z'
+      });
+
+      expect(score).toHaveBeenCalledTimes(2);
+      expect(result.recalled.map((entry) => entry.hash)).toEqual(['aaa111def456', 'bbb222def456']);
+    } finally {
+      score.mockRestore();
+    }
+  });
+
+  it('falls back to normalized recency when final score and explicit save are tied', () => {
+    const score = vi.spyOn(decay, 'scoreSessionMemoryCandidate').mockReturnValue(1);
+    const newer = createCandidate({
+      hash: 'bbb222def456',
+      source: 'turn-b',
+      sourceTurnId: 'turn-b',
+      summaryText: 'Newer same-score memory.',
+      essenceText: 'Newer same-score memory.',
+      retrievalScore: 0.1,
+      importance: 0.1,
+      explicitSave: false,
+      createdAt: 'invalid-date',
+      lastAccessed: '2026-04-05T11:00:00.000Z'
+    });
+    const older = createCandidate({
+      hash: 'aaa111def456',
+      source: 'turn-a',
+      sourceTurnId: 'turn-a',
+      summaryText: 'Older same-score memory.',
+      essenceText: 'Older same-score memory.',
+      retrievalScore: 0.9,
+      importance: 0.9,
+      explicitSave: false,
+      createdAt: '2026-04-05T10:30:00.000Z',
+      lastAccessed: 'invalid-date'
+    });
+
+    try {
+      const firstRun = recallSessionMemories({
+        candidates: [older, newer],
+        budgetChars: 4000,
+        now: '2026-04-07T00:00:00.000Z'
+      });
+      const secondRun = recallSessionMemories({
+        candidates: [newer, older],
+        budgetChars: 4000,
+        now: '2026-04-07T00:00:00.000Z'
+      });
+
+      expect(score).toHaveBeenCalledTimes(4);
+      expect(firstRun.recalled.map((entry) => entry.hash)).toEqual(['bbb222def456', 'aaa111def456']);
+      expect(secondRun.recalled.map((entry) => entry.hash)).toEqual(['bbb222def456', 'aaa111def456']);
+    } finally {
+      score.mockRestore();
+    }
+  });
+
+  it('returns deterministic order by hash and source when scores, explicit save, and recency are tied', () => {
+    const score = vi.spyOn(decay, 'scoreSessionMemoryCandidate').mockReturnValue(1);
+    const first = createCandidate({
+      hash: 'aaa111def456',
+      source: 'turn-b',
+      sourceTurnId: 'turn-b',
+      summaryText: 'First same-score memory.',
+      essenceText: 'First same-score memory.',
+      retrievalScore: 0.1,
+      importance: 0.1,
+      explicitSave: false,
+      createdAt: '2026-04-05T10:00:00.000Z',
+      lastAccessed: '2026-04-05T10:00:00.000Z'
+    });
+    const second = createCandidate({
+      hash: 'bbb222def456',
+      source: 'turn-a',
+      sourceTurnId: 'turn-a',
+      summaryText: 'Second same-score memory.',
+      essenceText: 'Second same-score memory.',
+      retrievalScore: 0.9,
+      importance: 0.9,
+      explicitSave: false,
+      createdAt: '2026-04-05T10:00:00.000Z',
+      lastAccessed: '2026-04-05T10:00:00.000Z'
+    });
+    const sameHashLowerSource = createCandidate({
+      hash: 'ccc333def456',
+      source: 'turn-a',
+      sourceTurnId: 'turn-a',
+      summaryText: 'Same hash lower source memory.',
+      essenceText: 'Same hash lower source memory.',
+      retrievalScore: 0.7,
+      importance: 0.7,
+      explicitSave: false,
+      createdAt: '2026-04-05T10:00:00.000Z',
+      lastAccessed: '2026-04-05T10:00:00.000Z'
+    });
+    const sameHashHigherSource = createCandidate({
+      hash: 'ccc333def456',
+      source: 'turn-b',
+      sourceTurnId: 'turn-b',
+      summaryText: 'Same hash higher source memory.',
+      essenceText: 'Same hash higher source memory.',
+      retrievalScore: 0.8,
+      importance: 0.8,
+      explicitSave: false,
+      createdAt: '2026-04-05T10:00:00.000Z',
+      lastAccessed: '2026-04-05T10:00:00.000Z'
+    });
+
+    try {
+      const firstRun = recallSessionMemories({
+        candidates: [sameHashHigherSource, second, sameHashLowerSource, first],
+        budgetChars: 4000,
+        now: '2026-04-07T00:00:00.000Z'
+      });
+      const secondRun = recallSessionMemories({
+        candidates: [sameHashLowerSource, first, sameHashHigherSource, second],
+        budgetChars: 4000,
+        now: '2026-04-07T00:00:00.000Z'
+      });
+
+      expect(score).toHaveBeenCalledTimes(8);
+      expect(firstRun.recalled.map((entry) => `${entry.hash}:${entry.source}`)).toEqual([
+        'aaa111def456:turn-b',
+        'bbb222def456:turn-a',
+        'ccc333def456:turn-a',
+        'ccc333def456:turn-b'
+      ]);
+      expect(secondRun.recalled.map((entry) => `${entry.hash}:${entry.source}`)).toEqual([
+        'aaa111def456:turn-b',
+        'bbb222def456:turn-a',
+        'ccc333def456:turn-a',
+        'ccc333def456:turn-b'
+      ]);
+    } finally {
+      score.mockRestore();
+    }
+  });
+
+  it('renders an explicit global candidate ahead of a weaker session candidate', () => {
+    const result = recallSessionMemories({
+      candidates: [
+        createCandidate({
+          hash: 'sessweak1234',
+          sessionId: 'session_1',
+          summaryText: 'Noisy session note for the login blueprint.',
+          essenceText: 'Noisy login note.',
+          retrievalScore: 0.55,
+          importance: 0.2,
+          explicitSave: false
+        }),
+        createCandidate({
+          hash: 'globalstrong',
+          sessionId: 'user-global',
+          summaryText: 'Use login blueprint with audit logging.',
+          essenceText: 'login blueprint with audit logging',
+          retrievalScore: 0.55,
+          importance: 0.2,
+          explicitSave: true
+        })
+      ],
+      budgetChars: 4000,
+      now: '2026-04-05T12:00:00.000Z'
+    });
+
+    expect(result.recalled.map((entry) => entry.hash)).toEqual(['globalstrong', 'sessweak1234']);
+    expect(result.memoryText).toContain('login blueprint with audit logging');
+    expect(result.memoryText).toContain('Noisy login note');
   });
 });

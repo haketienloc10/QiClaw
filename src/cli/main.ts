@@ -730,6 +730,14 @@ function formatInteractiveStartupLines(options: InteractiveStartupLinesOptions):
 function formatCheckpointPreviewLine(message: Message): string {
   const content = message.content.trim();
 
+  if (message.role === 'user') {
+    return `${pc.cyan('»')} ${content}`;
+  }
+
+  if (message.role === 'assistant') {
+    return `${pc.dim('─'.repeat(54))}\n${content}`;
+  }
+
   if (message.role === 'tool') {
     return `${pc.dim(`tool(${message.name ?? 'unknown'})`)}: ${content}`;
   }

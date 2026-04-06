@@ -3493,9 +3493,9 @@ describe('buildCli', () => {
       '│ ⚡QiClaw                      🤖 Model: test-model │\n',
       '└────────────────────────────────────────────────────┘\n',
       'Resumed checkpoint • 4 messages • summary available\n',
-      'assistant: Calling Read tool.\n',
+      '──────────────────────────────────────────────────────\nCalling Read tool.\n',
       'tool(Read): {"path":"/tmp/package.json"}\n',
-      'assistant: package.json inspected\n',
+      '──────────────────────────────────────────────────────\npackage.json inspected\n',
       '\n──────────────────────────────────────────────────────\n\nfollow-up answer\n'
     ]);
   });
@@ -3560,8 +3560,8 @@ describe('buildCli', () => {
     const output = stripAnsi(writes.join(''));
     expectContainsInOrder(output, [
       'Resumed checkpoint • 2 messages • summary available\n',
-      'user: first line\nsecond line\n',
-      'assistant: assistant line one\nassistant line two\n'
+      '» first line\nsecond line\n',
+      '──────────────────────────────────────────────────────\nassistant line one\nassistant line two\n'
     ]);
   });
 
@@ -3624,8 +3624,8 @@ describe('buildCli', () => {
     const output = stripAnsi(writes.join(''));
     expectContainsInOrder(output, [
       'Resumed checkpoint • 2 messages • summary unavailable\n',
-      'user: first restored message\n',
-      'assistant: second restored message\n'
+      '» first restored message\n',
+      '──────────────────────────────────────────────────────\nsecond restored message\n'
     ]);
   });
 

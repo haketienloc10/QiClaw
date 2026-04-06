@@ -2347,13 +2347,14 @@ describe('built-in tool behavior', () => {
       .rejects.toThrow(/workspace/i);
   });
 
-  it('skips obvious irrelevant directories while searching and returns file-scoped context snippets', async () => {
+  it('skips obvious irrelevant directories while searching and returns structured context snippets', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'tool-search-'));
     const srcDir = join(workspace, 'src');
     const nodeModulesDir = join(workspace, 'node_modules');
     const gitDir = join(workspace, '.git');
     const distDir = join(workspace, 'dist');
     const worktreesDir = join(workspace, '.worktrees');
+    const matchPath = join(srcDir, 'match.txt');
 
     await mkdir(srcDir, { recursive: true });
     await mkdir(nodeModulesDir, { recursive: true });
@@ -2361,22 +2362,55 @@ describe('built-in tool behavior', () => {
     await mkdir(distDir, { recursive: true });
     await mkdir(worktreesDir, { recursive: true });
 
-    await writeFile(join(srcDir, 'match.txt'), 'alpha\nbeta\nneedle here\ngamma\ndelta', 'utf8');
+    await writeFile(matchPath, 'alpha\nbeta\nneedle here\ngamma\ndelta', 'utf8');
     await writeFile(join(nodeModulesDir, 'ignored.txt'), 'needle in dependency', 'utf8');
     await writeFile(join(gitDir, 'ignored.txt'), 'needle in git dir', 'utf8');
     await writeFile(join(distDir, 'ignored.txt'), 'needle in build output', 'utf8');
     await writeFile(join(worktreesDir, 'ignored.txt'), 'needle in nested worktree', 'utf8');
 
     const result = await searchTool.execute({ pattern: 'needle' }, { cwd: workspace });
+    const data = result.data as {
+      totalMatches: number;
+      totalFiles: number;
+      returnedMatches: number;
+      returnedFiles: number;
+      files: Array<{
+        path: string;
+        relativePath: string;
+        snippets: Array<{
+          startLine: number;
+          endLine: number;
+          matches: Array<{ lineNumber: number; line: string }>;
+          lines: Array<{ lineNumber: number; text: string; isMatch: boolean }>;
+        }>;
+      }>;
+    };
 
-    expect(result.content).toBe([
-      join(srcDir, 'match.txt'),
-      '1: alpha',
-      '2: beta',
-      '3: needle here',
-      '4: gamma',
-      '5: delta'
-    ].join('\n'));
+    expect(result.content).toContain('Found 1 match in 1 file');
+    expect(result.content).toContain(matchPath);
+    expect(result.content).not.toContain('ignored.txt');
+    expect(data).toMatchObject({
+      totalMatches: 1,
+      totalFiles: 1,
+      returnedMatches: 1,
+      returnedFiles: 1
+    });
+    expect(data.files).toHaveLength(1);
+    expect(data.files[0]).toMatchObject({ path: matchPath, relativePath: 'src/match.txt' });
+    expect(data.files[0]!.snippets).toEqual([
+      {
+        startLine: 1,
+        endLine: 5,
+        matches: [{ lineNumber: 3, line: 'needle here' }],
+        lines: [
+          { lineNumber: 1, text: 'alpha', isMatch: false },
+          { lineNumber: 2, text: 'beta', isMatch: false },
+          { lineNumber: 3, text: 'needle here', isMatch: true },
+          { lineNumber: 4, text: 'gamma', isMatch: false },
+          { lineNumber: 5, text: 'delta', isMatch: false }
+        ]
+      }
+    ]);
   });
 
   it('merges overlapping search contexts within the same file to avoid duplicate snippets', async () => {
@@ -2386,16 +2420,28 @@ describe('built-in tool behavior', () => {
     await writeFile(filePath, 'line 1\nneedle first\nline 3\nneedle second\nline 5\nline 6', 'utf8');
 
     const result = await searchTool.execute({ pattern: 'needle' }, { cwd: workspace });
+    const data = result.data as {
+      files: Array<{
+        snippets: Array<{
+          startLine: number;
+          endLine: number;
+          matches: Array<{ lineNumber: number; line: string }>;
+          lines: Array<{ lineNumber: number; text: string; isMatch: boolean }>;
+        }>;
+      }>;
+    };
 
-    expect(result.content).toBe([
-      filePath,
-      '1: line 1',
-      '2: needle first',
-      '3: line 3',
-      '4: needle second',
-      '5: line 5',
-      '6: line 6'
-    ].join('\n'));
+    expect(result.content).toContain(filePath);
+    expect(data.files[0]!.snippets).toHaveLength(1);
+    expect(data.files[0]!.snippets[0]).toMatchObject({
+      startLine: 1,
+      endLine: 6,
+      matches: [
+        { lineNumber: 2, line: 'needle first' },
+        { lineNumber: 4, line: 'needle second' }
+      ]
+    });
+    expect(data.files[0]!.snippets[0]!.lines.map((line) => line.lineNumber)).toEqual([1, 2, 3, 4, 5, 6]);
   });
 
   it('falls back to grep when rg is unavailable and truncates oversized search output', async () => {
@@ -2414,13 +2460,25 @@ describe('built-in tool behavior', () => {
         content: Array.from({ length: 400 }, (_, index) => `${filePath}:${index + 1}:needle line ${index + 1} ${'x'.repeat(20)}`).join('\n')
       });
 
-    const result = await searchTool.execute({ pattern: 'needle' }, { cwd: workspace });
+    const result = await searchTool.execute({ pattern: 'needle', maxMatches: 50 }, { cwd: workspace });
+    const data = result.data as {
+      totalMatches: number;
+      returnedMatches: number;
+      truncated: boolean;
+      truncationReason?: string;
+    };
 
     expect(shellSpy).toHaveBeenNthCalledWith(1, expect.objectContaining({ command: 'rg' }), { cwd: workspace });
     expect(shellSpy).toHaveBeenNthCalledWith(2, expect.objectContaining({ command: 'grep' }), { cwd: workspace });
     expect(result.content).toContain(filePath);
-    expect(result.content).toMatch(/truncated|limit reached/i);
+    expect(result.content).toMatch(/truncated|showing/i);
     expect(result.content.length).toBeLessThan(20_000);
+    expect(data).toMatchObject({
+      totalMatches: 400,
+      returnedMatches: 50,
+      truncated: true,
+      truncationReason: 'maxMatches'
+    });
   });
 
   it('supports partial line reads in read_file', async () => {
@@ -2435,7 +2493,7 @@ describe('built-in tool behavior', () => {
     expect(result.content).toBe(['4: line 4', '5: needle here', '6: line 6'].join('\n'));
   });
 
-  it('returns a compact message when search finds no matches', async () => {
+  it('returns a compact structured result when search finds no matches', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'tool-search-empty-'));
 
     vi.spyOn(shellToolModule.shellReadonlyTool, 'execute').mockResolvedValueOnce({
@@ -2443,8 +2501,25 @@ describe('built-in tool behavior', () => {
     });
 
     const result = await searchTool.execute({ pattern: 'needle' }, { cwd: workspace });
+    const data = result.data as {
+      totalMatches: number;
+      totalFiles: number;
+      returnedMatches: number;
+      returnedFiles: number;
+      truncated: boolean;
+      files: unknown[];
+    };
 
     expect(result.content).toMatch(/no matches/i);
+    expect(data).toEqual({
+      pattern: 'needle',
+      totalMatches: 0,
+      totalFiles: 0,
+      returnedMatches: 0,
+      returnedFiles: 0,
+      truncated: false,
+      files: []
+    });
   });
 
   it('wraps shell exec failures with command, exit code, stdout, and stderr', async () => {

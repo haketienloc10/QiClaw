@@ -53,6 +53,22 @@ function validatePropertyValue(schema: unknown, value: unknown, label: string): 
     return;
   }
 
+  if (schemaRecord.type === 'number') {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      throw new Error(`Invalid input for ${label}: expected a number.`);
+    }
+
+    return;
+  }
+
+  if (schemaRecord.type === 'boolean') {
+    if (typeof value !== 'boolean') {
+      throw new Error(`Invalid input for ${label}: expected a boolean.`);
+    }
+
+    return;
+  }
+
   if (schemaRecord.type === 'array') {
     if (!Array.isArray(value)) {
       throw new Error(`Invalid input for ${label}: expected an array.`);

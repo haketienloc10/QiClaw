@@ -70,7 +70,8 @@ function isOrphanedToolResultAt(history: Message[], startIndex: number): boolean
     return false;
   }
 
-  return !history.slice(startIndex).some((candidate) => hasToolCall(candidate, message.toolCallId));
+  const toolCallId = message.toolCallId;
+  return !history.slice(startIndex).some((candidate) => hasToolCall(candidate, toolCallId));
 }
 
 function hasToolCall(message: Message, toolCallId: string): boolean {

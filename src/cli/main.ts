@@ -740,7 +740,7 @@ function formatInteractiveStartupLines(options: InteractiveStartupLinesOptions):
   }
 
   const summaryAvailability = options.historySummary ? 'summary available' : 'summary unavailable';
-  const previewMessages = getCheckpointPreviewMessages(options.history, 3);
+  const previewMessages = getCheckpointPreviewMessages(options.history, 5);
   const previewLines = previewMessages.map((message) => formatCheckpointPreviewLine(message));
 
   return [

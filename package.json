@@ -20,6 +20,7 @@
     "@anthropic-ai/sdk": "^0.82.0",
     "@memvid/sdk": "^2.0.159",
     "better-sqlite3": "^12.8.0",
+    "execa": "^9.6.1",
     "openai": "^6.33.0",
     "picocolors": "^1.1.1",
     "proper-lockfile": "^4.1.2"

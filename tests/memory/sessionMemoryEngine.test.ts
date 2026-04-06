@@ -105,6 +105,65 @@ describe('captureInteractiveTurnMemory', () => {
     expect(seal).not.toHaveBeenCalled();
   });
 
+  it('persists Vietnamese explicit save requests without the command prefix', async () => {
+    const put = vi.fn(async () => undefined);
+    const seal = vi.fn(async () => undefined);
+
+    const result = await captureInteractiveTurnMemory({
+      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory.mv2' }) } as never,
+      sessionId: 'session_1',
+      userInput: 'hãy nhớ rằng tôi thích trả lời bằng tiếng Việt',
+      finalAnswer: 'Tôi sẽ nhớ rằng bạn thích trả lời bằng tiếng Việt.'
+    });
+
+    expect(result.saved).toBe(true);
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(seal).toHaveBeenCalledTimes(1);
+    expect(result.entry).toMatchObject({
+      memoryType: 'fact',
+      summaryText: 'tôi thích trả lời bằng tiếng Việt',
+      essenceText: 'tôi thích trả lời bằng tiếng Việt',
+      explicitSave: true
+    });
+    expect(result.entry?.tags).toContain('tiếng');
+    expect(result.entry?.tags).toContain('việt');
+  });
+
+  it('persists Vietnamese ghi nhớ requests without the command prefix', async () => {
+    const put = vi.fn(async () => undefined);
+    const seal = vi.fn(async () => undefined);
+
+    const result = await captureInteractiveTurnMemory({
+      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory.mv2' }) } as never,
+      sessionId: 'session_1',
+      userInput: 'ghi nhớ là tôi dùng pnpm',
+      finalAnswer: 'Tôi sẽ nhớ rằng bạn dùng pnpm.'
+    });
+
+    expect(result.saved).toBe(true);
+    expect(result.entry).toMatchObject({
+      memoryType: 'fact',
+      summaryText: 'tôi dùng pnpm',
+      explicitSave: true
+    });
+  });
+
+  it('does not persist Vietnamese question-style remember phrasing as an explicit save', async () => {
+    const put = vi.fn(async () => undefined);
+    const seal = vi.fn(async () => undefined);
+
+    const result = await captureInteractiveTurnMemory({
+      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory.mv2' }) } as never,
+      sessionId: 'session_1',
+      userInput: 'bạn có nhớ tôi thích câu trả lời ngắn gọn không?',
+      finalAnswer: 'Có, tôi nhớ sở thích đó.'
+    });
+
+    expect(result.saved).toBe(false);
+    expect(put).not.toHaveBeenCalled();
+    expect(seal).not.toHaveBeenCalled();
+  });
+
   it('persists a procedure memory when the turn ends with a successful tool result and concise conclusion', async () => {
     const put = vi.fn(async () => undefined);
     const seal = vi.fn(async () => undefined);
@@ -175,6 +234,77 @@ describe('captureInteractiveTurnMemory', () => {
     expect(result.saved).toBe(false);
     expect(put).not.toHaveBeenCalled();
     expect(seal).not.toHaveBeenCalled();
+  });
+
+  it('persists a Vietnamese procedure memory when the turn ends with a successful tool result and concise conclusion', async () => {
+    const put = vi.fn(async () => undefined);
+    const seal = vi.fn(async () => undefined);
+
+    const result = await captureInteractiveTurnMemory({
+      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory.mv2' }) } as never,
+      sessionId: 'session_1',
+      userInput: 'hãy kiểm tra phiên bản package',
+      finalAnswer: 'package.json cho thấy phiên bản 1.2.3.',
+      history: [
+        { role: 'user', content: 'hãy kiểm tra phiên bản package' },
+        {
+          role: 'assistant',
+          content: 'Tôi sẽ đọc package.json.',
+          toolCalls: [{ id: 'tool_vi_1', name: 'Read', input: { file_path: '/tmp/package.json' } }]
+        },
+        {
+          role: 'tool',
+          name: 'Read',
+          toolCallId: 'tool_vi_1',
+          content: '{"version":"1.2.3"}',
+          isError: false
+        },
+        { role: 'assistant', content: 'package.json cho thấy phiên bản 1.2.3.' }
+      ]
+    });
+
+    expect(result.saved).toBe(true);
+    expect(result.entry).toMatchObject({
+      memoryType: 'procedure',
+      explicitSave: false
+    });
+    expect(result.entry?.summaryText).toContain('phiên bản 1.2.3');
+    expect(result.entry?.tags).toContain('phiên');
+  });
+
+  it('persists a Vietnamese failure memory when the turn ends with tool failure and recovery guidance', async () => {
+    const put = vi.fn(async () => undefined);
+    const seal = vi.fn(async () => undefined);
+
+    const result = await captureInteractiveTurnMemory({
+      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory.mv2' }) } as never,
+      sessionId: 'session_1',
+      userInput: 'hãy đọc file package',
+      finalAnswer: 'Hãy thử lại với đường dẫn đúng hoặc kiểm tra lại tên file.',
+      history: [
+        { role: 'user', content: 'hãy đọc file package' },
+        {
+          role: 'assistant',
+          content: 'Tôi sẽ mở file.',
+          toolCalls: [{ id: 'tool_vi_fail', name: 'Read', input: { file_path: '/tmp/missing-package.json' } }]
+        },
+        {
+          role: 'tool',
+          name: 'Read',
+          toolCallId: 'tool_vi_fail',
+          content: 'ENOENT: no such file or directory',
+          isError: true
+        },
+        { role: 'assistant', content: 'Hãy thử lại với đường dẫn đúng hoặc kiểm tra lại tên file.' }
+      ]
+    });
+
+    expect(result.saved).toBe(true);
+    expect(result.entry).toMatchObject({
+      memoryType: 'failure',
+      explicitSave: false
+    });
+    expect(result.entry?.summaryText).toContain('thử lại');
   });
 });
 

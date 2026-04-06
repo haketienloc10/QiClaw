@@ -188,6 +188,177 @@ describe('interactive session memory flow', () => {
     expect(interactiveInputs[1].memoryText).toContain('1.2.3');
   });
 
+  it('keeps first Vietnamese explicit save turn empty then recalls stored memory on the next turn in the same session', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'qiclaw-session-memory-'));
+    tempDirs.push(tempDir);
+
+    const interactiveInputs: Array<{ userInput: string; sessionId?: string; memoryText?: string }> = [];
+    const interactiveCli = buildCli({
+      argv: [],
+      cwd: tempDir,
+      stdout: { write() { return true; } },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: tempDir,
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      createSessionId: () => 'session-memory-vi-explicit',
+      readLine: (() => {
+        const inputs = ['hãy nhớ rằng tôi thích trả lời bằng tiếng Việt', 'tôi thích trả lời bằng ngôn ngữ nào?', '/exit'];
+        return async () => inputs.shift();
+      })(),
+      runTurn: async (input) => {
+        interactiveInputs.push({
+          userInput: input.userInput,
+          sessionId: input.sessionId,
+          memoryText: input.memoryText
+        });
+
+        const finalAnswer = input.userInput.includes('hãy nhớ')
+          ? 'Tôi sẽ nhớ rằng bạn thích trả lời bằng tiếng Việt.'
+          : 'Bạn thích trả lời bằng tiếng Việt.';
+
+        return {
+          stopReason: 'completed',
+          finalAnswer,
+          history: [
+            ...(input.history ?? []),
+            { role: 'user', content: input.userInput },
+            { role: 'assistant', content: finalAnswer }
+          ],
+          historySummary: 'đã lưu sở thích trả lời bằng tiếng Việt',
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
+            toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
+            toolMessagesCount: 0,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(interactiveCli.run()).resolves.toBe(0);
+    expect(interactiveInputs).toHaveLength(2);
+    expect(interactiveInputs[0]).toEqual({
+      userInput: 'hãy nhớ rằng tôi thích trả lời bằng tiếng Việt',
+      sessionId: 'session-memory-vi-explicit',
+      memoryText: ''
+    });
+    expect(interactiveInputs[1].memoryText).toContain('Memory:');
+    expect(interactiveInputs[1].memoryText).toContain('tiếng Việt');
+  });
+
+  it('persists Vietnamese procedure memory after a turn with a successful tool result and recalls it on the next turn', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'qiclaw-session-memory-'));
+    tempDirs.push(tempDir);
+
+    const interactiveInputs: Array<{ userInput: string; sessionId?: string; memoryText?: string }> = [];
+    const interactiveCli = buildCli({
+      argv: [],
+      cwd: tempDir,
+      stdout: { write() { return true; } },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: tempDir,
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      createSessionId: () => 'session-memory-vi-procedure',
+      readLine: (() => {
+        const inputs = ['hãy kiểm tra phiên bản package', 'lần sau nên kiểm tra phiên bản package thế nào?', '/exit'];
+        return async () => inputs.shift();
+      })(),
+      runTurn: async (input) => {
+        interactiveInputs.push({
+          userInput: input.userInput,
+          sessionId: input.sessionId,
+          memoryText: input.memoryText
+        });
+
+        const firstTurn = input.userInput === 'hãy kiểm tra phiên bản package';
+        const finalAnswer = firstTurn
+          ? 'package.json cho thấy phiên bản 1.2.3.'
+          : 'Bạn có thể đọc package.json để kiểm tra phiên bản nhanh.';
+        const priorHistory = input.history ?? [];
+        const toolMessages = firstTurn
+          ? [
+              {
+                role: 'assistant' as const,
+                content: 'Tôi sẽ đọc package.json.',
+                toolCalls: [{ id: 'tool_read_package_vi', name: 'Read', input: { file_path: '/tmp/package.json' } }]
+              },
+              {
+                role: 'tool' as const,
+                name: 'Read',
+                toolCallId: 'tool_read_package_vi',
+                content: '{"name":"demo","version":"1.2.3"}',
+                isError: false
+              },
+              { role: 'assistant' as const, content: finalAnswer }
+            ]
+          : [{ role: 'assistant' as const, content: finalAnswer }];
+
+        return {
+          stopReason: 'completed' as const,
+          finalAnswer,
+          history: [
+            ...priorHistory,
+            { role: 'user' as const, content: input.userInput },
+            ...toolMessages
+          ],
+          historySummary: firstTurn ? 'đã kiểm tra phiên bản package từ package.json' : 'đã recall procedure memory tiếng Việt',
+          toolRoundsUsed: firstTurn ? 1 : 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
+            toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
+            toolMessagesCount: firstTurn ? 1 : 0,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(interactiveCli.run()).resolves.toBe(0);
+    expect(interactiveInputs).toHaveLength(2);
+    expect(interactiveInputs[0]).toEqual({
+      userInput: 'hãy kiểm tra phiên bản package',
+      sessionId: 'session-memory-vi-procedure',
+      memoryText: ''
+    });
+    expect(interactiveInputs[1].memoryText).toContain('package.json');
+    expect(interactiveInputs[1].memoryText).toContain('phiên bản 1.2.3');
+  });
+
   it('restores the checkpoint sessionId and recalls the same session memory after restarting the CLI', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'qiclaw-session-memory-'));
     tempDirs.push(tempDir);

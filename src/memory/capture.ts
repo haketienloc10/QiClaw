@@ -59,6 +59,10 @@ export function buildInteractiveTurnMemoryEntry(
   });
 }
 
+const PROCEDURE_CAPTURE_PATTERN = /(?:\b(?:use|run|read|check|open|inspect|query|call)\b|\bdùng\b|sử\s+dụng|\bchạy\b|đọc|kiểm\s+tra|\bmở\b|\bxem\b|truy\s+vấn|\bgọi\b)/iu;
+const RECOVERY_CAPTURE_PATTERN = /(?:\b(?:retry|rerun|re-run|switch|use|check|fix|try)\b|thử\s+lại|chạy\s+lại|kiểm\s+tra\s+lại|đổi\s+sang|\bdùng\b|\bsửa\b|\bthử\b)/iu;
+const EXPLICIT_SAVE_COMMAND_PATTERN = /^(?:please\s+)?(?:(?:remember|save)\s+(?:that\s+)?)\S|^(?:hãy\s+)?(?:(?:ghi\s+nhớ|nhớ|lưu)\s+(?:(?:rằng|là)\s+)?)\S/iu;
+
 export function shouldCapture(memoryEntry: SessionMemoryEntry): boolean {
   const summaryLength = memoryEntry.summaryText.trim().length;
   const essenceLength = memoryEntry.essenceText.trim().length;
@@ -74,12 +78,12 @@ export function shouldCapture(memoryEntry: SessionMemoryEntry): boolean {
   if (memoryEntry.memoryType === 'procedure') {
     return memoryEntry.importance >= 0.72
       && memoryEntry.tags.length >= 1
-      && /\b(?:use|run|read|check|open|inspect|query|call)\b/iu.test(memoryEntry.summaryText);
+      && PROCEDURE_CAPTURE_PATTERN.test(memoryEntry.summaryText);
   }
 
   if (memoryEntry.memoryType === 'failure') {
     return memoryEntry.importance >= 0.78
-      && /\b(?:retry|rerun|re-run|switch|use|check|fix|try)\b/iu.test(memoryEntry.summaryText);
+      && RECOVERY_CAPTURE_PATTERN.test(memoryEntry.summaryText);
   }
 
   return false;
@@ -261,11 +265,13 @@ function findMatchingToolCall(history: Message[] | undefined, toolCallId: string
 }
 
 function isExplicitSaveRequest(input: string): boolean {
-  return /^(?:please\s+)?(?:(?:remember|save)\s+(?:that\s+)?)\S/iu.test(input);
+  return EXPLICIT_SAVE_COMMAND_PATTERN.test(input);
 }
 
 function extractMemoryStatement(input: string): string {
-  const withoutCommand = input.replace(/^\s*(?:please\s+)?(?:remember|save)\b[:\s-]*/iu, '');
+  const withoutCommand = input
+    .replace(/^\s*(?:please\s+)?(?:remember|save)\b[:\s-]*/iu, '')
+    .replace(/^\s*(?:hãy\s+)?(?:ghi\s+nhớ|nhớ|lưu)(?:\s+(?:rằng|là))?[:\s-]*/iu, '');
   const normalized = normalizeWhitespace(withoutCommand);
   return normalized.length > 0 ? normalized : input;
 }
@@ -299,15 +305,15 @@ function summarizeToolInput(toolInput: unknown): string {
 function inferGoal(userInput: string, conclusion: string): string {
   const normalizedUserInput = userInput.toLowerCase();
 
-  if (/\bversion\b/u.test(normalizedUserInput)) {
+  if (/\bversion\b|phiên\s+bản/u.test(normalizedUserInput)) {
     return `confirm ${conclusion}`;
   }
 
-  if (/\b(test|tests)\b/u.test(normalizedUserInput)) {
+  if (/\b(test|tests)\b|kiểm\s+thử/u.test(normalizedUserInput)) {
     return `check test output: ${conclusion}`;
   }
 
-  if (/\b(build|compile)\b/u.test(normalizedUserInput)) {
+  if (/\b(build|compile)\b|biên\s+dịch/u.test(normalizedUserInput)) {
     return `check build status: ${conclusion}`;
   }
 
@@ -316,7 +322,7 @@ function inferGoal(userInput: string, conclusion: string): string {
 
 function extractRecoveryGuidance(finalAnswer: string): string {
   const normalized = normalizeWhitespace(finalAnswer);
-  const match = normalized.match(/\b(?:retry|rerun|re-run|switch|use|check|fix|try)\b[^.!?]{0,120}[.!?]?/iu);
+  const match = normalized.match(/(?:\b(?:retry|rerun|re-run|switch|use|check|fix|try)\b|thử\s+lại|chạy\s+lại|kiểm\s+tra\s+lại|đổi\s+sang|\bdùng\b|\bsửa\b|\bthử\b)[^.!?]{0,120}[.!?]?/iu);
   return sanitizeSentence(match?.[0] ?? '', 120);
 }
 
@@ -339,9 +345,7 @@ function normalizeWhitespace(value: string): string {
 }
 
 function extractTags(value: string): string[] {
-  return value
-    .toLowerCase()
-    .split(/[^a-z0-9.]+/u)
+  return Array.from(value.toLowerCase().matchAll(/[\p{L}\p{N}.]+/gu), (match) => match[0])
     .filter((token) => token.length >= 4)
     .slice(0, 6);
 }

@@ -3,6 +3,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 import pc from 'picocolors';
 import { createAgentRuntime, type AgentRuntime } from '../agent/runtime.js';
 import { runAgentTurn, type RunAgentTurnInput, type RunAgentTurnResult } from '../agent/loop.js';
+import { pruneHistoryForContext } from '../context/historyPruner.js';
 import { parseProviderId, resolveProviderConfig } from '../provider/config.js';
 import type { ProviderId, ResolvedProviderConfig } from '../provider/model.js';
 import { CheckpointStore } from '../session/checkpointStore.js';
@@ -197,13 +198,14 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
             let preparedMemory:
               | Awaited<ReturnType<typeof prepareInteractiveSessionMemory>>
               | undefined;
+            const historyContext = buildPromptHistoryContext(history, historySummary);
 
             try {
               preparedMemory = await prepareSessionMemory({
                 cwd: runtime.cwd,
                 sessionId: sessionMemoryState?.storeSessionId ?? sessionId,
                 userInput,
-                historySummary,
+                historySummary: historyContext.historySummary,
                 checkpointState: sessionMemoryState
               });
             } catch (error) {
@@ -224,15 +226,16 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
               maxToolRounds: runtime.maxToolRounds,
               agentSpec: runtime.agentSpec,
               observer: cliObserver.observer,
-              history,
-              historySummary,
+              history: historyContext.history,
+              historySummary: historyContext.historySummary,
               memoryText: preparedMemory?.memoryText ?? '',
               sessionId
             });
 
             if (result.stopReason === 'completed' || result.stopReason === 'max_tool_rounds_reached') {
-              history = result.history;
-              historySummary = readTurnHistorySummary(result) ?? historySummary;
+              const newTurnMessages = result.history.slice(historyContext.history.length);
+              history = [...history, ...newTurnMessages];
+              historySummary = readTurnHistorySummary(result) ?? historyContext.historySummary;
 
               if (preparedMemory) {
                 try {
@@ -241,7 +244,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
                     sessionId: sessionMemoryState?.storeSessionId ?? sessionId,
                     userInput,
                     finalAnswer: result.finalAnswer,
-                    history: result.history
+                    history
                   });
 
                   sessionMemoryState = captureResult.saved
@@ -298,6 +301,25 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
 function readTurnHistorySummary(result: RunAgentTurnResult): string | undefined {
   const maybeResult = result as RunAgentTurnResult & { historySummary?: string };
   return maybeResult.historySummary;
+}
+
+function buildPromptHistoryContext(history: Message[], historySummary?: string): {
+  history: Message[];
+  historySummary?: string;
+} {
+  const pruned = pruneHistoryForContext(history, {
+    recentMessageCount: 8,
+    oldHistoryBudgetChars: 1_200,
+    summaryMaxLines: 8,
+    summaryMaxChars: 800,
+    summarySnippetLength: 140
+  });
+  const combinedSummary = [historySummary, pruned.summary].filter((value): value is string => typeof value === 'string' && value.length > 0).join('\n\n');
+
+  return {
+    history: pruned.messages,
+    historySummary: combinedSummary || undefined
+  };
 }
 
 function recordInteractiveMemoryFallback(

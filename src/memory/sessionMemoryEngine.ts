@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { allocateContextBudget } from '../context/budgetManager.js';
 import type { Message } from '../core/types.js';
 import { MemvidSessionStore } from './memvidSessionStore.js';
+import { GlobalMemoryStore } from './globalMemoryStore.js';
 import { ensureSessionStoreWriteReady, verifySessionStoreOnOpen } from './sessionMemoryMaintenance.js';
 import { scoreSessionMemoryCandidate } from './decay.js';
 import { assignMemoryFidelity } from './fidelity.js';
@@ -45,6 +46,7 @@ export interface PrepareInteractiveSessionMemoryInput {
 export interface PrepareInteractiveSessionMemoryResult {
   memoryText: string;
   store: MemvidSessionStore;
+  globalStore?: GlobalMemoryStore;
   recalled: SessionMemoryCandidate[];
   checkpointState: SessionMemoryCheckpointState;
 }
@@ -69,10 +71,12 @@ export async function prepareInteractiveSessionMemory(
   input: PrepareInteractiveSessionMemoryInput
 ): Promise<PrepareInteractiveSessionMemoryResult> {
   const store = new MemvidSessionStore({ cwd: input.cwd, sessionId: input.sessionId });
+  const globalStore = new GlobalMemoryStore();
   const memoryPath = store.paths().memoryPath;
   const hadExistingStore = Boolean(input.checkpointState?.memoryPath) || existsSync(memoryPath);
 
   await store.open();
+  await globalStore.open();
   let meta = await store.readMeta();
 
   const verifyResult = await verifySessionStoreOnOpen({
@@ -93,6 +97,7 @@ export async function prepareInteractiveSessionMemory(
   const recallLimit = Math.max(1, input.recallLimit ?? DEFAULT_RECALL_LIMIT);
   const candidates = await recallInteractiveCandidates({
     store,
+    globalStore,
     userInput: input.userInput,
     historySummary: input.historySummary,
     latestSummaryText: input.checkpointState?.latestSummaryText,
@@ -106,12 +111,22 @@ export async function prepareInteractiveSessionMemory(
   });
 
   if (recall.recalled.length > 0) {
-    await store.touchByHashes(recall.recalled.map((candidate) => candidate.hash));
+    const sessionHashes = recall.recalled.filter((candidate) => candidate.sessionId === input.sessionId).map((candidate) => candidate.hash);
+    const globalHashes = recall.recalled.filter((candidate) => candidate.sessionId === 'user-global').map((candidate) => candidate.hash);
+
+    if (sessionHashes.length > 0) {
+      await store.touchByHashes(sessionHashes);
+    }
+
+    if (globalHashes.length > 0) {
+      await globalStore.touchByHashes(globalHashes);
+    }
   }
 
   return {
     memoryText: recall.memoryText,
     store,
+    globalStore,
     recalled: recall.recalled,
     checkpointState: {
       storeSessionId: input.sessionId,
@@ -165,6 +180,14 @@ export async function captureInteractiveTurnMemory(
 
   await input.store.put(entry);
   await input.store.seal();
+
+  if (shouldCaptureGlobalMemory(entry)) {
+    const globalStore = new GlobalMemoryStore();
+    await globalStore.open();
+    await globalStore.put(entry);
+    await globalStore.seal();
+  }
+
   const meta = await input.store.readMeta();
 
   return {
@@ -299,6 +322,7 @@ function renderMemorySections(hot: string[], warm: string[], faded: string[], bu
 
 async function recallInteractiveCandidates(input: {
   store: MemvidSessionStore;
+  globalStore: GlobalMemoryStore;
   userInput: string;
   historySummary?: string;
   latestSummaryText?: string;
@@ -308,17 +332,57 @@ async function recallInteractiveCandidates(input: {
   const deduped = new Map<string, SessionMemoryCandidate>();
 
   for (const query of queries) {
-    const recalled = await input.store.recall(query, { k: input.recallLimit });
+    const recalledGroups = await Promise.all([
+      input.store.recall(query, { k: input.recallLimit }),
+      input.globalStore.recall(query, { k: input.recallLimit })
+    ]);
 
-    for (const candidate of recalled) {
-      const existing = deduped.get(candidate.hash);
-      if (!existing || candidate.retrievalScore > existing.retrievalScore) {
-        deduped.set(candidate.hash, candidate);
+    for (const candidate of recalledGroups.flat()) {
+      const dedupeKey = `${normalizeMemoryText(candidate.summaryText)}\n${normalizeMemoryText(candidate.essenceText)}`;
+      const existing = deduped.get(dedupeKey);
+      if (!existing || scoreMergedCandidate(candidate) > scoreMergedCandidate(existing)) {
+        deduped.set(dedupeKey, candidate);
       }
     }
   }
 
   return [...deduped.values()];
+}
+
+function shouldCaptureGlobalMemory(entry: SessionMemoryEntry): boolean {
+  if (containsSensitiveMemoryContent(entry)) {
+    return false;
+  }
+
+  if (entry.explicitSave) {
+    return true;
+  }
+
+  if (entry.memoryType === 'fact') {
+    return entry.importance >= 0.72;
+  }
+
+  if (entry.memoryType === 'procedure') {
+    return entry.importance >= 0.8;
+  }
+
+  return false;
+}
+
+function containsSensitiveMemoryContent(entry: SessionMemoryEntry): boolean {
+  const content = `${entry.summaryText}\n${entry.essenceText}\n${entry.fullText}`;
+  return /\b(api[_-]?key|token|secret|password|passwd|private[_-]?key|credential|\.env)\b/iu.test(content);
+}
+
+function scoreMergedCandidate(candidate: SessionMemoryCandidate): number {
+  const scopeBoost = candidate.sessionId === 'user-global'
+    ? (candidate.explicitSave ? 0.1 : -0.03)
+    : 0.05;
+  return candidate.retrievalScore + candidate.importance + scopeBoost;
+}
+
+function normalizeMemoryText(value: string): string {
+  return value.replace(/\s+/gu, ' ').trim().toLowerCase();
 }
 
 function isPresent(value: string | undefined): value is string {

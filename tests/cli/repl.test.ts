@@ -473,6 +473,7 @@ describe('createRepl', () => {
           toolCallsByName: { shell_readonly: 1 },
           inputTokensTotal: 516,
           outputTokensTotal: 274,
+          cacheReadInputTokens: 0,
           promptCharsMax: 100,
           toolResultCharsInFinalPrompt: 0,
           assistantToolCallCharsInFinalPrompt: 0,
@@ -913,6 +914,7 @@ describe('buildCli', () => {
           toolCallsByName: { read_file: 1, search: 1 },
           inputTokensTotal: 185,
           outputTokensTotal: 15,
+          cacheReadInputTokens: 0,
           promptCharsMax: 100,
           toolResultCharsInFinalPrompt: 0,
           assistantToolCallCharsInFinalPrompt: 0,
@@ -1738,6 +1740,7 @@ describe('buildCli', () => {
           toolCallsByName: {},
           inputTokensTotal: 12,
           outputTokensTotal: 8,
+          cacheReadInputTokens: 0,
           promptCharsMax: 42,
           toolResultCharsInFinalPrompt: 0,
           assistantToolCallCharsInFinalPrompt: 0,
@@ -3009,6 +3012,7 @@ describe('buildCli', () => {
           toolCallsByName: { read_file: 1 },
           inputTokensTotal: 185,
           outputTokensTotal: 15,
+          cacheReadInputTokens: 0,
           promptCharsMax: 100,
           toolResultCharsInFinalPrompt: 0,
           assistantToolCallCharsInFinalPrompt: 0,
@@ -3742,6 +3746,10 @@ describe('buildCli', () => {
         return {
           memoryText: '',
           store: {
+            put: vi.fn(async () => undefined),
+            seal: vi.fn(async () => undefined)
+          } as never,
+          globalStore: {
             put: vi.fn(async () => undefined),
             seal: vi.fn(async () => undefined)
           } as never,

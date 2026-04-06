@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  getGlobalMemoryArtifactPaths,
   getSessionDirectoryPath,
   getSessionMemoryArtifactPaths,
   getSessionMemoryMetaPath,
@@ -19,6 +20,14 @@ describe('session memory paths', () => {
       directoryPath: '/workspace/qiclaw/.qiclaw/sessions/session_123',
       memoryPath: '/workspace/qiclaw/.qiclaw/sessions/session_123/memory.mv2',
       metaPath: '/workspace/qiclaw/.qiclaw/sessions/session_123/memory.meta.json'
+    });
+  });
+
+  it('derives user-global memory artifact paths outside the repo', () => {
+    expect(getGlobalMemoryArtifactPaths({ baseDirectory: '/home/alice/.qiclaw/memory/global' })).toEqual({
+      directoryPath: '/home/alice/.qiclaw/memory/global',
+      memoryPath: '/home/alice/.qiclaw/memory/global/memory.mv2',
+      metaPath: '/home/alice/.qiclaw/memory/global/memory.meta.json'
     });
   });
 });

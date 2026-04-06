@@ -7,7 +7,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { defaultAgentSpec } from '../../src/agent/defaultAgentSpec.js';
 import { buildCli } from '../../src/cli/main.js';
 import { CheckpointStore } from '../../src/session/checkpointStore.js';
-import { createInteractiveCheckpointJson, getCheckpointStorePath } from '../../src/session/session.js';
+import { createInteractiveCheckpointJson, getCheckpointStorePath, parseInteractiveCheckpointJson } from '../../src/session/session.js';
+import type { PrepareInteractiveSessionMemoryResult } from '../../src/memory/sessionMemoryEngine.js';
 
 const tempDirs: string[] = [];
 
@@ -359,6 +360,127 @@ describe('interactive session memory flow', () => {
     expect(interactiveInputs[1].memoryText).toContain('phiên bản 1.2.3');
   });
 
+  it('recalls user-global memory from a different session on restart', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'qiclaw-session-memory-'));
+    tempDirs.push(tempDir);
+
+    const globalInputs: Array<{ userInput: string; sessionId?: string; memoryText?: string }> = [];
+    const firstRunCli = buildCli({
+      argv: [],
+      cwd: tempDir,
+      stdout: { write() { return true; } },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: tempDir,
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      createSessionId: () => 'global-session-1',
+      readLine: (() => {
+        const inputs = ['remember that I always want concise answers', '/exit'];
+        return async () => inputs.shift();
+      })(),
+      runTurn: async (input) => ({
+        stopReason: 'completed',
+        finalAnswer: 'I will remember that you always want concise answers.',
+        history: [
+          ...(input.history ?? []),
+          { role: 'user', content: input.userInput },
+          { role: 'assistant', content: 'I will remember that you always want concise answers.' }
+        ],
+        historySummary: 'concise answer preference stored',
+        toolRoundsUsed: 0,
+        doneCriteria: {
+          goal: input.userInput,
+          checklist: [input.userInput],
+          requiresNonEmptyFinalAnswer: true,
+          requiresToolEvidence: false,
+          requiresSubstantiveFinalAnswer: false,
+          forbidSuccessAfterToolErrors: false
+        },
+        verification: {
+          isVerified: true,
+          finalAnswerIsNonEmpty: true,
+          finalAnswerIsSubstantive: true,
+          toolEvidenceSatisfied: true,
+          noUnresolvedToolErrors: true,
+          toolMessagesCount: 0,
+          checks: []
+        }
+      })
+    });
+
+    await expect(firstRunCli.run()).resolves.toBe(0);
+
+    const secondRunCli = buildCli({
+      argv: [],
+      cwd: tempDir,
+      stdout: { write() { return true; } },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: tempDir,
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      createSessionId: () => 'global-session-2',
+      readLine: (() => {
+        const inputs = ['how should you answer by default?', '/exit'];
+        return async () => inputs.shift();
+      })(),
+      runTurn: async (input) => {
+        globalInputs.push({
+          userInput: input.userInput,
+          sessionId: input.sessionId,
+          memoryText: input.memoryText
+        });
+
+        return {
+          stopReason: 'completed',
+          finalAnswer: 'I should answer concisely by default.',
+          history: [
+            ...(input.history ?? []),
+            { role: 'user', content: input.userInput },
+            { role: 'assistant', content: 'I should answer concisely by default.' }
+          ],
+          historySummary: 'global preference recalled',
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
+            toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
+            toolMessagesCount: 0,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(secondRunCli.run()).resolves.toBe(0);
+    expect(globalInputs).toEqual([
+      {
+        userInput: 'how should you answer by default?',
+        sessionId: 'global-session-1',
+        memoryText: expect.stringContaining('concise answers')
+      }
+    ]);
+  });
+
   it('restores the checkpoint sessionId and recalls the same session memory after restarting the CLI', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'qiclaw-session-memory-'));
     tempDirs.push(tempDir);
@@ -593,6 +715,123 @@ describe('interactive session memory flow', () => {
         memoryText: ''
       }
     ]);
+  });
+
+  it('passes compact recent history and a combined summary to the agent without truncating checkpoint history', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'qiclaw-session-memory-'));
+    tempDirs.push(tempDir);
+
+    const checkpointStorePath = getCheckpointStorePath(tempDir);
+    await mkdir(join(tempDir, '.qiclaw'), { recursive: true });
+    const checkpointStore = new CheckpointStore(checkpointStorePath);
+    const oldHistory = Array.from({ length: 24 }, (_, index) => ({
+      role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+      content: `old conversation message ${index} ${'x'.repeat(200)}`
+    }));
+
+    checkpointStore.save({
+      sessionId: 'session-with-long-history',
+      taskId: 'interactive',
+      status: 'completed',
+      checkpointJson: createInteractiveCheckpointJson({
+        version: 1,
+        history: oldHistory,
+        historySummary: 'previous durable summary'
+      }),
+      updatedAt: '2026-04-05T10:10:00.000Z'
+    });
+
+    const runInputs: Array<{ historyLength: number; historySummary?: string }> = [];
+    const cli = buildCli({
+      argv: [],
+      cwd: tempDir,
+      stdout: { write() { return true; } },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: tempDir,
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      createSessionId: () => 'unused-new-session',
+      prepareSessionMemory: async (input) => ({
+        memoryText: '',
+        store: { close: async () => undefined } as never,
+        globalStore: { close: async () => undefined } as never,
+        recalled: [],
+        checkpointState: {
+          storeSessionId: input.sessionId,
+          engine: 'memvid-session-store',
+          version: 1,
+          memoryPath: '/tmp/memory.mv2',
+          metaPath: '/tmp/memory.meta.json',
+          totalEntries: 0,
+          lastCompactedAt: null,
+          latestSummaryText: input.historySummary
+        }
+      }) as PrepareInteractiveSessionMemoryResult,
+      captureTurnMemory: async (input) => ({ saved: false, checkpointState: {
+        storeSessionId: input.sessionId,
+        engine: 'memvid-session-store',
+        version: 1,
+        memoryPath: '/tmp/memory.mv2',
+        metaPath: '/tmp/memory.meta.json',
+        totalEntries: 0,
+        lastCompactedAt: null
+      } }),
+      readLine: (() => {
+        const inputs = ['continue from there', '/exit'];
+        return async () => inputs.shift();
+      })(),
+      runTurn: async (input) => {
+        runInputs.push({
+          historyLength: input.history?.length ?? 0,
+          historySummary: input.historySummary
+        });
+
+        return {
+          stopReason: 'completed',
+          finalAnswer: 'continued',
+          history: [
+            ...(input.history ?? []),
+            { role: 'user', content: input.userInput },
+            { role: 'assistant', content: 'continued' }
+          ],
+          historySummary: 'turn summary',
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
+            toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
+            toolMessagesCount: 0,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+    expect(runInputs).toHaveLength(1);
+    expect(runInputs[0].historyLength).toBeLessThan(oldHistory.length);
+    expect(runInputs[0].historySummary).toContain('previous durable summary');
+    expect(runInputs[0].historySummary).toContain('History summary:');
+
+    const restored = parseInteractiveCheckpointJson(checkpointStore.getLatest()?.checkpointJson ?? '');
+    expect(restored?.history).toHaveLength(oldHistory.length + 2);
+    expect(restored?.history.at(0)?.content).toContain('old conversation message 0');
+    expect(restored?.history.at(-1)?.content).toBe('continued');
   });
 
   it('keeps prompt mode stateless without session memory state', async () => {

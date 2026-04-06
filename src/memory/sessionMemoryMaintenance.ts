@@ -9,13 +9,14 @@ import {
 } from '@memvid/sdk';
 
 import type { MemvidSessionStore } from './memvidSessionStore.js';
+import type { GlobalMemoryStore } from './globalMemoryStore.js';
 import type { SessionMemoryMeta } from './sessionMemoryTypes.js';
 
 type VerifyOptions = Parameters<typeof verifyMemvid>[1];
 type DoctorOptions = Parameters<typeof doctorMemvid>[1];
 
 export interface SessionMemoryMaintenanceTarget {
-  store: MemvidSessionStore;
+  store: MemvidSessionStore | GlobalMemoryStore;
   meta: Pick<SessionMemoryMeta, 'memoryPath'>;
   exists?: boolean;
   now?: string;

@@ -32,6 +32,20 @@ export interface RecallSessionMemoriesResult {
   recalled: SessionMemoryCandidate[];
 }
 
+export interface RecallInputsDebugRecord {
+  type: 'memory_recall_inputs';
+  timestamp: string;
+  sessionId: string;
+  userInput: string;
+  historySummary?: string;
+  latestSummaryText?: string;
+  queries: string[];
+  queryCount: number;
+  userInputLength: number;
+  historySummaryLength: number;
+  latestSummaryTextLength: number;
+}
+
 export interface PrepareInteractiveSessionMemoryInput {
   cwd: string;
   sessionId: string;
@@ -41,6 +55,7 @@ export interface PrepareInteractiveSessionMemoryInput {
   totalBudgetChars?: number;
   recallLimit?: number;
   now?: string;
+  debugRecallInputs?: (record: RecallInputsDebugRecord) => void;
 }
 
 export interface PrepareInteractiveSessionMemoryResult {
@@ -98,10 +113,13 @@ export async function prepareInteractiveSessionMemory(
   const candidates = await recallInteractiveCandidates({
     store,
     globalStore,
+    sessionId: input.sessionId,
     userInput: input.userInput,
     historySummary: input.historySummary,
     latestSummaryText: input.checkpointState?.latestSummaryText,
-    recallLimit
+    recallLimit,
+    now: input.now,
+    debugRecallInputs: input.debugRecallInputs
   });
   const allocation = allocateContextBudget({ total: Math.max(0, Math.floor(input.totalBudgetChars ?? DEFAULT_MEMORY_CONTEXT_TOTAL_CHARS)) });
   const recall = recallSessionMemories({
@@ -355,12 +373,28 @@ function renderMemorySections(hot: string[], warm: string[], faded: string[], bu
 async function recallInteractiveCandidates(input: {
   store: MemvidSessionStore;
   globalStore: GlobalMemoryStore;
+  sessionId: string;
   userInput: string;
   historySummary?: string;
   latestSummaryText?: string;
   recallLimit: number;
+  now?: string;
+  debugRecallInputs?: (record: RecallInputsDebugRecord) => void;
 }): Promise<SessionMemoryCandidate[]> {
   const queries = [input.userInput, input.historySummary, input.latestSummaryText].filter(isPresent);
+  input.debugRecallInputs?.({
+    type: 'memory_recall_inputs',
+    timestamp: input.now ?? new Date().toISOString(),
+    sessionId: input.sessionId,
+    userInput: input.userInput,
+    historySummary: input.historySummary,
+    latestSummaryText: input.latestSummaryText,
+    queries,
+    queryCount: queries.length,
+    userInputLength: input.userInput.length,
+    historySummaryLength: input.historySummary?.length ?? 0,
+    latestSummaryTextLength: input.latestSummaryText?.length ?? 0
+  });
   const deduped = new Map<string, SessionMemoryCandidate>();
 
   for (const query of queries) {

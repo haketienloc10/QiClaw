@@ -20,7 +20,8 @@ import {
 } from '../session/session.js';
 import {
   captureInteractiveTurnMemory,
-  prepareInteractiveSessionMemory
+  prepareInteractiveSessionMemory,
+  type RecallInputsDebugRecord
 } from '../memory/sessionMemoryEngine.js';
 import { createCompositeObserver } from '../telemetry/composite.js';
 import {
@@ -172,6 +173,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
           assistantBlockWriter,
           mode: parsed.prompt ? 'compact' : 'interactive'
         });
+        const debugRecallInputs = cliObserver.createRecallInputsDebugLogger();
         runtime.observer = cliObserver.observer;
 
         if (parsed.prompt) {
@@ -260,7 +262,8 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
                 sessionId: sessionMemoryState?.storeSessionId ?? sessionId,
                 userInput,
                 historySummary: historyContext.historySummary,
-                checkpointState: sessionMemoryState
+                checkpointState: sessionMemoryState,
+                debugRecallInputs
               });
             } catch (error) {
               preparedMemory = undefined;
@@ -893,6 +896,7 @@ function createCliObserver(options: {
 }): {
   observer: TelemetryObserver;
   flushPendingFooter(): void;
+  createRecallInputsDebugLogger(): ((record: RecallInputsDebugRecord) => void) | undefined;
 } {
   const observers: TelemetryObserver[] = [options.metrics];
   let compactObserver: CompactCliTelemetryObserver | undefined;
@@ -944,11 +948,14 @@ function createCliObserver(options: {
     observers.push(compactObserver);
   }
   const selectedDebugLogPath = options.debugLogPath ?? options.envDebugLogPath;
+  let recallInputsDebugWriter: ReturnType<typeof createFileJsonLineWriter> | undefined;
 
   if (selectedDebugLogPath) {
     const resolvedDebugLogPath = resolveCliPath(options.cwd, selectedDebugLogPath);
     mkdirSync(dirname(resolvedDebugLogPath), { recursive: true });
-    observers.push(createJsonLineLogger(createFileJsonLineWriter(resolvedDebugLogPath)));
+    const debugWriter = createFileJsonLineWriter(resolvedDebugLogPath);
+    recallInputsDebugWriter = debugWriter;
+    observers.push(createJsonLineLogger(debugWriter));
   }
 
   const compositeObserver = createCompositeObserver(observers);
@@ -973,6 +980,15 @@ function createCliObserver(options: {
     flushPendingFooter() {
       compactObserver?.flushPendingFooter();
       pendingFooterRenderState = undefined;
+    },
+    createRecallInputsDebugLogger() {
+      if (!recallInputsDebugWriter) {
+        return undefined;
+      }
+
+      return (record: RecallInputsDebugRecord) => {
+        recallInputsDebugWriter?.appendLine(`${JSON.stringify(record)}\n`);
+      };
     }
   };
 }

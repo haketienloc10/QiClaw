@@ -8,6 +8,7 @@ import {
 import * as sessionMemoryMaintenance from '../../src/memory/sessionMemoryMaintenance.js';
 import * as decay from '../../src/memory/decay.js';
 import { MemvidSessionStore } from '../../src/memory/memvidSessionStore.js';
+import { GlobalMemoryStore } from '../../src/memory/globalMemoryStore.js';
 import type { SessionMemoryCandidate } from '../../src/memory/sessionMemoryTypes.js';
 
 function createCandidate(overrides: Partial<SessionMemoryCandidate> = {}): SessionMemoryCandidate {
@@ -454,8 +455,9 @@ describe('prepareInteractiveSessionMemory', () => {
     }
   });
 
-  it('touches only hashes that survive final recall packing', async () => {
+  it('logs recall inputs for debugging with the filtered query list', async () => {
     const open = vi.spyOn(MemvidSessionStore.prototype, 'open').mockResolvedValue(undefined);
+    const globalOpen = vi.spyOn(GlobalMemoryStore.prototype, 'open').mockResolvedValue(undefined);
     const readMeta = vi.spyOn(MemvidSessionStore.prototype, 'readMeta').mockResolvedValue({
       version: 1,
       engine: 'memvid-session-store',
@@ -469,6 +471,110 @@ describe('prepareInteractiveSessionMemory', () => {
       lastSealedAt: null,
       accessStatsByHash: {}
     });
+    const globalReadMeta = vi.spyOn(GlobalMemoryStore.prototype, 'readMeta').mockResolvedValue({
+      version: 1,
+      engine: 'memvid-global-memory-store',
+      sessionId: 'user-global',
+      memoryPath: '/tmp/global-memory.json',
+      metaPath: '/tmp/global-meta.json',
+      totalEntries: 0,
+      lastCompactedAt: null,
+      lastVerifiedAt: null,
+      lastDoctorAt: null,
+      lastSealedAt: null,
+      accessStatsByHash: {}
+    });
+    const verifyOpen = vi.spyOn(sessionMemoryMaintenance, 'verifySessionStoreOnOpen').mockResolvedValue({ ok: true, verified: false });
+    const recall = vi.spyOn(MemvidSessionStore.prototype, 'recall').mockResolvedValue([]);
+    const globalRecall = vi.spyOn(GlobalMemoryStore.prototype, 'recall').mockResolvedValue([]);
+    const touchByHashes = vi.spyOn(MemvidSessionStore.prototype, 'touchByHashes').mockResolvedValue([]);
+    const globalTouchByHashes = vi.spyOn(GlobalMemoryStore.prototype, 'touchByHashes').mockResolvedValue([]);
+    const debugRecallInputs = vi.fn();
+
+    try {
+      await prepareInteractiveSessionMemory({
+        cwd: '/tmp/session-memory-engine-touch',
+        sessionId: 'session_1',
+        userInput: 'remind me of my pinned preference',
+        historySummary: 'History summary: pinned preference stored',
+        checkpointState: {
+          storeSessionId: 'session_1',
+          engine: 'memvid-session-store',
+          version: 1,
+          memoryPath: '/tmp/memory.json',
+          metaPath: '/tmp/meta.json',
+          totalEntries: 2,
+          lastCompactedAt: null,
+          latestSummaryText: 'pinned preference'
+        },
+        totalBudgetChars: 130,
+        now: '2026-04-05T12:00:00.000Z',
+        debugRecallInputs
+      });
+
+      expect(debugRecallInputs).toHaveBeenCalledTimes(1);
+      expect(debugRecallInputs).toHaveBeenCalledWith({
+        type: 'memory_recall_inputs',
+        timestamp: '2026-04-05T12:00:00.000Z',
+        sessionId: 'session_1',
+        userInput: 'remind me of my pinned preference',
+        historySummary: 'History summary: pinned preference stored',
+        latestSummaryText: 'pinned preference',
+        queries: [
+          'remind me of my pinned preference',
+          'History summary: pinned preference stored',
+          'pinned preference'
+        ],
+        queryCount: 3,
+        userInputLength: 'remind me of my pinned preference'.length,
+        historySummaryLength: 'History summary: pinned preference stored'.length,
+        latestSummaryTextLength: 'pinned preference'.length
+      });
+      expect(touchByHashes).not.toHaveBeenCalled();
+      expect(globalTouchByHashes).not.toHaveBeenCalled();
+    } finally {
+      open.mockRestore();
+      globalOpen.mockRestore();
+      readMeta.mockRestore();
+      globalReadMeta.mockRestore();
+      verifyOpen.mockRestore();
+      recall.mockRestore();
+      globalRecall.mockRestore();
+      touchByHashes.mockRestore();
+      globalTouchByHashes.mockRestore();
+    }
+  });
+
+  it('touches only hashes that survive final recall packing', async () => {
+    const open = vi.spyOn(MemvidSessionStore.prototype, 'open').mockResolvedValue(undefined);
+    const globalOpen = vi.spyOn(GlobalMemoryStore.prototype, 'open').mockResolvedValue(undefined);
+    const readMeta = vi.spyOn(MemvidSessionStore.prototype, 'readMeta').mockResolvedValue({
+      version: 1,
+      engine: 'memvid-session-store',
+      sessionId: 'session_1',
+      memoryPath: '/tmp/memory.json',
+      metaPath: '/tmp/meta.json',
+      totalEntries: 2,
+      lastCompactedAt: null,
+      lastVerifiedAt: null,
+      lastDoctorAt: null,
+      lastSealedAt: null,
+      accessStatsByHash: {}
+    });
+    const globalReadMeta = vi.spyOn(GlobalMemoryStore.prototype, 'readMeta').mockResolvedValue({
+      version: 1,
+      engine: 'memvid-global-memory-store',
+      sessionId: 'user-global',
+      memoryPath: '/tmp/global-memory.json',
+      metaPath: '/tmp/global-meta.json',
+      totalEntries: 0,
+      lastCompactedAt: null,
+      lastVerifiedAt: null,
+      lastDoctorAt: null,
+      lastSealedAt: null,
+      accessStatsByHash: {}
+    });
+    const verifyOpen = vi.spyOn(sessionMemoryMaintenance, 'verifySessionStoreOnOpen').mockResolvedValue({ ok: true, verified: false });
     const recall = vi.spyOn(MemvidSessionStore.prototype, 'recall')
       .mockResolvedValueOnce([
         createCandidate({
@@ -490,7 +596,9 @@ describe('prepareInteractiveSessionMemory', () => {
           essenceText: 'Dropped memory still too large for the remaining packed budget.'
         })
       ]);
+    const globalRecall = vi.spyOn(GlobalMemoryStore.prototype, 'recall').mockResolvedValue([]);
     const touchByHashes = vi.spyOn(MemvidSessionStore.prototype, 'touchByHashes').mockResolvedValue([]);
+    const globalTouchByHashes = vi.spyOn(GlobalMemoryStore.prototype, 'touchByHashes').mockResolvedValue([]);
 
     try {
       const result = await prepareInteractiveSessionMemory({
@@ -504,11 +612,17 @@ describe('prepareInteractiveSessionMemory', () => {
       expect(result.recalled.map((candidate) => candidate.hash)).toEqual(['full123def456']);
       expect(touchByHashes).toHaveBeenCalledTimes(1);
       expect(touchByHashes).toHaveBeenCalledWith(['full123def456']);
+      expect(globalTouchByHashes).not.toHaveBeenCalled();
     } finally {
       open.mockRestore();
+      globalOpen.mockRestore();
       readMeta.mockRestore();
+      globalReadMeta.mockRestore();
+      verifyOpen.mockRestore();
       recall.mockRestore();
+      globalRecall.mockRestore();
       touchByHashes.mockRestore();
+      globalTouchByHashes.mockRestore();
     }
   });
 

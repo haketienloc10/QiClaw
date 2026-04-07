@@ -1,6 +1,7 @@
 import type { Message } from '../core/types.js';
 import { buildPromptWithContext } from '../context/promptBuilder.js';
 import type { NormalizedEvent, ProviderResponse, ProviderUsageSummary } from '../provider/model.js';
+import { ANTHROPIC_STREAM_UNSUPPORTED_ERROR } from '../provider/anthropic.js';
 import {
   collectProviderStream,
   toToolErrorMessage,
@@ -902,7 +903,7 @@ function readProviderStreamWithTimeout(
 function shouldFallbackToGenerate(provider: ModelProvider, error: unknown): boolean {
   return provider.name === 'anthropic'
     && error instanceof Error
-    && error.message === 'Anthropic provider does not support streaming yet.';
+    && error.message === ANTHROPIC_STREAM_UNSUPPORTED_ERROR;
 }
 
 async function* withProviderStreamTimeout(

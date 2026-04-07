@@ -275,8 +275,14 @@ export function createOpenAIProvider(options: OpenAIProviderOptions): ModelProvi
               };
             }
             break;
-          case 'response.failed':
-            throw new Error('OpenAI response stream failed.');
+          case 'response.failed': {
+            const statusDetail = event.response.status ? `: ${event.response.status}` : '.';
+            yield {
+              type: 'error',
+              error: new Error(`OpenAI response stream failed${statusDetail}`)
+            };
+            return;
+          }
           case 'response.incomplete':
             completedResponse = event.response;
             break;

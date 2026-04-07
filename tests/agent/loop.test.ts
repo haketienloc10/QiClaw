@@ -2663,7 +2663,8 @@ describe('agent loop', () => {
     await expectation;
   });
 
-  it('falls back to generate when provider.stream reports unsupported streaming', async () => {
+  it('falls back to generate when anthropic provider reports unsupported streaming via shared constant', async () => {
+    const { ANTHROPIC_STREAM_UNSUPPORTED_ERROR } = await import('../../src/provider/anthropic.js');
     const generate = vi.fn(async () => normalizeProviderResponse({
       content: 'Anthropic fallback answer'
     }));
@@ -2674,7 +2675,7 @@ describe('agent loop', () => {
       stream() {
         return {
           async *[Symbol.asyncIterator]() {
-            throw new Error('Anthropic provider does not support streaming yet.');
+            throw new Error(ANTHROPIC_STREAM_UNSUPPORTED_ERROR);
           }
         };
       },
@@ -2694,6 +2695,117 @@ describe('agent loop', () => {
     });
 
     expect(generate).toHaveBeenCalledOnce();
+  });
+
+  it('emits turn_failed when provider stream ends in an error event', async () => {
+    const provider: ModelProvider = {
+      name: 'openai',
+      model: 'gpt-test',
+      stream() {
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: 'start' as const, provider: 'openai', model: 'gpt-test' };
+            yield { type: 'error' as const, error: new Error('provider boom') };
+          }
+        };
+      },
+      async generate() {
+        throw new Error('generate should not be used in this test');
+      }
+    };
+
+    const events: Array<{ type: string; [key: string]: unknown }> = [];
+
+    await expect(async () => {
+      for await (const event of runAgentTurnStream({
+        provider,
+        availableTools: getBuiltinTools(),
+        baseSystemPrompt: 'You are helpful.',
+        userInput: 'Answer briefly.',
+        cwd: '/tmp/runtime-provider-error',
+        maxToolRounds: 1
+      })) {
+        events.push(event as { type: string; [key: string]: unknown });
+      }
+    }).rejects.toThrow('provider boom');
+
+    expect(events.map((event) => event.type)).toEqual(['turn_started', 'provider_started', 'turn_failed']);
+  });
+
+  it('emits tool_call_completed with isError when a streamed tool call fails', async () => {
+    const provider: ModelProvider = {
+      name: 'openai',
+      model: 'gpt-test',
+      stream() {
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: 'start' as const, provider: 'openai', model: 'gpt-test' };
+            yield {
+              type: 'tool_call' as const,
+              id: 'call_1',
+              name: 'always_fails',
+              input: { path: 'note.txt' }
+            };
+            yield {
+              type: 'finish' as const,
+              finish: { stopReason: 'tool_use' },
+              responseMetrics: {
+                contentBlockCount: 1,
+                toolCallCount: 1,
+                hasTextOutput: false,
+                contentBlocksByType: { function_call: 1 }
+              }
+            };
+          }
+        };
+      },
+      async generate() {
+        throw new Error('generate should not be used in this test');
+      }
+    };
+
+    const failingTool: Tool = {
+      name: 'always_fails',
+      description: 'Fails intentionally',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' }
+        },
+        required: ['path'],
+        additionalProperties: false
+      },
+      async execute() {
+        throw new Error('tool exploded');
+      }
+    };
+
+    const events: Array<{ type: string; [key: string]: unknown }> = [];
+    for await (const event of runAgentTurnStream({
+      provider,
+      availableTools: [failingTool],
+      baseSystemPrompt: 'You are helpful.',
+      userInput: 'Answer briefly.',
+      cwd: '/tmp/runtime-tool-error',
+      maxToolRounds: 1
+    })) {
+      events.push(event as { type: string; [key: string]: unknown });
+    }
+
+    const toolCompletedEvent = events.find(
+      (event) => event.type === 'tool_call_completed' && event.id === 'call_1'
+    );
+    expect(toolCompletedEvent).toMatchObject({
+      type: 'tool_call_completed',
+      id: 'call_1',
+      name: 'always_fails',
+      isError: true
+    });
+    expect(String(toolCompletedEvent?.resultPreview)).toContain('tool exploded');
+    expect(events.at(-1)).toMatchObject({
+      type: 'turn_completed',
+      stopReason: 'max_tool_rounds_reached'
+    });
   });
 
   it('keeps collectCompletedTurn parity for max_tool_rounds_reached with turnCompleted false', async () => {

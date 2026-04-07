@@ -33,6 +33,8 @@ export interface AnthropicProviderOptions {
   baseUrl?: string;
 }
 
+export const ANTHROPIC_STREAM_UNSUPPORTED_ERROR = 'Anthropic provider does not support streaming yet.';
+
 export interface BuildAnthropicMessagesRequestInput {
   model: string;
   messages: RuntimeMessage[];
@@ -147,7 +149,7 @@ export function createAnthropicProvider(options: AnthropicProviderOptions): Mode
     name: 'anthropic',
     model: options.model,
     async *stream(_request: ProviderRequest): AsyncIterable<NormalizedEvent> {
-      throw new Error('Anthropic provider does not support streaming yet.');
+      throw new Error(ANTHROPIC_STREAM_UNSUPPORTED_ERROR);
     },
     async generate(request: ProviderRequest): Promise<ProviderResponse> {
       const client = new Anthropic({

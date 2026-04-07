@@ -483,6 +483,65 @@ describe('createOpenAIProvider', () => {
     expect((events[2] as { type: string }).type).toBe('finish');
   });
 
+  it('emits a terminal error event for response.failed', async () => {
+    const provider = createOpenAIProvider({
+      model: 'gpt-4.1-mini',
+      apiKey: 'test-key',
+      createClient: () => ({
+        responses: {
+          create: vi.fn().mockResolvedValue((async function* () {
+            yield { type: 'response.created', response: { id: 'resp_123', model: 'gpt-4.1-mini' } };
+            yield {
+              type: 'response.failed',
+              response: {
+                id: 'resp_123',
+                model: 'gpt-4.1-mini',
+                status: 'failed'
+              }
+            };
+          })())
+        }
+      }) as unknown as OpenAI
+    });
+
+    await expect(collectProviderStream(provider.stream({
+      messages: [{ role: 'user', content: 'Inspect note.txt' }],
+      availableTools: []
+    }))).rejects.toThrow('OpenAI response stream failed: failed');
+  });
+
+  it('fails when OpenAI stream ends without a completed or incomplete response', async () => {
+    const provider = createOpenAIProvider({
+      model: 'gpt-4.1-mini',
+      apiKey: 'test-key',
+      createClient: () => ({
+        responses: {
+          create: vi.fn().mockResolvedValue((async function* () {
+            yield { type: 'response.created', response: { id: 'resp_123', model: 'gpt-4.1-mini' } };
+            yield { type: 'response.output_text.delta', delta: 'Hello world' };
+          })())
+        }
+      }) as unknown as OpenAI
+    });
+
+    await expect(async () => {
+      for await (const _event of provider.stream({
+        messages: [{ role: 'user', content: 'Inspect note.txt' }],
+        availableTools: []
+      })) {
+      }
+    }).rejects.toThrow('OpenAI stream ended without response.completed event.');
+  });
+
+  it('fails when a normalized provider stream finishes without text or tool calls', async () => {
+    const stream = (async function* (): AsyncIterable<NormalizedEvent> {
+      yield { type: 'start', provider: 'openai', model: 'gpt-4.1-mini' };
+      yield { type: 'finish', finish: { stopReason: undefined } };
+    })();
+
+    await expect(collectProviderStream(stream)).rejects.toThrow('Provider stream contained no usable output.');
+  });
+
   it('fails on unknown OpenAI response stream event types', async () => {
     const provider = createOpenAIProvider({
       model: 'gpt-4.1-mini',

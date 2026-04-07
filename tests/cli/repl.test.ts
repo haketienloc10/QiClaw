@@ -716,7 +716,7 @@ describe('createRepl', () => {
       ' ✦ shell:read git status\n',
       '──────────────────────────────────────────────────────\n\nTôi sẽ kiểm tra trước.\n\nTóm tắt:\n- xong\n',
       '──────────────────────────────────────────────────────\n',
-      '✔ DONE • 2 provider • 1 tools • 516 in / 274 out • ⏱️4.8s\n\n',
+      '✔ DONE • 2 provider • 1 tools • 516 in / 274 out • ⏱️ 4.8s\n\n',
       'Goodbye.\n'
     ]);
   });
@@ -2588,7 +2588,7 @@ describe('buildCli', () => {
       '└────────────────────────────────────────────────────┘\n',
       '\n──────────────────────────────────────────────────────\n\nXin chào\n',
       '──────────────────────────────────────────────────────\n',
-      '✔ DONE • 1 provider • 12 in / 8 out • ⏱️1.2s\n\n',
+      '✔ DONE • 1 provider • 12 in / 8 out • ⏱️ 1.2s\n\n',
       'Goodbye.\n'
     ]);
     expect(output).not.toContain('Xin chàoGoodbye.\n');
@@ -2787,6 +2787,227 @@ describe('buildCli', () => {
       '  read:src/cli/main.ts'
     ]);
     expect(output.match(/  · read src\/cli\/main\.ts\n/g)).toHaveLength(1);
+  });
+
+  it('renders streamed interactive text that already ends with a newline without adding extra blank lines before footer', async () => {
+    const writes: string[] = [];
+    const cwd = join(tmpdir(), `qiclaw-interactive-live-text-newline-${Math.random().toString(36).slice(2)}`);
+    const cli = buildCli({
+      argv: [],
+      cwd,
+      readLine: (() => {
+        const inputs = ['live text please', '/exit'];
+        return async () => inputs.shift();
+      })(),
+      stdout: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      createRuntime: (runtimeOptions) => createTestRuntime(cwd, runtimeOptions.observer),
+      runTurn: async (input) => ({
+        stopReason: 'completed',
+        finalAnswer: 'Xin chào\n',
+        history: [],
+        toolRoundsUsed: 0,
+        doneCriteria: {
+          goal: input.userInput,
+          checklist: [input.userInput],
+          requiresNonEmptyFinalAnswer: true,
+          requiresToolEvidence: false,
+          requiresSubstantiveFinalAnswer: false,
+          forbidSuccessAfterToolErrors: false
+        },
+        verification: {
+          isVerified: true,
+          finalAnswerIsNonEmpty: true,
+          finalAnswerIsSubstantive: true,
+          toolEvidenceSatisfied: true,
+          noUnresolvedToolErrors: true,
+          toolMessagesCount: 0,
+          checks: []
+        },
+        turnStream: (async function* () {
+          yield { type: 'turn_started' } satisfies TurnEvent;
+          yield { type: 'assistant_text_delta', text: 'Xin chào\n' } satisfies TurnEvent;
+          yield {
+            type: 'assistant_message_completed',
+            text: 'Xin chào\n'
+          } satisfies TurnEvent;
+          yield {
+            type: 'turn_completed',
+            finalAnswer: 'Xin chào\n',
+            stopReason: 'completed',
+            history: [],
+            toolRoundsUsed: 0,
+            doneCriteria: {
+              goal: input.userInput,
+              checklist: [input.userInput],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            },
+            turnCompleted: true
+          } satisfies TurnEvent;
+        })(),
+        finalResult: Promise.resolve((() => {
+          input.observer?.record(createTelemetryEvent('turn_completed', 'completion_check', {
+            turnId: 'turn-live-text-newline',
+            providerRound: 1,
+            toolRound: 0,
+            stopReason: 'completed',
+            toolRoundsUsed: 0,
+            isVerified: true,
+            durationMs: 900
+          }));
+          input.observer?.record(createTelemetryEvent('turn_summary', 'completion_check', {
+            turnId: 'turn-live-text-newline',
+            providerRound: 1,
+            toolRound: 0,
+            providerRounds: 1,
+            toolRoundsUsed: 0,
+            toolCallsTotal: 0,
+            toolCallsByName: {},
+            inputTokensTotal: 12,
+            outputTokensTotal: 8,
+            cacheReadInputTokens: 0,
+            promptCharsMax: 42,
+            toolResultCharsInFinalPrompt: 0,
+            assistantToolCallCharsInFinalPrompt: 0,
+            toolResultPromptGrowthCharsTotal: 0,
+            toolResultCharsAddedAcrossTurn: 0,
+            turnCompleted: true,
+            stopReason: 'completed'
+          }));
+
+          return {
+            stopReason: 'completed',
+            finalAnswer: 'Xin chào\n',
+            history: [],
+            toolRoundsUsed: 0,
+            doneCriteria: {
+              goal: input.userInput,
+              checklist: [input.userInput],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            },
+            verification: {
+              isVerified: true,
+              finalAnswerIsNonEmpty: true,
+              finalAnswerIsSubstantive: true,
+              toolEvidenceSatisfied: true,
+              noUnresolvedToolErrors: true,
+              toolMessagesCount: 0,
+              checks: []
+            }
+          };
+        })())
+      })
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+
+    const output = stripAnsi(writes.join(''));
+    expectContainsInOrder(output, [
+      '┌────────────────────────────────────────────────────┐\n',
+      '│ ⚡QiClaw                      🤖 Model: test-model │\n',
+      '└────────────────────────────────────────────────────┘\n',
+      '\n──────────────────────────────────────────────────────\n\nXin chào\n',
+      '──────────────────────────────────────────────────────\n',
+      '✔ DONE • 1 provider • 12 in / 8 out • ⏱️ 0.9s\n\n',
+      'Goodbye.\n'
+    ]);
+    expect(output).not.toContain('Xin chào\n\n\n────────────────');
+  });
+
+  it('renders streamed tool errors in interactive mode with failure status and preview', async () => {
+    const writes: string[] = [];
+    const cwd = join(tmpdir(), `qiclaw-interactive-tool-error-${Math.random().toString(36).slice(2)}`);
+    const cli = buildCli({
+      argv: [],
+      cwd,
+      readLine: (() => {
+        const inputs = ['run tool please'];
+        return async () => inputs.shift();
+      })(),
+      stdout: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      stderr: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      createRuntime: (runtimeOptions) => createTestRuntime(cwd, runtimeOptions.observer),
+      runTurn: async () => ({
+        stopReason: 'completed',
+        finalAnswer: '',
+        history: [],
+        toolRoundsUsed: 1,
+        doneCriteria: {
+          goal: 'run tool please',
+          checklist: ['run tool please'],
+          requiresNonEmptyFinalAnswer: false,
+          requiresToolEvidence: true,
+          requiresSubstantiveFinalAnswer: false,
+          forbidSuccessAfterToolErrors: false
+        },
+        verification: {
+          isVerified: false,
+          finalAnswerIsNonEmpty: false,
+          finalAnswerIsSubstantive: false,
+          toolEvidenceSatisfied: false,
+          noUnresolvedToolErrors: false,
+          toolMessagesCount: 1,
+          checks: []
+        },
+        turnStream: (async function* () {
+          yield { type: 'turn_started' } satisfies TurnEvent;
+          yield {
+            type: 'tool_call_started',
+            id: 'toolu_1',
+            name: 'read_file',
+            input: { path: 'src/cli/main.ts' }
+          } satisfies TurnEvent;
+          yield {
+            type: 'tool_call_completed',
+            id: 'toolu_1',
+            name: 'read_file',
+            resultPreview: 'permission denied',
+            isError: true
+          } satisfies TurnEvent;
+          yield {
+            type: 'turn_failed',
+            error: new Error('Tool crashed')
+          } satisfies TurnEvent;
+          throw new Error('Tool crashed');
+        })()
+      })
+    });
+
+    await expect(cli.run()).resolves.toBe(1);
+
+    const output = stripAnsi(writes.join(''));
+    expectContainsInOrder(output, [
+      '┌────────────────────────────────────────────────────┐\n',
+      '│ ⚡QiClaw                      🤖 Model: test-model │\n',
+      '└────────────────────────────────────────────────────┘\n',
+      ' ✦ read src/cli/main.ts\n',
+      ' └─ ✖ Fail\n',
+      '  permission denied\n',
+      '──────────────────────────────────────────────────────\n',
+      '✖ FAIL: Tool crashed\n'
+    ]);
+    expect(output.match(/ [✦✧✱✲✳✴] read src\/cli\/main\.ts\n/g)).toHaveLength(1);
+    expect(output.match(/Tool crashed\n/g)).toHaveLength(1);
   });
 
   it('renders streamed turn failure once and returns a non-zero exit when the stream throws after turn_failed', async () => {

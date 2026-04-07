@@ -9,6 +9,7 @@ import { scoreSessionMemoryCandidate } from './decay.js';
 import { assignMemoryFidelity } from './fidelity.js';
 import { buildInteractiveTurnMemoryEntry, shouldCapture } from './capture.js';
 import { shouldUseCompactMemoryRendering } from './recall.js';
+import type { MemoryEmbeddingConfig } from './memoryEmbeddingConfig.js';
 import type {
   SessionMemoryCandidate,
   SessionMemoryCheckpointMetadata,
@@ -32,6 +33,38 @@ export interface RecallSessionMemoriesResult {
   recalled: SessionMemoryCandidate[];
 }
 
+export interface RecallDebugHit {
+  hash: string;
+  sessionId: string;
+  memoryType: SessionMemoryCandidate['memoryType'];
+  summaryText: string;
+  source: string;
+  retrievalScore: number;
+  importance: number;
+  explicitSave: boolean;
+}
+
+export interface RecallDebugQueryResult {
+  source: 'userInput' | 'historySummary' | 'latestSummaryText';
+  query: string;
+  sessionHits: RecallDebugHit[];
+  globalHits: RecallDebugHit[];
+}
+
+export interface RecallDebugQueryOverview {
+  source: 'userInput' | 'historySummary' | 'latestSummaryText';
+  query: string;
+  sessionHitCount: number;
+  globalHitCount: number;
+  totalHitCount: number;
+}
+
+export interface RecallDebugFinalOverview {
+  finalResultCount: number;
+  sessionFinalCount: number;
+  globalFinalCount: number;
+}
+
 export interface RecallInputsDebugRecord {
   type: 'memory_recall_inputs';
   timestamp: string;
@@ -44,6 +77,10 @@ export interface RecallInputsDebugRecord {
   userInputLength: number;
   historySummaryLength: number;
   latestSummaryTextLength: number;
+  queryOverview: RecallDebugQueryOverview[];
+  queryResults: RecallDebugQueryResult[];
+  finalOverview: RecallDebugFinalOverview;
+  finalResults: RecallDebugHit[];
 }
 
 export interface PrepareInteractiveSessionMemoryInput {
@@ -56,6 +93,7 @@ export interface PrepareInteractiveSessionMemoryInput {
   recallLimit?: number;
   now?: string;
   debugRecallInputs?: (record: RecallInputsDebugRecord) => void;
+  memoryConfig?: MemoryEmbeddingConfig;
 }
 
 export interface PrepareInteractiveSessionMemoryResult {
@@ -74,6 +112,7 @@ export interface CaptureInteractiveTurnMemoryInput {
   history?: Message[];
   sourceTurnId?: string;
   now?: string;
+  memoryConfig?: MemoryEmbeddingConfig;
 }
 
 export interface CaptureInteractiveTurnMemoryResult {
@@ -85,8 +124,8 @@ export interface CaptureInteractiveTurnMemoryResult {
 export async function prepareInteractiveSessionMemory(
   input: PrepareInteractiveSessionMemoryInput
 ): Promise<PrepareInteractiveSessionMemoryResult> {
-  const store = new MemvidSessionStore({ cwd: input.cwd, sessionId: input.sessionId });
-  const globalStore = new GlobalMemoryStore();
+  const store = new MemvidSessionStore({ cwd: input.cwd, sessionId: input.sessionId, memoryConfig: input.memoryConfig });
+  const globalStore = new GlobalMemoryStore({ memoryConfig: input.memoryConfig });
   const memoryPath = store.paths().memoryPath;
   const hadExistingStore = Boolean(input.checkpointState?.memoryPath) || existsSync(memoryPath);
 
@@ -200,7 +239,7 @@ export async function captureInteractiveTurnMemory(
   await input.store.seal();
 
   if (shouldCaptureGlobalMemory(entry)) {
-    const globalStore = new GlobalMemoryStore();
+    const globalStore = new GlobalMemoryStore({ memoryConfig: input.memoryConfig });
     await globalStore.open();
     await globalStore.put(entry);
     await globalStore.seal();
@@ -381,7 +420,39 @@ async function recallInteractiveCandidates(input: {
   now?: string;
   debugRecallInputs?: (record: RecallInputsDebugRecord) => void;
 }): Promise<SessionMemoryCandidate[]> {
-  const queries = [input.userInput, input.historySummary, input.latestSummaryText].filter(isPresent);
+  const queryEntries = [
+    { source: 'userInput' as const, query: input.userInput },
+    { source: 'historySummary' as const, query: input.historySummary },
+    { source: 'latestSummaryText' as const, query: input.latestSummaryText }
+  ].filter((entry): entry is { source: 'userInput' | 'historySummary' | 'latestSummaryText'; query: string } => isPresent(entry.query));
+  const queries = queryEntries.map((entry) => entry.query);
+  const queryResults: RecallDebugQueryResult[] = [];
+  const deduped = new Map<string, SessionMemoryCandidate>();
+
+  for (const entry of queryEntries) {
+    const [sessionHits, globalHits] = await Promise.all([
+      input.store.recall(entry.query, { k: input.recallLimit }),
+      input.globalStore.recall(entry.query, { k: input.recallLimit })
+    ]);
+
+    queryResults.push({
+      source: entry.source,
+      query: entry.query,
+      sessionHits: sessionHits.map(toRecallDebugHit),
+      globalHits: globalHits.map(toRecallDebugHit)
+    });
+
+    for (const candidate of [...sessionHits, ...globalHits]) {
+      const dedupeKey = `${normalizeMemoryText(candidate.summaryText)}\n${normalizeMemoryText(candidate.essenceText)}`;
+      const existing = deduped.get(dedupeKey);
+      if (!existing || scoreMergedCandidate(candidate) > scoreMergedCandidate(existing)) {
+        deduped.set(dedupeKey, candidate);
+      }
+    }
+  }
+
+  const finalResults = [...deduped.values()];
+  const finalDebugHits = finalResults.map(toRecallDebugHit);
   input.debugRecallInputs?.({
     type: 'memory_recall_inputs',
     timestamp: input.now ?? new Date().toISOString(),
@@ -393,26 +464,24 @@ async function recallInteractiveCandidates(input: {
     queryCount: queries.length,
     userInputLength: input.userInput.length,
     historySummaryLength: input.historySummary?.length ?? 0,
-    latestSummaryTextLength: input.latestSummaryText?.length ?? 0
+    latestSummaryTextLength: input.latestSummaryText?.length ?? 0,
+    queryOverview: queryResults.map((result) => ({
+      source: result.source,
+      query: result.query,
+      sessionHitCount: result.sessionHits.length,
+      globalHitCount: result.globalHits.length,
+      totalHitCount: result.sessionHits.length + result.globalHits.length
+    })),
+    queryResults,
+    finalOverview: {
+      finalResultCount: finalDebugHits.length,
+      sessionFinalCount: finalDebugHits.filter((hit) => hit.sessionId !== 'user-global').length,
+      globalFinalCount: finalDebugHits.filter((hit) => hit.sessionId === 'user-global').length
+    },
+    finalResults: finalDebugHits
   });
-  const deduped = new Map<string, SessionMemoryCandidate>();
 
-  for (const query of queries) {
-    const recalledGroups = await Promise.all([
-      input.store.recall(query, { k: input.recallLimit }),
-      input.globalStore.recall(query, { k: input.recallLimit })
-    ]);
-
-    for (const candidate of recalledGroups.flat()) {
-      const dedupeKey = `${normalizeMemoryText(candidate.summaryText)}\n${normalizeMemoryText(candidate.essenceText)}`;
-      const existing = deduped.get(dedupeKey);
-      if (!existing || scoreMergedCandidate(candidate) > scoreMergedCandidate(existing)) {
-        deduped.set(dedupeKey, candidate);
-      }
-    }
-  }
-
-  return [...deduped.values()];
+  return finalResults;
 }
 
 function shouldCaptureGlobalMemory(entry: SessionMemoryEntry): boolean {
@@ -445,6 +514,19 @@ function scoreMergedCandidate(candidate: SessionMemoryCandidate): number {
     ? (candidate.explicitSave ? 0.1 : -0.03)
     : 0.05;
   return candidate.retrievalScore + candidate.importance + scopeBoost;
+}
+
+function toRecallDebugHit(candidate: SessionMemoryCandidate): RecallDebugHit {
+  return {
+    hash: candidate.hash,
+    sessionId: candidate.sessionId,
+    memoryType: candidate.memoryType,
+    summaryText: candidate.summaryText,
+    source: candidate.source,
+    retrievalScore: candidate.retrievalScore,
+    importance: candidate.importance,
+    explicitSave: candidate.explicitSave
+  };
 }
 
 function normalizeMemoryText(value: string): string {

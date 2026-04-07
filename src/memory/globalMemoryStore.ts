@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 
-import { create, open, type FindResult, type Memvid } from '@memvid/sdk';
+import { create, OllamaEmbeddings, open, type FindResult, type Memvid } from '@memvid/sdk';
 
 import { getGlobalMemoryArtifactPaths, type SessionMemoryArtifactPaths } from './sessionPaths.js';
 import {
@@ -11,9 +11,12 @@ import {
   type SessionMemoryEntry,
   type SessionMemoryMeta
 } from './sessionMemoryTypes.js';
+import { createMemoryEmbeddingIdentity, type MemoryEmbeddingConfig } from './memoryEmbeddingConfig.js';
+import { sanitizeRecallQuery } from './recallQuerySanitizer.js';
 
 export interface GlobalMemoryStoreOptions {
   baseDirectory?: string;
+  memoryConfig?: MemoryEmbeddingConfig;
 }
 
 export interface GlobalMemoryFindOptions {
@@ -29,9 +32,16 @@ const ENVELOPE_PREFIX = 'QICLAW_GLOBAL_MEMORY::';
 
 export class GlobalMemoryStore {
   private readonly artifactPaths: SessionMemoryArtifactPaths;
+  private readonly memoryConfig?: MemoryEmbeddingConfig;
   private memvid?: Memvid;
+  private embedder?: OllamaEmbeddings;
 
   constructor(options: GlobalMemoryStoreOptions = {}) {
+    this.memoryConfig = options.memoryConfig;
+    this.embedder = options.memoryConfig ? new OllamaEmbeddings({
+      model: options.memoryConfig.model,
+      baseUrl: options.memoryConfig.baseUrl
+    }) : undefined;
     this.artifactPaths = getGlobalMemoryArtifactPaths(options.baseDirectory ? { baseDirectory: options.baseDirectory } : undefined);
   }
 
@@ -45,9 +55,14 @@ export class GlobalMemoryStore {
 
   async open(): Promise<void> {
     await mkdir(this.artifactPaths.directoryPath, { recursive: true });
+    const useVector = Boolean(this.embedder);
+    const openOptions = {
+      enableLex: true,
+      enableVec: useVector
+    };
     this.memvid = existsSync(this.artifactPaths.memoryPath)
-      ? await open(this.artifactPaths.memoryPath, 'basic', { enableLex: true, enableVec: false })
-      : await create(this.artifactPaths.memoryPath, 'basic', { enableLex: true, enableVec: false });
+      ? await open(this.artifactPaths.memoryPath, 'basic', openOptions)
+      : await create(this.artifactPaths.memoryPath, 'basic', openOptions);
     await this.writeMeta(await this.readMeta());
   }
 
@@ -72,6 +87,7 @@ export class GlobalMemoryStore {
     const memvid = this.requireMemvid();
     const globalEntry = { ...entry, sessionId: GLOBAL_SESSION_ID };
     const uri = buildSessionMemoryUri(GLOBAL_SESSION_ID, globalEntry.hash);
+    const embedding = this.embedder ? await this.embedder.embedQuery(globalEntry.fullText) : undefined;
     const result = await memvid.put({
       title: globalEntry.summaryText,
       text: serializeEntry(globalEntry),
@@ -81,6 +97,11 @@ export class GlobalMemoryStore {
       tags: globalEntry.tags,
       searchText: buildSearchText(globalEntry),
       timestamp: toMemvidTimestamp(globalEntry.createdAt),
+      enableEmbedding: Boolean(embedding),
+      ...(embedding ? {
+        embedding,
+        embeddingIdentity: createMemoryEmbeddingIdentity(this.memoryConfig!, embedding.length)
+      } : {}),
       metadata: {
         hash: globalEntry.hash,
         sessionId: GLOBAL_SESSION_ID,
@@ -114,10 +135,25 @@ export class GlobalMemoryStore {
   }
 
   async find(query: string, options: GlobalMemoryFindOptions): Promise<FindResult> {
-    return this.requireMemvid().find(query, {
+    const safeQuery = sanitizeRecallQuery(query);
+
+    if (!safeQuery) {
+      return {
+        query: safeQuery,
+        engine: 'memvid-global-memory-store',
+        hits: [],
+        total_hits: 0,
+        context: '',
+        next_cursor: null,
+        took_ms: 0
+      } satisfies FindResult;
+    }
+
+    return this.requireMemvid().find(safeQuery, {
       k: options.k,
       scope: URI_SCOPE,
-      mode: 'lex'
+      mode: this.embedder ? 'auto' : 'lex',
+      ...(this.embedder ? { embedder: this.embedder } : {})
     });
   }
 

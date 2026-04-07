@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 
-import { create, open, type FindResult, type Memvid } from '@memvid/sdk';
+import { create, OllamaEmbeddings, open, type FindResult, type Memvid } from '@memvid/sdk';
 
 import { getSessionMemoryArtifactPaths, type SessionMemoryArtifactPaths } from './sessionPaths.js';
 import {
@@ -12,10 +12,13 @@ import {
   type SessionMemoryMeta
 } from './sessionMemoryTypes.js';
 import { isHashPrefixMatch } from './hash.js';
+import { createMemoryEmbeddingIdentity, type MemoryEmbeddingConfig } from './memoryEmbeddingConfig.js';
+import { sanitizeRecallQuery } from './recallQuerySanitizer.js';
 
 export interface MemvidSessionStoreOptions {
   cwd: string;
   sessionId: string;
+  memoryConfig?: MemoryEmbeddingConfig;
 }
 
 export interface MemvidSessionFindOptions {
@@ -29,11 +32,18 @@ export class MemvidSessionStore {
   private readonly cwd: string;
   private readonly sessionId: string;
   private readonly artifactPaths: SessionMemoryArtifactPaths;
+  private readonly memoryConfig?: MemoryEmbeddingConfig;
   private memvid?: Memvid;
+  private embedder?: OllamaEmbeddings;
 
   constructor(options: MemvidSessionStoreOptions) {
     this.cwd = options.cwd;
     this.sessionId = options.sessionId;
+    this.memoryConfig = options.memoryConfig;
+    this.embedder = options.memoryConfig ? new OllamaEmbeddings({
+      model: options.memoryConfig.model,
+      baseUrl: options.memoryConfig.baseUrl
+    }) : undefined;
     this.artifactPaths = getSessionMemoryArtifactPaths(options.cwd, options.sessionId);
   }
 
@@ -47,9 +57,14 @@ export class MemvidSessionStore {
 
   async open(): Promise<void> {
     await mkdir(this.artifactPaths.directoryPath, { recursive: true });
+    const useVector = Boolean(this.embedder);
+    const openOptions = {
+      enableLex: true,
+      enableVec: useVector
+    };
     this.memvid = existsSync(this.artifactPaths.memoryPath)
-      ? await open(this.artifactPaths.memoryPath, 'basic', { enableLex: true, enableVec: false })
-      : await create(this.artifactPaths.memoryPath, 'basic', { enableLex: true, enableVec: false });
+      ? await open(this.artifactPaths.memoryPath, 'basic', openOptions)
+      : await create(this.artifactPaths.memoryPath, 'basic', openOptions);
     await this.writeMeta(await this.readMeta());
   }
 
@@ -73,6 +88,7 @@ export class MemvidSessionStore {
   async put(entry: SessionMemoryEntry): Promise<string> {
     const memvid = this.requireMemvid();
     const uri = buildSessionMemoryUri(entry.sessionId, entry.hash);
+    const embedding = this.embedder ? await this.embedder.embedQuery(entry.fullText) : undefined;
     const result = await memvid.put({
       title: entry.summaryText,
       text: serializeEntry(entry),
@@ -82,6 +98,11 @@ export class MemvidSessionStore {
       tags: entry.tags,
       searchText: buildSearchText(entry),
       timestamp: toMemvidTimestamp(entry.createdAt),
+      enableEmbedding: Boolean(embedding),
+      ...(embedding ? {
+        embedding,
+        embeddingIdentity: createMemoryEmbeddingIdentity(this.memoryConfig!, embedding.length)
+      } : {}),
       metadata: {
         hash: entry.hash,
         sessionId: entry.sessionId,
@@ -115,10 +136,25 @@ export class MemvidSessionStore {
   }
 
   async find(query: string, options: MemvidSessionFindOptions): Promise<FindResult> {
-    return this.requireMemvid().find(query, {
+    const safeQuery = sanitizeRecallQuery(query);
+
+    if (!safeQuery) {
+      return {
+        query: safeQuery,
+        engine: 'memvid-session-store',
+        hits: [],
+        total_hits: 0,
+        context: '',
+        next_cursor: null,
+        took_ms: 0
+      } satisfies FindResult;
+    }
+
+    return this.requireMemvid().find(safeQuery, {
       k: options.k,
       scope: `mv2://sessions/${this.sessionId}/`,
-      mode: 'lex'
+      mode: this.embedder ? 'auto' : 'lex',
+      ...(this.embedder ? { embedder: this.embedder } : {})
     });
   }
 

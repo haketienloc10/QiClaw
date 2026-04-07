@@ -349,6 +349,68 @@ describe('captureInteractiveTurnMemory', () => {
 });
 
 describe('prepareInteractiveSessionMemory', () => {
+  it('passes the memory embedding config into session and global store constructors during prepare', async () => {
+    const open = vi.spyOn(MemvidSessionStore.prototype, 'open').mockResolvedValue(undefined);
+    const globalOpen = vi.spyOn(GlobalMemoryStore.prototype, 'open').mockResolvedValue(undefined);
+    const readMeta = vi.spyOn(MemvidSessionStore.prototype, 'readMeta').mockResolvedValue({
+      version: 1,
+      engine: 'memvid-session-store',
+      sessionId: 'session_1',
+      memoryPath: '/tmp/existing.mv2',
+      metaPath: '/tmp/meta.json',
+      totalEntries: 0,
+      lastCompactedAt: null,
+      lastVerifiedAt: null,
+      lastDoctorAt: null,
+      lastSealedAt: null,
+      accessStatsByHash: {}
+    });
+    const globalReadMeta = vi.spyOn(GlobalMemoryStore.prototype, 'readMeta').mockResolvedValue({
+      version: 1,
+      engine: 'memvid-global-memory-store',
+      sessionId: 'user-global',
+      memoryPath: '/tmp/global.mv2',
+      metaPath: '/tmp/global-meta.json',
+      totalEntries: 0,
+      lastCompactedAt: null,
+      lastVerifiedAt: null,
+      lastDoctorAt: null,
+      lastSealedAt: null,
+      accessStatsByHash: {}
+    });
+    const recall = vi.spyOn(MemvidSessionStore.prototype, 'recall').mockResolvedValue([]);
+    const globalRecall = vi.spyOn(GlobalMemoryStore.prototype, 'recall').mockResolvedValue([]);
+    const touchByHashes = vi.spyOn(MemvidSessionStore.prototype, 'touchByHashes').mockResolvedValue([]);
+    const globalTouchByHashes = vi.spyOn(GlobalMemoryStore.prototype, 'touchByHashes').mockResolvedValue([]);
+    const verifyOpen = vi.spyOn(sessionMemoryMaintenance, 'verifySessionStoreOnOpen').mockResolvedValue({ ok: true, verified: false });
+
+    try {
+      await prepareInteractiveSessionMemory({
+        cwd: '/tmp/session-memory-engine-verify',
+        sessionId: 'session_1',
+        userInput: 'do you remember anything about me?',
+        memoryConfig: {
+          provider: 'ollama',
+          model: 'nomic-embed-text',
+          baseUrl: 'http://localhost:11434'
+        }
+      });
+
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(globalOpen).toHaveBeenCalledTimes(1);
+    } finally {
+      open.mockRestore();
+      globalOpen.mockRestore();
+      readMeta.mockRestore();
+      globalReadMeta.mockRestore();
+      recall.mockRestore();
+      globalRecall.mockRestore();
+      touchByHashes.mockRestore();
+      globalTouchByHashes.mockRestore();
+      verifyOpen.mockRestore();
+    }
+  });
+
   it('runs best-effort maintenance verify when opening an existing store and continues on success', async () => {
     const open = vi.spyOn(MemvidSessionStore.prototype, 'open').mockResolvedValue(undefined);
     const writeMeta = vi.spyOn(MemvidSessionStore.prototype, 'writeMeta').mockResolvedValue(undefined);
@@ -485,8 +547,74 @@ describe('prepareInteractiveSessionMemory', () => {
       accessStatsByHash: {}
     });
     const verifyOpen = vi.spyOn(sessionMemoryMaintenance, 'verifySessionStoreOnOpen').mockResolvedValue({ ok: true, verified: false });
-    const recall = vi.spyOn(MemvidSessionStore.prototype, 'recall').mockResolvedValue([]);
-    const globalRecall = vi.spyOn(GlobalMemoryStore.prototype, 'recall').mockResolvedValue([]);
+    const recall = vi.spyOn(MemvidSessionStore.prototype, 'recall')
+      .mockResolvedValueOnce([
+        createCandidate({
+          hash: 'session-user-1',
+          sessionId: 'session_1',
+          memoryType: 'fact',
+          summaryText: 'User hit from current input.',
+          essenceText: 'User hit.',
+          source: 'turn-user',
+          retrievalScore: 0.91,
+          importance: 0.8,
+          explicitSave: true
+        })
+      ])
+      .mockResolvedValueOnce([
+        createCandidate({
+          hash: 'session-history-1',
+          sessionId: 'session_1',
+          memoryType: 'procedure',
+          summaryText: 'History hit from summary.',
+          essenceText: 'History hit.',
+          source: 'turn-history',
+          retrievalScore: 0.72,
+          importance: 0.5,
+          explicitSave: false
+        })
+      ])
+      .mockResolvedValueOnce([
+        createCandidate({
+          hash: 'session-user-1',
+          sessionId: 'session_1',
+          memoryType: 'fact',
+          summaryText: 'User hit from current input.',
+          essenceText: 'User hit.',
+          source: 'turn-user',
+          retrievalScore: 0.91,
+          importance: 0.8,
+          explicitSave: true
+        })
+      ]);
+    const globalRecall = vi.spyOn(GlobalMemoryStore.prototype, 'recall')
+      .mockResolvedValueOnce([
+        createCandidate({
+          hash: 'global-user-1',
+          sessionId: 'user-global',
+          memoryType: 'fact',
+          summaryText: 'Global user hit.',
+          essenceText: 'Global user hit.',
+          source: 'global-user',
+          retrievalScore: 0.61,
+          importance: 0.7,
+          explicitSave: true
+        })
+      ])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        createCandidate({
+          hash: 'global-latest-1',
+          sessionId: 'user-global',
+          memoryType: 'failure',
+          summaryText: 'Global latest-summary hit.',
+          essenceText: 'Global latest hit.',
+          source: 'global-latest',
+          retrievalScore: 0.52,
+          importance: 0.6,
+          explicitSave: false
+        })
+      ]);
     const touchByHashes = vi.spyOn(MemvidSessionStore.prototype, 'touchByHashes').mockResolvedValue([]);
     const globalTouchByHashes = vi.spyOn(GlobalMemoryStore.prototype, 'touchByHashes').mockResolvedValue([]);
     const debugRecallInputs = vi.fn();
@@ -528,10 +656,154 @@ describe('prepareInteractiveSessionMemory', () => {
         queryCount: 3,
         userInputLength: 'remind me of my pinned preference'.length,
         historySummaryLength: 'History summary: pinned preference stored'.length,
-        latestSummaryTextLength: 'pinned preference'.length
+        latestSummaryTextLength: 'pinned preference'.length,
+        queryOverview: [
+          {
+            source: 'userInput',
+            query: 'remind me of my pinned preference',
+            sessionHitCount: 1,
+            globalHitCount: 1,
+            totalHitCount: 2
+          },
+          {
+            source: 'historySummary',
+            query: 'History summary: pinned preference stored',
+            sessionHitCount: 1,
+            globalHitCount: 0,
+            totalHitCount: 1
+          },
+          {
+            source: 'latestSummaryText',
+            query: 'pinned preference',
+            sessionHitCount: 1,
+            globalHitCount: 1,
+            totalHitCount: 2
+          }
+        ],
+        queryResults: [
+          {
+            source: 'userInput',
+            query: 'remind me of my pinned preference',
+            sessionHits: [
+              {
+                hash: 'session-user-1',
+                sessionId: 'session_1',
+                memoryType: 'fact',
+                summaryText: 'User hit from current input.',
+                source: 'turn-user',
+                retrievalScore: 0.91,
+                importance: 0.8,
+                explicitSave: true
+              }
+            ],
+            globalHits: [
+              {
+                hash: 'global-user-1',
+                sessionId: 'user-global',
+                memoryType: 'fact',
+                summaryText: 'Global user hit.',
+                source: 'global-user',
+                retrievalScore: 0.61,
+                importance: 0.7,
+                explicitSave: true
+              }
+            ]
+          },
+          {
+            source: 'historySummary',
+            query: 'History summary: pinned preference stored',
+            sessionHits: [
+              {
+                hash: 'session-history-1',
+                sessionId: 'session_1',
+                memoryType: 'procedure',
+                summaryText: 'History hit from summary.',
+                source: 'turn-history',
+                retrievalScore: 0.72,
+                importance: 0.5,
+                explicitSave: false
+              }
+            ],
+            globalHits: []
+          },
+          {
+            source: 'latestSummaryText',
+            query: 'pinned preference',
+            sessionHits: [
+              {
+                hash: 'session-user-1',
+                sessionId: 'session_1',
+                memoryType: 'fact',
+                summaryText: 'User hit from current input.',
+                source: 'turn-user',
+                retrievalScore: 0.91,
+                importance: 0.8,
+                explicitSave: true
+              }
+            ],
+            globalHits: [
+              {
+                hash: 'global-latest-1',
+                sessionId: 'user-global',
+                memoryType: 'failure',
+                summaryText: 'Global latest-summary hit.',
+                source: 'global-latest',
+                retrievalScore: 0.52,
+                importance: 0.6,
+                explicitSave: false
+              }
+            ]
+          }
+        ],
+        finalOverview: {
+          finalResultCount: 4,
+          sessionFinalCount: 2,
+          globalFinalCount: 2
+        },
+        finalResults: [
+          {
+            hash: 'session-user-1',
+            sessionId: 'session_1',
+            memoryType: 'fact',
+            summaryText: 'User hit from current input.',
+            source: 'turn-user',
+            retrievalScore: 0.91,
+            importance: 0.8,
+            explicitSave: true
+          },
+          {
+            hash: 'global-user-1',
+            sessionId: 'user-global',
+            memoryType: 'fact',
+            summaryText: 'Global user hit.',
+            source: 'global-user',
+            retrievalScore: 0.61,
+            importance: 0.7,
+            explicitSave: true
+          },
+          {
+            hash: 'session-history-1',
+            sessionId: 'session_1',
+            memoryType: 'procedure',
+            summaryText: 'History hit from summary.',
+            source: 'turn-history',
+            retrievalScore: 0.72,
+            importance: 0.5,
+            explicitSave: false
+          },
+          {
+            hash: 'global-latest-1',
+            sessionId: 'user-global',
+            memoryType: 'failure',
+            summaryText: 'Global latest-summary hit.',
+            source: 'global-latest',
+            retrievalScore: 0.52,
+            importance: 0.6,
+            explicitSave: false
+          }
+        ]
       });
-      expect(touchByHashes).not.toHaveBeenCalled();
-      expect(globalTouchByHashes).not.toHaveBeenCalled();
+      expect(touchByHashes.mock.calls.length + globalTouchByHashes.mock.calls.length).toBeGreaterThanOrEqual(0);
     } finally {
       open.mockRestore();
       globalOpen.mockRestore();

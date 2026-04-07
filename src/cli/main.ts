@@ -23,6 +23,7 @@ import {
   prepareInteractiveSessionMemory,
   type RecallInputsDebugRecord
 } from '../memory/sessionMemoryEngine.js';
+import { resolveMemoryEmbeddingConfig } from '../memory/memoryEmbeddingConfig.js';
 import { createCompositeObserver } from '../telemetry/composite.js';
 import {
   createCompactCliTelemetryObserver,
@@ -161,6 +162,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
           observer: undefined,
           agentSpecName: parsed.agentSpecName
         });
+        const memoryConfig = resolveMemoryEmbeddingConfig(process.env);
 
         assistantBlockWriter = createAssistantBlockWriter(stdout, parsed.prompt ? 'compact' : 'interactive');
         const cliObserver = createCliObserver({
@@ -263,7 +265,8 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
                 userInput,
                 historySummary: historyContext.historySummary,
                 checkpointState: sessionMemoryState,
-                debugRecallInputs
+                debugRecallInputs,
+                memoryConfig
               });
             } catch (error) {
               preparedMemory = undefined;
@@ -304,7 +307,8 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
                         sessionId: sessionMemoryState?.storeSessionId ?? sessionId,
                         userInput,
                         finalAnswer: settledResult.finalAnswer,
-                        history
+                        history,
+                        memoryConfig
                       });
 
                       sessionMemoryState = captureResult.saved

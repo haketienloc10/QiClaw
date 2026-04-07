@@ -2,13 +2,13 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { defaultAgentSpec } from '../../src/agent/defaultAgentSpec.js';
 import { buildCli } from '../../src/cli/main.js';
 import { CheckpointStore } from '../../src/session/checkpointStore.js';
 import { createInteractiveCheckpointJson, getCheckpointStorePath, parseInteractiveCheckpointJson } from '../../src/session/session.js';
-import type { PrepareInteractiveSessionMemoryResult } from '../../src/memory/sessionMemoryEngine.js';
+import type { CaptureInteractiveTurnMemoryInput, PrepareInteractiveSessionMemoryResult } from '../../src/memory/sessionMemoryEngine.js';
 
 const tempDirs: string[] = [];
 
@@ -16,7 +16,181 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+
+  process.env[name] = value;
+}
+
 describe('interactive session memory flow', () => {
+  it('passes Ollama memory embedding config from CLI env into prepare and capture paths', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'qiclaw-session-memory-'));
+    tempDirs.push(tempDir);
+
+    const originalModel = process.env.MODEL;
+    const originalOpenAiApiKey = process.env.OPENAI_API_KEY;
+    const originalMemoryProvider = process.env.QICLAW_MEMORY_PROVIDER;
+    const originalMemoryModel = process.env.QICLAW_MEMORY_MODEL;
+    const originalMemoryBaseUrl = process.env.QICLAW_MEMORY_BASE_URL;
+
+    process.env.MODEL = 'openai';
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+    process.env.QICLAW_MEMORY_PROVIDER = 'ollama';
+    process.env.QICLAW_MEMORY_MODEL = 'nomic-embed-text';
+    process.env.QICLAW_MEMORY_BASE_URL = 'http://localhost:11434';
+
+    const prepareSessionMemory = async (input: Parameters<NonNullable<Parameters<typeof buildCli>[0]['prepareSessionMemory']>>[0]): Promise<PrepareInteractiveSessionMemoryResult> => {
+      expect(input.memoryConfig).toEqual({
+        provider: 'ollama',
+        model: 'nomic-embed-text',
+        baseUrl: 'http://localhost:11434'
+      });
+
+      return {
+        memoryText: '',
+        store: {} as never,
+        globalStore: undefined,
+        recalled: [],
+        checkpointState: {
+          storeSessionId: 'session-memory-env',
+          engine: 'memvid-session-store',
+          version: 1,
+          memoryPath: '/tmp/memory.mv2',
+          metaPath: '/tmp/memory.meta.json',
+          totalEntries: 0,
+          lastCompactedAt: null
+        }
+      };
+    };
+
+    const captureTurnMemory = async (input: CaptureInteractiveTurnMemoryInput) => {
+      expect(input.memoryConfig).toEqual({
+        provider: 'ollama',
+        model: 'nomic-embed-text',
+        baseUrl: 'http://localhost:11434'
+      });
+
+      return {
+        saved: false,
+        checkpointState: {
+          storeSessionId: 'session-memory-env',
+          engine: 'memvid-session-store',
+          version: 1,
+          memoryPath: '/tmp/memory.mv2',
+          metaPath: '/tmp/memory.meta.json',
+          totalEntries: 0,
+          lastCompactedAt: null
+        }
+      };
+    };
+
+    const interactiveCli = buildCli({
+      argv: [],
+      cwd: tempDir,
+      stdout: { write() { return true; } },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: tempDir,
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      createSessionId: () => 'session-memory-env',
+      readLine: (() => {
+        const inputs = ['remember that i use neovim', '/exit'];
+        return async () => inputs.shift();
+      })(),
+      prepareSessionMemory,
+      captureTurnMemory,
+      runTurn: async (input) => ({
+        stopReason: 'completed',
+        finalAnswer: 'I will remember that you use neovim.',
+        history: [
+          ...(input.history ?? []),
+          { role: 'user', content: input.userInput },
+          { role: 'assistant', content: 'I will remember that you use neovim.' }
+        ],
+        historySummary: 'editor preference stored',
+        toolRoundsUsed: 0,
+        doneCriteria: {
+          goal: input.userInput,
+          checklist: [input.userInput],
+          requiresNonEmptyFinalAnswer: true,
+          requiresToolEvidence: false,
+          requiresSubstantiveFinalAnswer: false,
+          forbidSuccessAfterToolErrors: false
+        },
+        verification: {
+          isVerified: true,
+          finalAnswerIsNonEmpty: true,
+          finalAnswerIsSubstantive: true,
+          toolEvidenceSatisfied: true,
+          noUnresolvedToolErrors: true,
+          toolMessagesCount: 0,
+          checks: []
+        }
+      })
+    });
+
+    try {
+      await expect(interactiveCli.run()).resolves.toBe(0);
+    } finally {
+      restoreEnv('MODEL', originalModel);
+      restoreEnv('OPENAI_API_KEY', originalOpenAiApiKey);
+      restoreEnv('QICLAW_MEMORY_PROVIDER', originalMemoryProvider);
+      restoreEnv('QICLAW_MEMORY_MODEL', originalMemoryModel);
+      restoreEnv('QICLAW_MEMORY_BASE_URL', originalMemoryBaseUrl);
+    }
+  });
+  it('sends only the base system prompt and current user input when first-turn recall is empty', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'qiclaw-session-memory-'));
+    tempDirs.push(tempDir);
+
+    const providerCalls: Array<Parameters<import('../../src/provider/model.js').ModelProvider['generate']>[0]> = [];
+    const interactiveCli = buildCli({
+      argv: [],
+      cwd: tempDir,
+      stdout: { write() { return true; } },
+      createRuntime: (runtimeOptions) => ({
+        provider: {
+          name: 'test-provider',
+          model: 'test-model',
+          async generate(request) {
+            providerCalls.push(request);
+            return {
+              message: { role: 'assistant', content: 'First-turn answer.' },
+              toolCalls: []
+            };
+          },
+          stream: undefined
+        },
+        availableTools: [],
+        cwd: tempDir,
+        observer: runtimeOptions.observer ?? { record() {} },
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      createSessionId: () => 'session-memory-first-turn',
+      readLine: (() => {
+        const inputs = ['hello there', '/exit'];
+        return async () => inputs.shift();
+      })()
+    });
+
+    await expect(interactiveCli.run()).resolves.toBe(0);
+    expect(providerCalls).toHaveLength(1);
+    expect(providerCalls[0]?.messages).toEqual([
+      { role: 'system', content: 'Test prompt' },
+      { role: 'user', content: 'hello there' }
+    ]);
+  });
+
   it('keeps first interactive turn empty then recalls stored memory on the next turn in the same session', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'qiclaw-session-memory-'));
     tempDirs.push(tempDir);
@@ -92,7 +266,7 @@ describe('interactive session memory flow', () => {
     expect(interactiveInputs[1].sessionId).toBe('session-memory-1');
     expect(interactiveInputs[1].memoryText).toContain('Memory:');
     expect(interactiveInputs[1].memoryText).toContain('favorite editor is neovim');
-  });
+  }, 15000);
 
   it('persists procedure memory after a turn with a successful tool result and recalls it on the next turn', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'qiclaw-session-memory-'));

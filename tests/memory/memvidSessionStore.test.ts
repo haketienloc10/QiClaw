@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { MemvidSessionStore } from '../../src/memory/memvidSessionStore.js';
 import type { SessionMemoryEntry } from '../../src/memory/sessionMemoryTypes.js';
@@ -134,5 +134,136 @@ describe('MemvidSessionStore', () => {
         lastAccessed: '2026-04-06T01:00:00.000Z'
       }
     });
+  });
+
+  it('uses auto recall and vector embedding metadata when memoryConfig is provided', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'memvid-session-store-'));
+    tempDirs.push(tempDir);
+
+    const store = new MemvidSessionStore({
+      cwd: tempDir,
+      sessionId: 'session_ollama',
+      memoryConfig: {
+        provider: 'ollama',
+        model: 'nomic-embed-text',
+        baseUrl: 'http://localhost:11434'
+      }
+    });
+
+    await store.open();
+
+    const memvid = store.memvidInstance();
+    expect(memvid).toBeDefined();
+
+    const putSpy = vi.spyOn(memvid!, 'put');
+    const findSpy = vi.spyOn(memvid!, 'find');
+    const embedder = (store as { embedder?: { embedQuery(text: string): Promise<number[]> } }).embedder!;
+    const embedQuerySpy = vi.spyOn(embedder, 'embedQuery').mockImplementation(async () => new Array(768).fill(0.1));
+
+    await store.put(createEntry({ sessionId: 'session_ollama' }));
+    await store.find('Vietnamese', { k: 5 });
+
+    expect(embedQuerySpy).toHaveBeenCalled();
+    expect(putSpy).toHaveBeenCalledWith(expect.objectContaining({
+      enableEmbedding: true,
+      embeddingIdentity: expect.objectContaining({
+        provider: 'ollama',
+        model: 'nomic-embed-text'
+      })
+    }));
+    expect(findSpy).toHaveBeenCalledWith('Vietnamese', expect.objectContaining({
+      mode: 'auto',
+      embedder: expect.objectContaining({
+        provider: 'ollama',
+        modelName: 'nomic-embed-text'
+      })
+    }));
+  });
+
+  it('does not throw when recall query contains unmatched parentheses', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'memvid-session-store-'));
+    tempDirs.push(tempDir);
+
+    const store = new MemvidSessionStore({
+      cwd: tempDir,
+      sessionId: 'session_query_chars'
+    });
+
+    await store.open();
+    await store.put(createEntry({
+      sessionId: 'session_query_chars',
+      hash: 'paren123456',
+      summaryText: 'Editor preference stored.',
+      essenceText: 'User prefers neovim.',
+      fullText: 'User prefers neovim as the main editor.'
+    }));
+    await store.seal();
+
+    await expect(store.recall('favorite editor (neovim', { k: 5 })).resolves.toEqual([]);
+  });
+
+  it('normalizes asterisk in recall queries into text instead of dropping it', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'memvid-session-store-'));
+    tempDirs.push(tempDir);
+
+    const store = new MemvidSessionStore({
+      cwd: tempDir,
+      sessionId: 'session_query_asterisk'
+    });
+
+    await store.open();
+    const memvid = store.memvidInstance();
+    expect(memvid).toBeDefined();
+
+    const findSpy = vi.spyOn(memvid!, 'find');
+    await store.recall('3 * 3', { k: 5 });
+
+    expect(findSpy).toHaveBeenCalledWith('3 times 3', expect.objectContaining({
+      mode: 'lex'
+    }));
+  });
+
+  it('normalizes risky quote and bracket characters into text tokens', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'memvid-session-store-'));
+    tempDirs.push(tempDir);
+
+    const store = new MemvidSessionStore({
+      cwd: tempDir,
+      sessionId: 'session_query_symbols'
+    });
+
+    await store.open();
+    const memvid = store.memvidInstance();
+    expect(memvid).toBeDefined();
+
+    const findSpy = vi.spyOn(memvid!, 'find');
+    await store.recall('"abc" [tag] {code}', { k: 5 });
+
+    expect(findSpy).toHaveBeenCalledWith('quote abc quote lbracket tag rbracket lbrace code rbrace', expect.objectContaining({
+      mode: 'lex'
+    }));
+  });
+
+  it('normalizes single quotes into text tokens and avoids empty queries after sanitizing', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'memvid-session-store-'));
+    tempDirs.push(tempDir);
+
+    const store = new MemvidSessionStore({
+      cwd: tempDir,
+      sessionId: 'session_query_single_quote'
+    });
+
+    await store.open();
+    const memvid = store.memvidInstance();
+    expect(memvid).toBeDefined();
+
+    const findSpy = vi.spyOn(memvid!, 'find');
+    await store.recall("'abc'", { k: 5 });
+    await expect(store.recall('()', { k: 5 })).resolves.toEqual([]);
+
+    expect(findSpy).toHaveBeenCalledWith('apostrophe abc apostrophe', expect.objectContaining({
+      mode: 'lex'
+    }));
+    expect(findSpy).toHaveBeenCalledTimes(1);
   });
 });

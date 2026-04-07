@@ -1,11 +1,12 @@
 import { createInterface } from 'node:readline/promises';
 import type { Readable, Writable } from 'node:stream';
 
-import type { AgentTurnStopReason, RunAgentTurnResult } from '../agent/loop.js';
+import type { AgentTurnStopReason, RunAgentTurnResult, TurnEvent } from '../agent/loop.js';
 
 export interface ReplTurnResult {
   finalAnswer: string;
   stopReason: AgentTurnStopReason;
+  didRenderTurnError?: boolean;
 }
 
 export interface CreateReplOptions {
@@ -15,7 +16,13 @@ export interface CreateReplOptions {
   helpText?: string;
   multilineNoticeText?: string;
   multilineDiscardedText?: string;
-  runTurn(input: string): Promise<Pick<RunAgentTurnResult, 'finalAnswer' | 'stopReason' | 'toolRoundsUsed' | 'verification'>>;
+  runTurn(input: string): Promise<
+    Pick<RunAgentTurnResult, 'finalAnswer' | 'stopReason' | 'toolRoundsUsed' | 'verification'> & {
+      turnStream?: AsyncIterable<TurnEvent>;
+      finalResult?: Promise<RunAgentTurnResult>;
+    }
+  >;
+  onTurnEvent?(event: TurnEvent): void | Promise<void>;
   readLine?(promptLabel: string): Promise<string | undefined>;
   writeLine?(text: string): void;
   renderFinalAnswer?(text: string): void;
@@ -62,11 +69,43 @@ export function createRepl(options: CreateReplOptions): Repl {
   return {
     async runOnce(input: string): Promise<ReplTurnResult> {
       const result = await options.runTurn(input);
+      let didRenderTurnError = false;
+      const finalResultPromise = result.finalResult;
 
-      return {
-        finalAnswer: result.finalAnswer,
-        stopReason: result.stopReason
-      };
+      if (finalResultPromise !== undefined) {
+        finalResultPromise.catch(() => undefined);
+      }
+
+      if (result.turnStream !== undefined) {
+        try {
+          for await (const event of result.turnStream) {
+            await options.onTurnEvent?.(event);
+            if (event.type === 'turn_failed') {
+              didRenderTurnError = true;
+            }
+          }
+        } catch (error) {
+          if (didRenderTurnError) {
+            throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+              replTurnErrorRendered: true
+            });
+          }
+          throw error;
+        }
+      }
+
+      const finalResult = finalResultPromise ? await finalResultPromise : result;
+
+      return didRenderTurnError
+        ? {
+            finalAnswer: finalResult.finalAnswer,
+            stopReason: finalResult.stopReason,
+            didRenderTurnError
+          }
+        : {
+            finalAnswer: finalResult.finalAnswer,
+            stopReason: finalResult.stopReason
+          };
     },
     async runInteractive(): Promise<number> {
       for (const startupLine of options.startupLines ?? []) {

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { dispatchToolCall } from '../../src/agent/dispatcher.js';
 import { defaultAgentSpec } from '../../src/agent/defaultAgentSpec.js';
-import { runAgentTurn } from '../../src/agent/loop.js';
+import { collectCompletedTurn, runAgentTurn, runAgentTurnStream } from '../../src/agent/loop.js';
 import { readonlyAgentSpec } from '../../src/agent/presets/readonlyAgentSpec.js';
 import { createAgentRuntime } from '../../src/agent/runtime.js';
 import { createInMemoryMetricsObserver } from '../../src/telemetry/metrics.js';
@@ -756,6 +756,370 @@ describe('provider normalization, provider, and dispatcher', () => {
 });
 
 describe('agent loop', () => {
+  it('streams assistant text deltas and preserves final answer parity', async () => {
+    const provider: ModelProvider = {
+      name: 'openai',
+      model: 'gpt-test',
+      async *stream() {
+        yield { type: 'start' as const, provider: 'openai', model: 'gpt-test' };
+        yield { type: 'text_delta' as const, text: 'Hello' };
+        yield { type: 'text_delta' as const, text: ' world' };
+        yield {
+          type: 'finish' as const,
+          finish: { stopReason: 'stop' },
+          usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 }
+        };
+      },
+      async generate() {
+        throw new Error('runAgentTurn should collect from stream in this test');
+      }
+    };
+
+    const input = {
+      provider,
+      availableTools: [],
+      baseSystemPrompt: 'system',
+      userInput: 'say hi',
+      cwd: process.cwd(),
+      maxToolRounds: 1
+    } satisfies Parameters<typeof runAgentTurn>[0];
+
+    const events: Array<{ type: string; [key: string]: unknown }> = [];
+    for await (const event of runAgentTurnStream(input)) {
+      events.push(event as { type: string; [key: string]: unknown });
+    }
+
+    expect(events.slice(0, 5)).toEqual([
+      { type: 'turn_started' },
+      { type: 'provider_started', provider: 'openai', model: 'gpt-test' },
+      { type: 'assistant_text_delta', text: 'Hello' },
+      { type: 'assistant_text_delta', text: ' world' },
+      { type: 'assistant_message_completed', text: 'Hello world', toolCalls: undefined }
+    ]);
+    expect(events[5]).toMatchObject({
+      type: 'turn_completed',
+      finalAnswer: 'Hello world',
+      stopReason: 'completed',
+      history: [
+        { role: 'user', content: 'say hi' },
+        { role: 'assistant', content: 'Hello world' }
+      ],
+      toolRoundsUsed: 0,
+      doneCriteria: expect.objectContaining({
+        goal: 'say hi',
+        checklist: ['say hi'],
+        requiresToolEvidence: false
+      }),
+      turnCompleted: true
+    });
+
+    const result = await runAgentTurn(input);
+
+    expect(result).toMatchObject({
+      finalAnswer: 'Hello world',
+      stopReason: 'completed',
+      history: [
+        { role: 'user', content: 'say hi' },
+        { role: 'assistant', content: 'Hello world' }
+      ],
+      toolRoundsUsed: 0,
+      doneCriteria: expect.objectContaining({
+        goal: 'say hi',
+        checklist: ['say hi'],
+        requiresToolEvidence: false
+      })
+    });
+  });
+
+  it('keeps runAgentTurn result parity with the collected turn_completed stream payload', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'agent-loop-stream-parity-'));
+    await writeFile(join(workspace, 'note.txt'), 'agent note', 'utf8');
+
+    const scriptedResponses: ProviderResponse[] = [
+      normalizeProviderResponse({
+        content: 'I will read the note first.',
+        toolCalls: [
+          {
+            id: 'call-read-parity-1',
+            name: 'read_file',
+            input: { path: 'note.txt' }
+          }
+        ]
+      }),
+      normalizeProviderResponse({
+        content: 'The note says: agent note'
+      })
+    ];
+
+    const streamedTurnCompletedEvents: Array<Record<string, unknown>> = [];
+    for await (const event of runAgentTurnStream({
+      provider: createScriptedProvider(scriptedResponses),
+      availableTools: getBuiltinTools(),
+      baseSystemPrompt: 'You are helpful.',
+      userInput: 'Read note.txt and summarize it.',
+      cwd: workspace,
+      maxToolRounds: 3
+    })) {
+      if (event.type === 'turn_completed') {
+        streamedTurnCompletedEvents.push(event as unknown as Record<string, unknown>);
+      }
+    }
+
+    expect(streamedTurnCompletedEvents).toHaveLength(1);
+
+    const result = await runAgentTurn({
+      provider: createScriptedProvider(scriptedResponses),
+      availableTools: getBuiltinTools(),
+      baseSystemPrompt: 'You are helpful.',
+      userInput: 'Read note.txt and summarize it.',
+      cwd: workspace,
+      maxToolRounds: 3
+    });
+
+    expect(streamedTurnCompletedEvents[0]).toMatchObject({
+      type: 'turn_completed',
+      finalAnswer: result.finalAnswer,
+      stopReason: result.stopReason,
+      history: result.history,
+      toolRoundsUsed: result.toolRoundsUsed,
+      doneCriteria: result.doneCriteria,
+      turnCompleted: true
+    });
+  });
+
+  it('emits provider-streamed tool calls as tool lifecycle events in order', async () => {
+    let round = 0;
+    const executedToolCalls: string[] = [];
+    const provider: ModelProvider = {
+      name: 'openai',
+      model: 'gpt-test',
+      async *stream() {
+        round += 1;
+
+        yield { type: 'start' as const, provider: 'openai', model: 'gpt-test' };
+
+        if (round === 1) {
+          yield { type: 'text_delta' as const, text: 'Checking note' };
+          yield {
+            type: 'tool_call' as const,
+            id: 'call-read-stream-1',
+            name: 'read_file',
+            input: { path: 'note.txt' }
+          };
+          yield {
+            type: 'finish' as const,
+            finish: { stopReason: 'tool_use' },
+            usage: { inputTokens: 10, outputTokens: 3, totalTokens: 13 }
+          };
+          return;
+        }
+
+        yield { type: 'text_delta' as const, text: 'Done reading note' };
+        yield {
+          type: 'finish' as const,
+          finish: { stopReason: 'end_turn' },
+          usage: { inputTokens: 14, outputTokens: 4, totalTokens: 18 }
+        };
+      },
+      async generate() {
+        throw new Error('runAgentTurnStream should use provider.stream in this test');
+      }
+    };
+
+    const events: Array<{ type: string; [key: string]: unknown }> = [];
+    for await (const event of runAgentTurnStream({
+      provider,
+      availableTools: [
+        {
+          name: 'read_file',
+          description: 'Read test file',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' }
+            },
+            required: ['path'],
+            additionalProperties: false
+          },
+          async execute(input) {
+            executedToolCalls.push(String(input.path));
+            return { content: `read:${String(input.path)}` };
+          }
+        }
+      ],
+      baseSystemPrompt: 'system',
+      userInput: 'read the note',
+      cwd: process.cwd(),
+      maxToolRounds: 2
+    })) {
+      events.push(event as { type: string; [key: string]: unknown });
+    }
+
+    expect(executedToolCalls).toEqual(['note.txt']);
+    expect(events).toEqual([
+      { type: 'turn_started' },
+      { type: 'provider_started', provider: 'openai', model: 'gpt-test' },
+      { type: 'assistant_text_delta', text: 'Checking note' },
+      {
+        type: 'tool_call_started',
+        id: 'call-read-stream-1',
+        name: 'read_file',
+        input: { path: 'note.txt' }
+      },
+      {
+        type: 'assistant_message_completed',
+        text: 'Checking note',
+        toolCalls: [
+          {
+            id: 'call-read-stream-1',
+            name: 'read_file',
+            input: { path: 'note.txt' }
+          }
+        ]
+      },
+      {
+        type: 'tool_call_completed',
+        id: 'call-read-stream-1',
+        name: 'read_file',
+        resultPreview: '{"content":"read:note.txt"}',
+        isError: false
+      },
+      { type: 'provider_started', provider: 'openai', model: 'gpt-test' },
+      { type: 'assistant_text_delta', text: 'Done reading note' },
+      { type: 'assistant_message_completed', text: 'Done reading note', toolCalls: undefined },
+      {
+        type: 'turn_completed',
+        finalAnswer: 'Done reading note',
+        stopReason: 'completed',
+        history: [
+          { role: 'user', content: 'read the note' },
+          {
+            role: 'assistant',
+            content: 'Checking note',
+            toolCalls: [
+              {
+                id: 'call-read-stream-1',
+                name: 'read_file',
+                input: { path: 'note.txt' }
+              }
+            ]
+          },
+          {
+            role: 'tool',
+            name: 'read_file',
+            toolCallId: 'call-read-stream-1',
+            content: 'read:note.txt',
+            isError: false
+          },
+          { role: 'assistant', content: 'Done reading note', toolCalls: undefined }
+        ],
+        toolRoundsUsed: 1,
+        doneCriteria: expect.objectContaining({
+          goal: 'read the note',
+          checklist: ['read the note'],
+          requiresToolEvidence: true
+        }),
+        turnCompleted: true
+      }
+    ]);
+  });
+
+  it('does not emit duplicate tool_call_started events for repeated streamed tool call ids', async () => {
+    let round = 0;
+    const executedToolCalls: string[] = [];
+    const provider: ModelProvider = {
+      name: 'openai',
+      model: 'gpt-test',
+      async *stream() {
+        round += 1;
+
+        yield { type: 'start' as const, provider: 'openai', model: 'gpt-test' };
+
+        if (round === 1) {
+          yield { type: 'text_delta' as const, text: 'Checking note' };
+          yield {
+            type: 'tool_call' as const,
+            id: 'call-read-stream-duplicate',
+            name: 'read_file',
+            input: { path: 'note.txt' }
+          };
+          yield {
+            type: 'tool_call' as const,
+            id: 'call-read-stream-duplicate',
+            name: 'read_file',
+            input: { path: 'note.txt' }
+          };
+          yield {
+            type: 'finish' as const,
+            finish: { stopReason: 'tool_use' },
+            usage: { inputTokens: 10, outputTokens: 3, totalTokens: 13 }
+          };
+          return;
+        }
+
+        yield { type: 'text_delta' as const, text: 'Done reading note' };
+        yield {
+          type: 'finish' as const,
+          finish: { stopReason: 'end_turn' },
+          usage: { inputTokens: 14, outputTokens: 4, totalTokens: 18 }
+        };
+      },
+      async generate() {
+        throw new Error('runAgentTurnStream should use provider.stream in this test');
+      }
+    };
+
+    const events: Array<{ type: string; [key: string]: unknown }> = [];
+    for await (const event of runAgentTurnStream({
+      provider,
+      availableTools: [
+        {
+          name: 'read_file',
+          description: 'Read test file',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' }
+            },
+            required: ['path'],
+            additionalProperties: false
+          },
+          async execute(input) {
+            executedToolCalls.push(String(input.path));
+            return { content: `read:${String(input.path)}` };
+          }
+        }
+      ],
+      baseSystemPrompt: 'system',
+      userInput: 'read the note',
+      cwd: process.cwd(),
+      maxToolRounds: 2
+    })) {
+      events.push(event as { type: string; [key: string]: unknown });
+    }
+
+    expect(executedToolCalls).toEqual(['note.txt']);
+    expect(events.filter((event) => event.type === 'tool_call_started')).toEqual([
+      {
+        type: 'tool_call_started',
+        id: 'call-read-stream-duplicate',
+        name: 'read_file',
+        input: { path: 'note.txt' }
+      }
+    ]);
+    expect(events).toContainEqual({
+      type: 'assistant_message_completed',
+      text: 'Checking note',
+      toolCalls: [
+        {
+          id: 'call-read-stream-duplicate',
+          name: 'read_file',
+          input: { path: 'note.txt' }
+        }
+      ]
+    });
+  });
+
   it('runs a tool loop until the provider returns a final answer', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'agent-loop-success-'));
     await writeFile(join(workspace, 'note.txt'), 'agent note', 'utf8');
@@ -2262,6 +2626,208 @@ describe('agent loop', () => {
 
     await expectation;
     delete process.env.QICLAW_PROVIDER_TIMEOUT_MS;
+  });
+
+  it('times out when provider.stream never resolves', async () => {
+    vi.useFakeTimers();
+
+    const provider: ModelProvider = {
+      name: 'hanging-stream',
+      model: 'test-model',
+      stream() {
+        return {
+          [Symbol.asyncIterator]() {
+            return {
+              next: () => new Promise<IteratorResult<never>>(() => undefined)
+            };
+          }
+        };
+      },
+      async generate() {
+        throw new Error('runAgentTurn should prefer stream in this test');
+      }
+    };
+
+    const turnPromise = runAgentTurn({
+      provider,
+      availableTools: getBuiltinTools(),
+      baseSystemPrompt: 'You are helpful.',
+      userInput: 'Answer briefly.',
+      cwd: '/tmp/runtime-stream-timeout',
+      maxToolRounds: 1
+    });
+    const expectation = expect(turnPromise).rejects.toThrow(/hanging-stream provider timeout after 120000ms/i);
+
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    await expectation;
+  });
+
+  it('falls back to generate when provider.stream reports unsupported streaming', async () => {
+    const generate = vi.fn(async () => normalizeProviderResponse({
+      content: 'Anthropic fallback answer'
+    }));
+
+    const provider: ModelProvider = {
+      name: 'anthropic',
+      model: 'claude-test',
+      stream() {
+        return {
+          async *[Symbol.asyncIterator]() {
+            throw new Error('Anthropic provider does not support streaming yet.');
+          }
+        };
+      },
+      generate
+    };
+
+    await expect(runAgentTurn({
+      provider,
+      availableTools: getBuiltinTools(),
+      baseSystemPrompt: 'You are helpful.',
+      userInput: 'Answer briefly.',
+      cwd: '/tmp/runtime-anthropic-fallback',
+      maxToolRounds: 1
+    })).resolves.toMatchObject({
+      stopReason: 'completed',
+      finalAnswer: 'Anthropic fallback answer'
+    });
+
+    expect(generate).toHaveBeenCalledOnce();
+  });
+
+  it('keeps collectCompletedTurn parity for max_tool_rounds_reached with turnCompleted false', async () => {
+    async function* incompleteTerminalStream() {
+      yield { type: 'turn_started' as const };
+      yield { type: 'assistant_text_delta' as const, text: 'Round 1' };
+      yield {
+        type: 'turn_completed' as const,
+        finalAnswer: 'Round 1',
+        stopReason: 'max_tool_rounds_reached' as const,
+        history: [
+          { role: 'user' as const, content: 'Read note.txt carefully.' },
+          { role: 'assistant' as const, content: 'Round 1' }
+        ],
+        toolRoundsUsed: 1,
+        doneCriteria: {
+          goal: 'Read note.txt carefully.',
+          checklist: ['Read note.txt carefully.'],
+          requiresToolEvidence: true
+        },
+        turnCompleted: false
+      };
+    }
+
+    await expect(collectCompletedTurn(incompleteTerminalStream())).resolves.toEqual({
+      finalAnswer: 'Round 1',
+      stopReason: 'max_tool_rounds_reached',
+      history: [
+        { role: 'user', content: 'Read note.txt carefully.' },
+        { role: 'assistant', content: 'Round 1' }
+      ],
+      toolRoundsUsed: 1,
+      doneCriteria: {
+        goal: 'Read note.txt carefully.',
+        checklist: ['Read note.txt carefully.'],
+        requiresToolEvidence: true
+      },
+      turnCompleted: false
+    });
+  });
+
+  it('rethrows turn_failed from collectCompletedTurn', async () => {
+    async function* failedTurnStream() {
+      yield { type: 'turn_started' as const };
+      yield { type: 'turn_failed' as const, error: new Error('provider boom') };
+    }
+
+    await expect(collectCompletedTurn(failedTurnStream())).rejects.toThrow('provider boom');
+  });
+
+  it('fails fast when collectCompletedTurn ends without a terminal event', async () => {
+    async function* unterminatedStream() {
+      yield { type: 'turn_started' as const };
+      yield { type: 'assistant_text_delta' as const, text: 'still thinking' };
+    }
+
+    await expect(collectCompletedTurn(unterminatedStream())).rejects.toThrow(/ended without terminal event/i);
+  });
+
+  it('fails fast when collectCompletedTurn sees duplicate terminal success events', async () => {
+    async function* duplicateTerminalSuccessStream() {
+      yield { type: 'turn_started' as const };
+      yield {
+        type: 'turn_completed' as const,
+        finalAnswer: 'first',
+        stopReason: 'completed' as const,
+        history: [{ role: 'assistant' as const, content: 'first' }],
+        toolRoundsUsed: 0,
+        doneCriteria: {
+          goal: 'Answer briefly.',
+          checklist: ['Answer briefly.'],
+          requiresToolEvidence: false
+        },
+        turnCompleted: true
+      };
+      yield {
+        type: 'turn_completed' as const,
+        finalAnswer: 'second',
+        stopReason: 'completed' as const,
+        history: [{ role: 'assistant' as const, content: 'second' }],
+        toolRoundsUsed: 0,
+        doneCriteria: {
+          goal: 'Answer briefly.',
+          checklist: ['Answer briefly.'],
+          requiresToolEvidence: false
+        },
+        turnCompleted: true
+      };
+    }
+
+    await expect(collectCompletedTurn(duplicateTerminalSuccessStream())).rejects.toThrow(/multiple terminal success events/i);
+  });
+
+  it('fails fast when collectCompletedTurn sees invalid turn_completed payloads', async () => {
+    async function* invalidTerminalPayloadStream() {
+      yield { type: 'turn_started' as const };
+      yield {
+        type: 'turn_completed' as const,
+        finalAnswer: 'done',
+        stopReason: 'completed' as const,
+        history: undefined as unknown as Array<{ role: 'user' | 'assistant' | 'tool'; content: string }>,
+        toolRoundsUsed: 0,
+        doneCriteria: {
+          goal: 'Answer briefly.',
+          checklist: ['Answer briefly.'],
+          requiresToolEvidence: false
+        },
+        turnCompleted: true
+      };
+    }
+
+    await expect(collectCompletedTurn(invalidTerminalPayloadStream())).rejects.toThrow(/invalid turn_completed payload/i);
+  });
+
+  it('fails fast when collectCompletedTurn sees events after a terminal event', async () => {
+    async function* postTerminalEventStream() {
+      yield { type: 'turn_started' as const };
+      yield {
+        type: 'turn_completed' as const,
+        finalAnswer: 'done',
+        stopReason: 'completed' as const,
+        history: [{ role: 'assistant' as const, content: 'done' }],
+        toolRoundsUsed: 0,
+        doneCriteria: {
+          goal: 'Answer briefly.',
+          checklist: ['Answer briefly.'],
+          requiresToolEvidence: false
+        },
+        turnCompleted: true
+      };
+      yield { type: 'assistant_text_delta' as const, text: 'late event' };
+    }
+
+    await expect(collectCompletedTurn(postTerminalEventStream())).rejects.toThrow(/event received after terminal event/i);
   });
 
   it('marks openai incomplete responses in metadata', () => {

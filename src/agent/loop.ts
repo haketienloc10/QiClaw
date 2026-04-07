@@ -1,7 +1,8 @@
 import type { Message } from '../core/types.js';
 import { buildPromptWithContext } from '../context/promptBuilder.js';
-import type { ProviderResponse, ProviderUsageSummary } from '../provider/model.js';
+import type { NormalizedEvent, ProviderResponse, ProviderUsageSummary } from '../provider/model.js';
 import {
+  collectProviderStream,
   toToolErrorMessage,
   toToolResultMessage,
   type ModelProvider,
@@ -50,6 +51,38 @@ export interface RunAgentTurnResult {
   verification: AgentTurnVerification;
 }
 
+export interface RunAgentTurnExecution {
+  turnStream: AsyncIterable<TurnEvent>;
+  turnResult: Promise<RunAgentTurnResult>;
+}
+
+export type TurnEvent =
+  | { type: 'turn_started' }
+  | { type: 'provider_started'; provider: string; model: string }
+  | { type: 'assistant_text_delta'; text: string }
+  | { type: 'tool_call_started'; id: string; name: string; input: Record<string, unknown> }
+  | { type: 'tool_call_completed'; id: string; name: string; resultPreview: string; isError: boolean }
+  | { type: 'assistant_message_completed'; text: string; toolCalls?: ToolCallRequest[] }
+  | {
+      type: 'turn_completed';
+      finalAnswer: string;
+      stopReason: AgentTurnStopReason;
+      history: Message[];
+      toolRoundsUsed: number;
+      doneCriteria: DoneCriteria;
+      turnCompleted: boolean;
+    }
+  | { type: 'turn_failed'; error: unknown };
+
+interface CollectedTurnState {
+  stopReason: AgentTurnStopReason;
+  finalAnswer: string;
+  history: Message[];
+  toolRoundsUsed: number;
+  doneCriteria: DoneCriteria;
+  turnCompleted: boolean;
+}
+
 const DEFAULT_PROVIDER_TIMEOUT_MS = 120_000;
 const MAX_TOOL_RESULT_CONTENT_CHARS = 12_000;
 
@@ -74,31 +107,23 @@ interface TurnTelemetryState {
 }
 
 export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTurnResult> {
-  const observer = input.observer ?? createNoopObserver();
-  const history: Message[] = [...(input.history ?? []), { role: 'user', content: input.userInput }];
-  const doneCriteria = buildDoneCriteria(input.userInput, input.agentSpec?.completion);
+  const execution = createRunAgentTurnExecution(input);
+  const drainTurnStream = (async () => {
+    for await (const _event of execution.turnStream) {
+      // Drain the stream so turnResult resolves for non-streaming callers.
+    }
+  })();
 
-  let finalAnswer = '';
-  let toolRoundsUsed = 0;
-  const telemetry: TurnTelemetryState = {
-    turnId: createTurnId(),
-    providerRound: 0,
-    toolRound: 0,
-    turnStartedAt: Date.now(),
-    toolCallsTotal: 0,
-    toolCallsByName: {},
-    inputTokensTotal: 0,
-    outputTokensTotal: 0,
-    cacheReadInputTokens: 0,
-    hasToolErrors: false,
-    lastPromptRawChars: 0,
-    lastToolResultChars: 0,
-    promptCharsMax: 0,
-    toolResultPromptGrowthCharsTotal: 0,
-    toolResultCharsAddedAcrossTurn: 0,
-    finalToolResultChars: 0,
-    finalAssistantToolCallChars: 0
-  };
+  try {
+    return await execution.turnResult;
+  } finally {
+    await drainTurnStream.catch(() => undefined);
+  }
+}
+
+export function createRunAgentTurnExecution(input: RunAgentTurnInput): RunAgentTurnExecution {
+  const observer = input.observer ?? createNoopObserver();
+  const telemetry = createTurnTelemetryState();
 
   observer.record(
     createTelemetryEvent('user_input_received', 'input_received', {
@@ -117,6 +142,128 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTu
       toolNames: input.availableTools.map((tool) => tool.name)
     })
   );
+
+  const sourceStream = runAgentTurnStream(input, { telemetry, observer });
+  let resolveTurnResult: ((result: RunAgentTurnResult) => void) | undefined;
+  let rejectTurnResult: ((error: unknown) => void) | undefined;
+  const turnResult = new Promise<RunAgentTurnResult>((resolve, reject) => {
+    resolveTurnResult = resolve;
+    rejectTurnResult = reject;
+  });
+
+  const turnStream = (async function* () {
+    let terminal: CollectedTurnState | undefined;
+
+    try {
+      for await (const event of sourceStream) {
+        if (event.type === 'turn_completed') {
+          if (terminal) {
+            throw new Error('Turn stream emitted multiple terminal success events.');
+          }
+
+          assertValidTurnCompletedEvent(event);
+          terminal = {
+            stopReason: event.stopReason,
+            finalAnswer: event.finalAnswer,
+            history: event.history,
+            toolRoundsUsed: event.toolRoundsUsed,
+            doneCriteria: event.doneCriteria,
+            turnCompleted: event.turnCompleted
+          };
+        }
+
+        yield event;
+      }
+
+      if (!terminal) {
+        throw new Error('Turn stream ended without terminal event.');
+      }
+
+      resolveTurnResult?.(buildResult(observer, telemetry, terminal, input.maxToolRounds));
+    } catch (error) {
+      observer.record(
+        createTelemetryEvent('turn_failed', 'completion_check', {
+          ...buildTurnContext(telemetry),
+          message: error instanceof Error ? error.message : String(error)
+        })
+      );
+      rejectTurnResult?.(error);
+      throw error;
+    }
+  })();
+
+  return {
+    turnStream,
+    turnResult
+  };
+}
+
+export async function collectCompletedTurn(stream: AsyncIterable<TurnEvent>): Promise<CollectedTurnState> {
+  let terminal: CollectedTurnState | undefined;
+
+  for await (const event of stream) {
+    if (event.type === 'turn_completed') {
+      if (terminal) {
+        throw new Error('Turn stream emitted multiple terminal success events.');
+      }
+
+      assertValidTurnCompletedEvent(event);
+
+      terminal = {
+        stopReason: event.stopReason,
+        finalAnswer: event.finalAnswer,
+        history: event.history,
+        toolRoundsUsed: event.toolRoundsUsed,
+        doneCriteria: event.doneCriteria,
+        turnCompleted: event.turnCompleted
+      };
+      continue;
+    }
+
+    if (terminal) {
+      throw new Error(`Turn stream event received after terminal event: ${event.type}`);
+    }
+
+    if (event.type === 'turn_failed') {
+      throw event.error instanceof Error ? event.error : new Error(String(event.error));
+    }
+  }
+
+  if (!terminal) {
+    throw new Error('Turn stream ended without terminal event.');
+  }
+
+  return terminal;
+}
+
+function assertValidTurnCompletedEvent(
+  event: Extract<TurnEvent, { type: 'turn_completed' }>
+): asserts event is Extract<TurnEvent, { type: 'turn_completed' }> {
+  if (!Array.isArray(event.history)) {
+    throw new Error('Invalid turn_completed payload: history must be an array.');
+  }
+
+  if (!Number.isInteger(event.toolRoundsUsed) || event.toolRoundsUsed < 0) {
+    throw new Error('Invalid turn_completed payload: toolRoundsUsed must be a non-negative integer.');
+  }
+}
+
+interface RunAgentTurnStreamState {
+  telemetry: TurnTelemetryState;
+  observer: TelemetryObserver;
+}
+
+export async function* runAgentTurnStream(
+  input: RunAgentTurnInput,
+  state?: RunAgentTurnStreamState
+): AsyncIterable<TurnEvent> {
+  const observer = state?.observer ?? input.observer ?? createNoopObserver();
+  const history: Message[] = [...(input.history ?? []), { role: 'user', content: input.userInput }];
+  const doneCriteria = buildDoneCriteria(input.userInput, input.agentSpec?.completion);
+  const telemetry = state?.telemetry ?? createTurnTelemetryState();
+  let finalAnswer = '';
+
+  yield { type: 'turn_started' };
 
   try {
     while (true) {
@@ -160,14 +307,93 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTu
       );
 
       const providerStartedAt = Date.now();
-      const response = await withProviderTimeout(
-        input.provider.generate({
-          messages: prompt.messages,
-          availableTools: input.availableTools
-        }),
-        getProviderTimeoutMs(),
-        input.provider.name
-      );
+      let response: ProviderResponse;
+      const startedToolCallIds = new Set<string>();
+
+      if (typeof input.provider.stream === 'function') {
+        try {
+          const providerTimeoutMs = getProviderTimeoutMs();
+          const timedStream = readProviderStreamWithTimeout(
+            input.provider,
+            prompt.messages,
+            input.availableTools,
+            providerTimeoutMs
+          );
+          const providerEvents: NormalizedEvent[] = [];
+
+          for await (const event of timedStream) {
+            providerEvents.push(event);
+
+            if (event.type === 'start') {
+              yield { type: 'provider_started', provider: event.provider, model: event.model };
+              continue;
+            }
+
+            if (event.type === 'text_delta') {
+              yield { type: 'assistant_text_delta', text: event.text };
+              continue;
+            }
+
+            if (event.type === 'tool_call') {
+              if (startedToolCallIds.has(event.id)) {
+                continue;
+              }
+
+              const toolCall = { id: event.id, name: event.name, input: event.input };
+              const redactedToolInput = redactSensitiveTelemetryValue(toolCall.input);
+              startedToolCallIds.add(toolCall.id);
+              observer.record(
+                createTelemetryEvent('tool_call_started', 'tool_execution', {
+                  ...buildTurnContext(telemetry),
+                  toolName: toolCall.name,
+                  toolCallId: toolCall.id,
+                  inputPreview: buildTelemetryPreview(redactedToolInput),
+                  inputRawRedacted: redactedToolInput
+                })
+              );
+              yield {
+                type: 'tool_call_started',
+                id: toolCall.id,
+                name: toolCall.name,
+                input: toolCall.input
+              };
+            }
+          }
+
+          response = await collectProviderStream((async function* () {
+            for (const event of providerEvents) {
+              yield event;
+            }
+          })());
+        } catch (error) {
+          if (!shouldFallbackToGenerate(input.provider, error)) {
+            throw error;
+          }
+
+          response = await withProviderTimeout(
+            input.provider.generate({
+              messages: prompt.messages,
+              availableTools: input.availableTools
+            }),
+            getProviderTimeoutMs(),
+            input.provider.name
+          );
+          yield { type: 'provider_started', provider: input.provider.name, model: input.provider.model };
+          if (response.message.content.length > 0) {
+            yield { type: 'assistant_text_delta', text: response.message.content };
+          }
+        }
+      } else {
+        response = await withProviderTimeout(
+          collectProviderResponse(input.provider, prompt.messages, input.availableTools),
+          getProviderTimeoutMs(),
+          input.provider.name
+        );
+        yield { type: 'provider_started', provider: input.provider.name, model: input.provider.model };
+        if (response.message.content.length > 0) {
+          yield { type: 'assistant_text_delta', text: response.message.content };
+        }
+      }
 
       if (response.toolCalls.length > 0) {
         telemetry.toolRound += 1;
@@ -189,39 +415,58 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTu
       history.push(response.message);
       finalAnswer = response.message.content;
 
+      yield {
+        type: 'assistant_message_completed',
+        text: response.message.content,
+        toolCalls: response.toolCalls.length > 0 ? response.toolCalls : undefined
+      };
+
       if (response.toolCalls.length === 0) {
-        return buildResult(observer, telemetry, 'completed', finalAnswer, history, toolRoundsUsed, doneCriteria, true, input.maxToolRounds);
-      }
-
-      if (toolRoundsUsed >= input.maxToolRounds) {
-        return buildResult(
-          observer,
-          telemetry,
-          'max_tool_rounds_reached',
+        yield buildTurnCompletedEvent({
           finalAnswer,
+          stopReason: 'completed',
           history,
-          toolRoundsUsed,
+          toolRoundsUsed: telemetry.toolRound,
           doneCriteria,
-          false,
-          input.maxToolRounds
-        );
+          turnCompleted: true
+        });
+        return;
       }
 
-      toolRoundsUsed += 1;
+      if (telemetry.toolRound > input.maxToolRounds) {
+        yield buildTurnCompletedEvent({
+          finalAnswer,
+          stopReason: 'max_tool_rounds_reached',
+          history,
+          toolRoundsUsed: telemetry.toolRound,
+          doneCriteria,
+          turnCompleted: false
+        });
+        return;
+      }
 
       const batchResults: BatchToolResultTelemetry[] = [];
 
       for (const toolCall of response.toolCalls) {
         const redactedToolInput = redactSensitiveTelemetryValue(toolCall.input);
-        observer.record(
-          createTelemetryEvent('tool_call_started', 'tool_execution', {
-            ...buildTurnContext(telemetry),
-            toolName: toolCall.name,
-            toolCallId: toolCall.id,
-            inputPreview: buildTelemetryPreview(redactedToolInput),
-            inputRawRedacted: redactedToolInput
-          })
-        );
+        if (!startedToolCallIds.has(toolCall.id)) {
+          observer.record(
+            createTelemetryEvent('tool_call_started', 'tool_execution', {
+              ...buildTurnContext(telemetry),
+              toolName: toolCall.name,
+              toolCallId: toolCall.id,
+              inputPreview: buildTelemetryPreview(redactedToolInput),
+              inputRawRedacted: redactedToolInput
+            })
+          );
+
+          yield {
+            type: 'tool_call_started',
+            id: toolCall.id,
+            name: toolCall.name,
+            input: toolCall.input
+          };
+        }
 
         const toolStartedAt = Date.now();
         const toolResult = truncateToolResultMessage(
@@ -254,6 +499,14 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTu
             resultSizeBucket: classifyResultSize(resultSizeChars)
           })
         );
+
+        yield {
+          type: 'tool_call_completed',
+          id: toolCall.id,
+          name: toolCall.name,
+          resultPreview: buildTelemetryPreview({ content: toolResult.content }, 120),
+          isError: toolResult.isError
+        };
       }
 
       observer.record(
@@ -263,27 +516,20 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTu
         })
       );
 
-      if (toolRoundsUsed >= input.maxToolRounds) {
-        return buildResult(
-          observer,
-          telemetry,
-          'max_tool_rounds_reached',
+      if (telemetry.toolRound >= input.maxToolRounds) {
+        yield buildTurnCompletedEvent({
           finalAnswer,
+          stopReason: 'max_tool_rounds_reached',
           history,
-          toolRoundsUsed,
+          toolRoundsUsed: telemetry.toolRound,
           doneCriteria,
-          false,
-          input.maxToolRounds
-        );
+          turnCompleted: false
+        });
+        return;
       }
     }
   } catch (error) {
-    observer.record(
-      createTelemetryEvent('turn_failed', 'completion_check', {
-        ...buildTurnContext(telemetry),
-        message: error instanceof Error ? error.message : String(error)
-      })
-    );
+    yield { type: 'turn_failed', error };
     throw error;
   }
 }
@@ -291,14 +537,10 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTu
 function buildResult(
   observer: TelemetryObserver,
   telemetry: TurnTelemetryState,
-  stopReason: AgentTurnStopReason,
-  finalAnswer: string,
-  history: Message[],
-  toolRoundsUsed: number,
-  doneCriteria: DoneCriteria,
-  turnCompleted: boolean,
+  collected: CollectedTurnState,
   maxToolRounds: number
 ): RunAgentTurnResult {
+  const { stopReason, finalAnswer, history, toolRoundsUsed, doneCriteria, turnCompleted } = collected;
   const verification = verifyAgentTurn({
     criteria: doneCriteria,
     finalAnswer,
@@ -362,6 +604,18 @@ function buildResult(
     toolRoundsUsed,
     doneCriteria,
     verification
+  };
+}
+
+function buildTurnCompletedEvent(input: Omit<Extract<TurnEvent, { type: 'turn_completed' }>, 'type'>): Extract<TurnEvent, { type: 'turn_completed' }> {
+  return {
+    type: 'turn_completed',
+    finalAnswer: input.finalAnswer,
+    stopReason: input.stopReason,
+    history: [...input.history],
+    toolRoundsUsed: input.toolRoundsUsed,
+    doneCriteria: input.doneCriteria,
+    turnCompleted: input.turnCompleted
   };
 }
 
@@ -590,6 +844,86 @@ function truncateToolResultMessage(toolResult: ToolResultMessage, maxChars: numb
     ...toolResult,
     content: `${toolResult.content.slice(0, Math.max(0, maxChars - 64))}\n… truncated from ${toolResult.content.length} chars`
   };
+}
+
+function createTurnTelemetryState(): TurnTelemetryState {
+  return {
+    turnId: createTurnId(),
+    providerRound: 0,
+    toolRound: 0,
+    turnStartedAt: Date.now(),
+    toolCallsTotal: 0,
+    toolCallsByName: {},
+    inputTokensTotal: 0,
+    outputTokensTotal: 0,
+    cacheReadInputTokens: 0,
+    hasToolErrors: false,
+    lastPromptRawChars: 0,
+    lastToolResultChars: 0,
+    promptCharsMax: 0,
+    toolResultPromptGrowthCharsTotal: 0,
+    toolResultCharsAddedAcrossTurn: 0,
+    finalToolResultChars: 0,
+    finalAssistantToolCallChars: 0
+  };
+}
+
+async function collectProviderResponse(
+  provider: ModelProvider,
+  messages: Message[],
+  availableTools: Tool[]
+): Promise<ProviderResponse> {
+  if (typeof provider.stream === 'function') {
+    return collectProviderStream(readProviderStream(provider, messages, availableTools));
+  }
+
+  return provider.generate({ messages, availableTools });
+}
+
+async function* readProviderStream(
+  provider: ModelProvider,
+  messages: Message[],
+  availableTools: Tool[]
+): AsyncIterable<NormalizedEvent> {
+  for await (const event of provider.stream({ messages, availableTools })) {
+    yield event;
+  }
+}
+
+function readProviderStreamWithTimeout(
+  provider: ModelProvider,
+  messages: Message[],
+  availableTools: Tool[],
+  timeoutMs: number
+): AsyncIterable<NormalizedEvent> {
+  return withProviderStreamTimeout(provider.stream({ messages, availableTools }), timeoutMs, provider.name);
+}
+
+function shouldFallbackToGenerate(provider: ModelProvider, error: unknown): boolean {
+  return provider.name === 'anthropic'
+    && error instanceof Error
+    && error.message === 'Anthropic provider does not support streaming yet.';
+}
+
+async function* withProviderStreamTimeout(
+  stream: AsyncIterable<NormalizedEvent>,
+  timeoutMs: number,
+  providerName: string
+): AsyncIterable<NormalizedEvent> {
+  const iterator = stream[Symbol.asyncIterator]();
+
+  try {
+    while (true) {
+      const nextResult = await withProviderTimeout(iterator.next(), timeoutMs, providerName);
+      if (nextResult.done) {
+        return;
+      }
+
+      yield nextResult.value;
+    }
+  } finally {
+    await iterator.return?.();
+  }
 }
 
 function getProviderTimeoutMs(): number {

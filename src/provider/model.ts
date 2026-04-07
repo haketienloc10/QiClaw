@@ -4,7 +4,7 @@ import { serializeToolResult, type Tool, type ToolResult } from '../tools/tool.j
 export interface ToolCallRequest {
   id: string;
   name: string;
-  input: unknown;
+  input: Record<string, unknown>;
 }
 
 export interface ToolResultMessage extends Message {
@@ -78,10 +78,24 @@ export interface ProviderResponseNormalizationInput {
   debug?: ProviderDebugMetadata;
 }
 
+export type NormalizedEvent =
+  | { type: 'start'; provider: string; model: string }
+  | { type: 'text_delta'; text: string }
+  | { type: 'tool_call'; id: string; name: string; input: Record<string, unknown> }
+  | {
+      type: 'finish';
+      finish?: ProviderFinishSummary;
+      usage?: ProviderUsageSummary;
+      responseMetrics?: ProviderResponseMetrics;
+      debug?: ProviderDebugMetadata;
+    }
+  | { type: 'error'; error: unknown };
+
 export interface ModelProvider {
   name: string;
   model: string;
   generate(request: ProviderRequest): Promise<ProviderResponse>;
+  stream(request: ProviderRequest): AsyncIterable<NormalizedEvent>;
 }
 
 export function normalizeProviderResponse(input: ProviderResponseNormalizationInput): ProviderResponse {
@@ -99,6 +113,97 @@ export function normalizeProviderResponse(input: ProviderResponseNormalizationIn
     responseMetrics: input.responseMetrics,
     debug: input.debug
   };
+}
+
+export async function collectProviderStream(
+  stream: AsyncIterable<NormalizedEvent>
+): Promise<ProviderResponse> {
+  let sawStart = false;
+  let sawTerminal = false;
+  let finish: ProviderFinishSummary | undefined;
+  let usage: ProviderUsageSummary | undefined;
+  let responseMetrics: ProviderResponseMetrics | undefined;
+  let debug: ProviderDebugMetadata | undefined;
+  const textParts: string[] = [];
+  const toolCalls: ToolCallRequest[] = [];
+  const streamedToolCallIds = new Set<string>();
+
+  for await (const event of stream) {
+    if (sawTerminal) {
+      throw new Error('Provider stream emitted events after terminal event.');
+    }
+
+    switch (event.type) {
+      case 'start':
+        if (sawStart) {
+          throw new Error('Provider stream emitted more than one start event.');
+        }
+        sawStart = true;
+        break;
+      case 'text_delta':
+        if (!sawStart) {
+          throw new Error('Provider stream emitted text_delta before start event.');
+        }
+        textParts.push(event.text);
+        break;
+      case 'tool_call':
+        if (!sawStart) {
+          throw new Error('Provider stream emitted tool_call before start event.');
+        }
+        if (streamedToolCallIds.has(event.id)) {
+          break;
+        }
+        streamedToolCallIds.add(event.id);
+        toolCalls.push({ id: event.id, name: event.name, input: event.input });
+        break;
+      case 'finish':
+        if (!sawStart) {
+          throw new Error('Provider stream ended without a start event.');
+        }
+        sawTerminal = true;
+        finish = event.finish;
+        usage = event.usage;
+        responseMetrics = event.responseMetrics;
+        debug = event.debug;
+        break;
+      case 'error':
+        if (!sawStart) {
+          throw new Error('Provider stream ended without a start event.');
+        }
+        sawTerminal = true;
+        throw event.error instanceof Error
+          ? event.error
+          : new Error(`Provider stream failed: ${String(event.error)}`);
+      default:
+        throw new Error(`Unknown provider event type: ${String((event as { type?: unknown }).type)}`);
+    }
+  }
+
+  if (!sawTerminal) {
+    throw new Error('Provider stream ended without finish or error event.');
+  }
+
+  const content = textParts.join('');
+
+  if (content.length === 0 && toolCalls.length === 0) {
+    throw new Error('Provider stream contained no usable output.');
+  }
+
+  const normalizedResponseMetrics = responseMetrics
+    ? {
+        ...responseMetrics,
+        toolCallCount: toolCalls.length
+      }
+    : undefined;
+
+  return normalizeProviderResponse({
+    content,
+    toolCalls,
+    finish,
+    usage,
+    responseMetrics: normalizedResponseMetrics,
+    debug
+  });
 }
 
 export function toToolResultMessage(toolCall: ToolCallRequest, result: ToolResult): ToolResultMessage {

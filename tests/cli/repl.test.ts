@@ -7,10 +7,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { defaultAgentSpec } from '../../src/agent/defaultAgentSpec.js';
 import { buildCli, type CliRunTurnResult } from '../../src/cli/main.js';
 import { createRepl } from '../../src/cli/repl.js';
+import type { TurnEvent } from '../../src/agent/loop.js';
 import { getDefaultModelForProvider, parseProviderId, resolveProviderConfig } from '../../src/provider/config.js';
 import { createJsonLineLogger } from '../../src/telemetry/logger.js';
 import { createInMemoryMetricsObserver } from '../../src/telemetry/metrics.js';
 import { createNoopObserver, createTelemetryEvent, type TelemetryObserver } from '../../src/telemetry/observer.js';
+import type { Tool } from '../../src/tools/tool.js';
 
 const tempDirs: string[] = [];
 const providerEnvKeys = [
@@ -94,6 +96,26 @@ function createTestRuntime(cwd: string, observer?: TelemetryObserver) {
     agentSpec: defaultAgentSpec,
     systemPrompt: 'Test prompt',
     maxToolRounds: 3
+  };
+}
+
+function createReadFileTool(): Tool<{ path: string }> {
+  return {
+    name: 'read_file',
+    description: 'Read a file',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string' }
+      },
+      required: ['path'],
+      additionalProperties: false
+    },
+    async execute(input) {
+      return {
+        content: `read:${input.path}`
+      };
+    }
   };
 }
 
@@ -244,6 +266,181 @@ describe('createRepl', () => {
       finalAnswer: 'echo: hello',
       stopReason: 'completed'
     });
+  });
+
+  it('forwards turn stream events before returning the final result', async () => {
+    const observedEvents: TurnEvent[] = [];
+    const turnEvents: TurnEvent[] = [
+      { type: 'turn_started' },
+      { type: 'assistant_text_delta', text: 'Thinking...' },
+      {
+        type: 'turn_completed',
+        finalAnswer: 'echo: hello',
+        stopReason: 'completed',
+        history: [],
+        toolRoundsUsed: 0,
+        doneCriteria: {
+          goal: 'hello',
+          checklist: ['hello'],
+          requiresNonEmptyFinalAnswer: true,
+          requiresToolEvidence: false,
+          requiresSubstantiveFinalAnswer: false,
+          forbidSuccessAfterToolErrors: false
+        },
+        turnCompleted: true
+      }
+    ];
+    const callOrder: string[] = [];
+    const repl = createRepl({
+      promptLabel: '> ',
+      runTurn: async (input) => ({
+        stopReason: 'completed',
+        finalAnswer: `echo: ${input}`,
+        toolRoundsUsed: 0,
+        verification: {
+          isVerified: true,
+          finalAnswerIsNonEmpty: true,
+          finalAnswerIsSubstantive: true,
+          toolEvidenceSatisfied: true,
+          noUnresolvedToolErrors: true,
+          toolMessagesCount: 0,
+          checks: []
+        },
+        turnStream: (async function* () {
+          for (const event of turnEvents) {
+            callOrder.push(`stream:${event.type}`);
+            yield event;
+          }
+        })()
+      }),
+      onTurnEvent(event) {
+        callOrder.push(`event:${event.type}`);
+        observedEvents.push(event);
+      },
+      readLine: async () => undefined,
+      writeLine() {}
+    });
+
+    const result = await repl.runOnce('hello');
+
+    expect(observedEvents).toEqual(turnEvents);
+    expect(callOrder).toEqual([
+      'stream:turn_started',
+      'event:turn_started',
+      'stream:assistant_text_delta',
+      'event:assistant_text_delta',
+      'stream:turn_completed',
+      'event:turn_completed'
+    ]);
+    expect(result).toEqual({
+      finalAnswer: 'echo: hello',
+      stopReason: 'completed'
+    });
+  });
+
+  it('awaits async turn event callbacks before returning the final result', async () => {
+    const turnEvents: TurnEvent[] = [
+      { type: 'turn_started' },
+      { type: 'assistant_text_delta', text: 'Thinking...' }
+    ];
+    const callOrder: string[] = [];
+    const repl = createRepl({
+      promptLabel: '> ',
+      runTurn: async (input) => ({
+        stopReason: 'completed',
+        finalAnswer: `echo: ${input}`,
+        toolRoundsUsed: 0,
+        verification: {
+          isVerified: true,
+          finalAnswerIsNonEmpty: true,
+          finalAnswerIsSubstantive: true,
+          toolEvidenceSatisfied: true,
+          noUnresolvedToolErrors: true,
+          toolMessagesCount: 0,
+          checks: []
+        },
+        turnStream: (async function* () {
+          for (const event of turnEvents) {
+            callOrder.push(`stream:${event.type}`);
+            yield event;
+          }
+        })()
+      }),
+      async onTurnEvent(event) {
+        callOrder.push(`event:start:${event.type}`);
+        await Promise.resolve();
+        callOrder.push(`event:end:${event.type}`);
+      },
+      readLine: async () => undefined,
+      writeLine() {}
+    });
+
+    const result = await repl.runOnce('hello');
+    callOrder.push('runOnce:resolved');
+
+    expect(callOrder).toEqual([
+      'stream:turn_started',
+      'event:start:turn_started',
+      'event:end:turn_started',
+      'stream:assistant_text_delta',
+      'event:start:assistant_text_delta',
+      'event:end:assistant_text_delta',
+      'runOnce:resolved'
+    ]);
+    expect(result).toEqual({
+      finalAnswer: 'echo: hello',
+      stopReason: 'completed'
+    });
+  });
+
+  it('consumes finalResult rejection when the stream throws after turn_failed', async () => {
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+
+    try {
+      const finalResult = Promise.reject(new Error('final result rejected after stream failure'));
+      const repl = createRepl({
+        promptLabel: '> ',
+        runTurn: async () => ({
+          stopReason: 'completed',
+          finalAnswer: '',
+          toolRoundsUsed: 0,
+          verification: {
+            isVerified: false,
+            finalAnswerIsNonEmpty: false,
+            finalAnswerIsSubstantive: false,
+            toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: false,
+            toolMessagesCount: 0,
+            checks: []
+          },
+          turnStream: (async function* () {
+            yield { type: 'turn_started' } satisfies TurnEvent;
+            yield {
+              type: 'turn_failed',
+              error: new Error('stream failed first')
+            } satisfies TurnEvent;
+            throw new Error('stream failed first');
+          })(),
+          finalResult
+        }),
+        readLine: async () => undefined,
+        writeLine() {}
+      });
+
+      await expect(repl.runOnce('hello')).rejects.toMatchObject({
+        message: 'stream failed first',
+        replTurnErrorRendered: true
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(unhandledRejections).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandledRejection);
+    }
   });
 
   it('tracks telemetry metrics deterministically from loop-level events', () => {
@@ -2200,6 +2397,485 @@ describe('buildCli', () => {
     });
   });
 
+  it('renders assistant text deltas live in prompt mode without duplicating the final block', async () => {
+    const { writes, cli } = createPromptCliTestHarness({
+      cwd: '/tmp/qiclaw-prompt-live-text',
+      runTurn: async (input) => ({
+        stopReason: 'completed',
+        finalAnswer: 'Xin chào',
+        history: [],
+        toolRoundsUsed: 0,
+        doneCriteria: {
+          goal: input.userInput,
+          checklist: [input.userInput],
+          requiresNonEmptyFinalAnswer: true,
+          requiresToolEvidence: false,
+          requiresSubstantiveFinalAnswer: false,
+          forbidSuccessAfterToolErrors: false
+        },
+        verification: {
+          isVerified: true,
+          finalAnswerIsNonEmpty: true,
+          finalAnswerIsSubstantive: true,
+          toolEvidenceSatisfied: true,
+          noUnresolvedToolErrors: true,
+          toolMessagesCount: 0,
+          checks: []
+        },
+        turnStream: (async function* () {
+          yield { type: 'turn_started' } satisfies TurnEvent;
+          yield { type: 'assistant_text_delta', text: 'Xin ' } satisfies TurnEvent;
+          expect(writes.join('')).toContain('\nQiClaw\n  Xin ');
+          yield { type: 'assistant_text_delta', text: 'chào' } satisfies TurnEvent;
+          yield {
+            type: 'assistant_message_completed',
+            text: 'Xin chào'
+          } satisfies TurnEvent;
+          yield {
+            type: 'turn_completed',
+            finalAnswer: 'Xin chào',
+            stopReason: 'completed',
+            history: [],
+            toolRoundsUsed: 0,
+            doneCriteria: {
+              goal: input.userInput,
+              checklist: [input.userInput],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            },
+            turnCompleted: true
+          } satisfies TurnEvent;
+        })()
+      })
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+    expectRenderedCliOutput(writes, '\nQiClaw\n  Xin chào\n');
+  });
+
+  it('renders assistant text deltas live in interactive mode without duplicating the final block', async () => {
+    const writes: string[] = [];
+    const cwd = join(tmpdir(), `qiclaw-interactive-live-text-${Math.random().toString(36).slice(2)}`);
+    const cli = buildCli({
+      argv: [],
+      cwd,
+      readLine: (() => {
+        const inputs = ['live text please', '/exit'];
+        return async () => inputs.shift();
+      })(),
+      stdout: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      createRuntime: (runtimeOptions) => createTestRuntime(cwd, runtimeOptions.observer),
+      runTurn: async (input) => ({
+        stopReason: 'completed',
+        finalAnswer: 'Xin chào',
+        history: [],
+        toolRoundsUsed: 0,
+        doneCriteria: {
+          goal: input.userInput,
+          checklist: [input.userInput],
+          requiresNonEmptyFinalAnswer: true,
+          requiresToolEvidence: false,
+          requiresSubstantiveFinalAnswer: false,
+          forbidSuccessAfterToolErrors: false
+        },
+        verification: {
+          isVerified: true,
+          finalAnswerIsNonEmpty: true,
+          finalAnswerIsSubstantive: true,
+          toolEvidenceSatisfied: true,
+          noUnresolvedToolErrors: true,
+          toolMessagesCount: 0,
+          checks: []
+        },
+        turnStream: (async function* () {
+          yield { type: 'turn_started' } satisfies TurnEvent;
+          yield { type: 'assistant_text_delta', text: 'Xin ' } satisfies TurnEvent;
+          expect(stripAnsi(writes.join(''))).toContain(
+            '└────────────────────────────────────────────────────┘\n\n──────────────────────────────────────────────────────\n\nXin '
+          );
+          yield { type: 'assistant_text_delta', text: 'chào' } satisfies TurnEvent;
+          yield {
+            type: 'assistant_message_completed',
+            text: 'Xin chào'
+          } satisfies TurnEvent;
+          yield {
+            type: 'turn_completed',
+            finalAnswer: 'Xin chào',
+            stopReason: 'completed',
+            history: [],
+            toolRoundsUsed: 0,
+            doneCriteria: {
+              goal: input.userInput,
+              checklist: [input.userInput],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            },
+            turnCompleted: true
+          } satisfies TurnEvent;
+        })(),
+        finalResult: Promise.resolve((() => {
+          input.observer?.record(createTelemetryEvent('turn_completed', 'completion_check', {
+            turnId: 'turn-live-text',
+            providerRound: 1,
+            toolRound: 0,
+            stopReason: 'completed',
+            toolRoundsUsed: 0,
+            isVerified: true,
+            durationMs: 1200
+          }));
+          input.observer?.record(createTelemetryEvent('turn_summary', 'completion_check', {
+            turnId: 'turn-live-text',
+            providerRound: 1,
+            toolRound: 0,
+            providerRounds: 1,
+            toolRoundsUsed: 0,
+            toolCallsTotal: 0,
+            toolCallsByName: {},
+            inputTokensTotal: 12,
+            outputTokensTotal: 8,
+            cacheReadInputTokens: 0,
+            promptCharsMax: 42,
+            toolResultCharsInFinalPrompt: 0,
+            assistantToolCallCharsInFinalPrompt: 0,
+            toolResultPromptGrowthCharsTotal: 0,
+            toolResultCharsAddedAcrossTurn: 0,
+            turnCompleted: true,
+            stopReason: 'completed'
+          }));
+
+          return {
+            stopReason: 'completed',
+            finalAnswer: 'Xin chào',
+            history: [],
+            toolRoundsUsed: 0,
+            doneCriteria: {
+              goal: input.userInput,
+              checklist: [input.userInput],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            },
+            verification: {
+              isVerified: true,
+              finalAnswerIsNonEmpty: true,
+              finalAnswerIsSubstantive: true,
+              toolEvidenceSatisfied: true,
+              noUnresolvedToolErrors: true,
+              toolMessagesCount: 0,
+              checks: []
+            }
+          };
+        })())
+      })
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+
+    const output = stripAnsi(writes.join(''));
+    expectContainsInOrder(output, [
+      '┌────────────────────────────────────────────────────┐\n',
+      '│ ⚡QiClaw                      🤖 Model: test-model │\n',
+      '└────────────────────────────────────────────────────┘\n',
+      '\n──────────────────────────────────────────────────────\n\nXin chào\n',
+      '──────────────────────────────────────────────────────\n',
+      '✔ DONE • 1 provider • 12 in / 8 out • ⏱️1.2s\n\n',
+      'Goodbye.\n'
+    ]);
+    expect(output).not.toContain('Xin chàoGoodbye.\n');
+  });
+
+  it('keeps streamed interactive text visible on TTY output with cursor controls', async () => {
+    const writes: string[] = [];
+    const cwd = join(tmpdir(), `qiclaw-interactive-live-text-tty-${Math.random().toString(36).slice(2)}`);
+    const cli = buildCli({
+      argv: [],
+      cwd,
+      readLine: (() => {
+        const inputs = ['live text please', '/exit'];
+        return async () => inputs.shift();
+      })(),
+      stdout: {
+        isTTY: true,
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        },
+        moveCursor(dx, dy) {
+          writes.push(`\u001b[${Math.abs(dy)}A`);
+          return true;
+        },
+        clearLine() {
+          writes.push('\u001b[2K');
+          return true;
+        }
+      } as Pick<NodeJS.WriteStream, 'write'> & {
+        isTTY: boolean;
+        moveCursor(dx: number, dy: number): boolean;
+        clearLine(dir: -1 | 0 | 1): boolean;
+      },
+      createRuntime: (runtimeOptions) => createTestRuntime(cwd, runtimeOptions.observer),
+      runTurn: async (input) => ({
+        stopReason: 'completed',
+        finalAnswer: 'Xin chào',
+        history: [],
+        toolRoundsUsed: 0,
+        doneCriteria: {
+          goal: input.userInput,
+          checklist: [input.userInput],
+          requiresNonEmptyFinalAnswer: true,
+          requiresToolEvidence: false,
+          requiresSubstantiveFinalAnswer: false,
+          forbidSuccessAfterToolErrors: false
+        },
+        verification: {
+          isVerified: true,
+          finalAnswerIsNonEmpty: true,
+          finalAnswerIsSubstantive: true,
+          toolEvidenceSatisfied: true,
+          noUnresolvedToolErrors: true,
+          toolMessagesCount: 0,
+          checks: []
+        },
+        turnStream: (async function* () {
+          yield { type: 'turn_started' } satisfies TurnEvent;
+          input.observer?.record(createTelemetryEvent('provider_called', 'provider_decision', {
+            turnId: 'turn-tty-live-text',
+            providerRound: 1,
+            toolRound: 0,
+            messageCount: 2,
+            promptRawChars: 42,
+            toolNames: [],
+            messageSummaries: [
+              { role: 'system', rawChars: 12, contentBlockCount: 1, messageSource: 'system' },
+              { role: 'user', rawChars: 20, contentBlockCount: 1, messageSource: 'user' }
+            ],
+            totalContentBlockCount: 2,
+            hasSystemPrompt: true,
+            promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"}]}'
+          }));
+          yield { type: 'assistant_text_delta', text: 'Xin ' } satisfies TurnEvent;
+          yield { type: 'assistant_text_delta', text: 'chào' } satisfies TurnEvent;
+          yield {
+            type: 'assistant_message_completed',
+            text: 'Xin chào'
+          } satisfies TurnEvent;
+          yield {
+            type: 'turn_completed',
+            finalAnswer: 'Xin chào',
+            stopReason: 'completed',
+            history: [],
+            toolRoundsUsed: 0,
+            doneCriteria: {
+              goal: input.userInput,
+              checklist: [input.userInput],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            },
+            turnCompleted: true
+          } satisfies TurnEvent;
+        })()
+      })
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+
+    const output = stripAnsi(renderTerminalTranscript(writes.join('')));
+    expectContainsInOrder(output, [
+      '┌────────────────────────────────────────────────────┐\n',
+      '│ ⚡QiClaw                      🤖 Model: test-model │\n',
+      '└────────────────────────────────────────────────────┘\n',
+      '✓ Responding\n',
+      'Xin chào\n',
+      'Goodbye.\n'
+    ]);
+  });
+
+  it('streams real runtime tool activity in prompt mode without duplicate telemetry render', async () => {
+    const writes: string[] = [];
+    const cwd = join(tmpdir(), `qiclaw-prompt-real-stream-${Math.random().toString(36).slice(2)}`);
+    let providerRound = 0;
+    const cli = buildCli({
+      argv: ['--prompt', 'run tool please'],
+      cwd,
+      stdout: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      createRuntime: (runtimeOptions) => ({
+        provider: {
+          name: 'test-provider',
+          model: 'test-model',
+          async generate() {
+            throw new Error('not used');
+          },
+          async *stream() {
+            providerRound += 1;
+            yield { type: 'start', provider: 'test-provider', model: 'test-model' } as const;
+
+            if (providerRound === 1) {
+              yield {
+                type: 'tool_call',
+                id: 'toolu_1',
+                name: 'read_file',
+                input: { path: 'src/cli/main.ts' }
+              } as const;
+              yield {
+                type: 'finish',
+                finish: { stopReason: 'tool_use' },
+                responseMetrics: {
+                  contentBlockCount: 1,
+                  toolCallCount: 1,
+                  hasTextOutput: false,
+                  contentBlocksByType: { tool_use: 1 }
+                },
+                debug: {
+                  toolCallSummaries: [{ id: 'toolu_1', name: 'read_file' }],
+                  responsePreviewRedacted: '[{"type":"tool_use"}]'
+                }
+              } as const;
+              return;
+            }
+
+            yield {
+              type: 'text_delta',
+              text: 'read:src/cli/main.ts'
+            } as const;
+            yield {
+              type: 'finish',
+              finish: { stopReason: 'stop' },
+              responseMetrics: {
+                contentBlockCount: 1,
+                toolCallCount: 0,
+                hasTextOutput: true,
+                contentBlocksByType: { text: 1 }
+              },
+              debug: {
+                responsePreviewRedacted: 'read:src/cli/main.ts'
+              }
+            } as const;
+          }
+        },
+        availableTools: [createReadFileTool()],
+        cwd,
+        observer: runtimeOptions.observer ?? createNoopObserver(),
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      })
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+
+    const output = stripAnsi(writes.join(''));
+    expectContainsInOrder(output, [
+      '\nQiClaw\n',
+      '  · read src/cli/main.ts\n',
+      '  read:src/cli/main.ts'
+    ]);
+    expect(output.match(/  · read src\/cli\/main\.ts\n/g)).toHaveLength(1);
+  });
+
+  it('renders streamed turn failure once and returns a non-zero exit when the stream throws after turn_failed', async () => {
+    const writes: string[] = [];
+    const cwd = join(tmpdir(), `qiclaw-interactive-tool-events-${Math.random().toString(36).slice(2)}`);
+    const cli = buildCli({
+      argv: [],
+      cwd,
+      readLine: (() => {
+        const inputs = ['run tool please'];
+        return async () => inputs.shift();
+      })(),
+      stdout: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      stderr: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      createRuntime: (runtimeOptions) => createTestRuntime(cwd, runtimeOptions.observer),
+      runTurn: async () => ({
+        stopReason: 'completed',
+        finalAnswer: '',
+        history: [],
+        toolRoundsUsed: 1,
+        doneCriteria: {
+          goal: 'run tool please',
+          checklist: ['run tool please'],
+          requiresNonEmptyFinalAnswer: false,
+          requiresToolEvidence: true,
+          requiresSubstantiveFinalAnswer: false,
+          forbidSuccessAfterToolErrors: false
+        },
+        verification: {
+          isVerified: false,
+          finalAnswerIsNonEmpty: false,
+          finalAnswerIsSubstantive: false,
+          toolEvidenceSatisfied: false,
+          noUnresolvedToolErrors: false,
+          toolMessagesCount: 1,
+          checks: []
+        },
+        turnStream: (async function* () {
+          yield { type: 'turn_started' } satisfies TurnEvent;
+          yield {
+            type: 'tool_call_started',
+            id: 'toolu_1',
+            name: 'read_file',
+            input: { path: 'src/cli/main.ts' }
+          } satisfies TurnEvent;
+          expect(stripAnsi(writes.join(''))).toContain(' ✦ read src/cli/main.ts\n');
+          yield {
+            type: 'tool_call_completed',
+            id: 'toolu_1',
+            name: 'read_file',
+            resultPreview: 'export function buildCli',
+            isError: false
+          } satisfies TurnEvent;
+          yield {
+            type: 'turn_failed',
+            error: new Error('Tool crashed')
+          } satisfies TurnEvent;
+          throw new Error('Tool crashed');
+        })()
+      })
+    });
+
+    await expect(cli.run()).resolves.toBe(1);
+
+    const output = stripAnsi(writes.join(''));
+    expectContainsInOrder(output, [
+      '┌────────────────────────────────────────────────────┐\n',
+      '│ ⚡QiClaw                      🤖 Model: test-model │\n',
+      '└────────────────────────────────────────────────────┘\n',
+      ' ✦ read src/cli/main.ts\n',
+      ' └─ ✔ Success\n',
+      '  export function buildCli\n',
+      '──────────────────────────────────────────────────────\n',
+      '✖ FAIL: Tool crashed\n'
+    ]);
+    expect(output.match(/ [✦✧✱✲✳✴] read src\/cli\/main\.ts\n/g)).toHaveLength(1);
+    expect(output.match(/Tool crashed\n/g)).toHaveLength(1);
+  });
+
   it('passes the selected provider and model to runtime creation in prompt mode', async () => {
     await withProviderEnvSnapshot(async () => {
       delete process.env.OPENAI_BASE_URL;
@@ -3303,6 +3979,212 @@ describe('buildCli', () => {
         historyLength: 6
       }
     ]);
+  });
+
+  it('renders footer for default interactive streaming runtime path', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-default-stream-footer-'));
+    tempDirs.push(tempDir);
+
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: [],
+      cwd: tempDir,
+      stdout: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      createRuntime: (runtimeOptions) => ({
+        provider: {
+          name: 'test-provider',
+          model: 'test-model',
+          async generate() {
+            throw new Error('not used');
+          },
+          async *stream() {
+            yield { type: 'start', provider: 'test-provider', model: 'test-model' } as const;
+            yield { type: 'text_delta', text: 'Xin ' } as const;
+            yield { type: 'text_delta', text: 'chào' } as const;
+            yield {
+              type: 'finish',
+              finish: { stopReason: 'completed' },
+              usage: { inputTokens: 12, outputTokens: 8, totalTokens: 20 },
+              responseMetrics: {
+                contentBlockCount: 1,
+                toolCallCount: 0,
+                hasTextOutput: true,
+                contentBlocksByType: { text: 1 }
+              },
+              debug: {
+                responseContentBlocksByType: { text: 1 },
+                responsePreviewRedacted: '[{"type":"text"}]'
+              }
+            } as const;
+          }
+        },
+        availableTools: [],
+        cwd: tempDir,
+        observer: runtimeOptions.observer ?? createNoopObserver(),
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      createSessionId: () => 'session-default-stream-footer',
+      readLine: (() => {
+        const inputs = ['streamed question', '/exit'];
+        return async () => inputs.shift();
+      })()
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+    const output = stripAnsi(writes.join(''));
+    expectContainsInOrder(output, [
+      '┌────────────────────────────────────────────────────┐\n',
+      '│ ⚡QiClaw                      🤖 Model: test-model │\n',
+      '└────────────────────────────────────────────────────┘\n',
+      '\n──────────────────────────────────────────────────────\n\nXin chào\n',
+      '──────────────────────────────────────────────────────\n',
+      '✔ DONE • 1 provider • 12 in / 8 out • ⏱️',
+      'Goodbye.\n'
+    ]);
+  });
+
+  it('does not deadlock interactive streamed turns when finalResult depends on stream consumption', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-final-result-'));
+    tempDirs.push(tempDir);
+
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: [],
+      cwd: tempDir,
+      stdout: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      createRuntime: (runtimeOptions) => ({
+        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        availableTools: [],
+        cwd: tempDir,
+        observer: runtimeOptions.observer ?? createNoopObserver(),
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      createSessionId: () => 'session-final-result',
+      readLine: (() => {
+        const inputs = ['streamed question', '/exit'];
+        return async () => inputs.shift();
+      })(),
+      runTurn: async (input) => {
+        const finalHistory = [
+          ...(input.history ?? []),
+          { role: 'user' as const, content: input.userInput },
+          { role: 'assistant' as const, content: 'resolved final answer' }
+        ];
+
+        let resolveFinalResult: ((value: CliRunTurnResult & { historySummary: string }) => void) | undefined;
+        const finalResult = new Promise<CliRunTurnResult & { historySummary: string }>((resolve) => {
+          resolveFinalResult = resolve;
+        });
+
+        return {
+          stopReason: 'completed',
+          finalAnswer: '',
+          history: [],
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: false,
+            finalAnswerIsNonEmpty: false,
+            finalAnswerIsSubstantive: false,
+            toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
+            toolMessagesCount: 0,
+            checks: []
+          },
+          turnStream: (async function* () {
+            yield { type: 'turn_started' } satisfies TurnEvent;
+            yield { type: 'assistant_text_delta', text: 'resolved ' } satisfies TurnEvent;
+            yield { type: 'assistant_text_delta', text: 'final answer' } satisfies TurnEvent;
+            yield {
+              type: 'assistant_message_completed',
+              text: 'resolved final answer'
+            } satisfies TurnEvent;
+            resolveFinalResult?.({
+              stopReason: 'completed',
+              finalAnswer: 'resolved final answer',
+              history: finalHistory,
+              toolRoundsUsed: 0,
+              doneCriteria: {
+                goal: input.userInput,
+                checklist: [input.userInput],
+                requiresNonEmptyFinalAnswer: true,
+                requiresToolEvidence: false,
+                requiresSubstantiveFinalAnswer: false,
+                forbidSuccessAfterToolErrors: false
+              },
+              verification: {
+                isVerified: true,
+                finalAnswerIsNonEmpty: true,
+                finalAnswerIsSubstantive: true,
+                toolEvidenceSatisfied: true,
+                noUnresolvedToolErrors: true,
+                toolMessagesCount: 0,
+                checks: []
+              },
+              historySummary: 'resolved summary'
+            });
+            yield {
+              type: 'turn_completed',
+              finalAnswer: 'resolved final answer',
+              stopReason: 'completed',
+              history: finalHistory,
+              toolRoundsUsed: 0,
+              doneCriteria: {
+                goal: input.userInput,
+                checklist: [input.userInput],
+                requiresNonEmptyFinalAnswer: true,
+                requiresToolEvidence: false,
+                requiresSubstantiveFinalAnswer: false,
+                forbidSuccessAfterToolErrors: false
+              },
+              turnCompleted: true
+            } satisfies TurnEvent;
+          })(),
+          finalResult
+        };
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+
+    const checkpointPath = join(tempDir, '.qiclaw', 'checkpoint.sqlite');
+    const { CheckpointStore } = await import('../../src/session/checkpointStore.js');
+    const { parseInteractiveCheckpointJson } = await import('../../src/session/session.js');
+    const checkpointStore = new CheckpointStore(checkpointPath);
+    const latestCheckpoint = checkpointStore.getLatest();
+
+    expect(latestCheckpoint?.sessionId).toBe('session-final-result');
+    expect(parseInteractiveCheckpointJson(latestCheckpoint?.checkpointJson ?? '')).toMatchObject({
+      history: [
+        { role: 'user', content: 'streamed question' },
+        { role: 'assistant', content: 'resolved final answer' }
+      ],
+      historySummary: 'resolved summary'
+    });
+
+    const output = stripAnsi(writes.join(''));
+    expect(output).toContain('\nresolved final answer');
   });
 
   it('keeps prompt mode stateless and does not load checkpoints', async () => {

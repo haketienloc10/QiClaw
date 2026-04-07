@@ -17,6 +17,7 @@ import type { Tool } from '../tools/registry.js';
 import {
   normalizeProviderResponse,
   type ModelProvider,
+  type NormalizedEvent,
   type ProviderDebugMetadata,
   type ProviderFinishSummary,
   type ProviderRequest,
@@ -145,6 +146,9 @@ export function createAnthropicProvider(options: AnthropicProviderOptions): Mode
   return {
     name: 'anthropic',
     model: options.model,
+    async *stream(_request: ProviderRequest): AsyncIterable<NormalizedEvent> {
+      throw new Error('Anthropic provider does not support streaming yet.');
+    },
     async generate(request: ProviderRequest): Promise<ProviderResponse> {
       const client = new Anthropic({
         apiKey: getAnthropicApiKey(options.apiKey),
@@ -247,10 +251,12 @@ function isAnthropicTextBlock(value: unknown): value is { type: 'text'; text: st
     && typeof (value as { text?: unknown }).text === 'string';
 }
 
-function isAnthropicToolUseBlock(value: unknown): value is { type: 'tool_use'; id: string; name: string; input: unknown } {
+function isAnthropicToolUseBlock(value: unknown): value is { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> } {
   return typeof value === 'object' && value !== null
     && (value as { type?: unknown }).type === 'tool_use'
     && typeof (value as { id?: unknown }).id === 'string'
     && typeof (value as { name?: unknown }).name === 'string'
-    && 'input' in value;
+    && typeof (value as { input?: unknown }).input === 'object'
+    && (value as { input?: unknown }).input !== null
+    && !Array.isArray((value as { input?: unknown }).input);
 }

@@ -2,7 +2,12 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import pc from 'picocolors';
 import { createAgentRuntime, type AgentRuntime } from '../agent/runtime.js';
-import { runAgentTurn, type RunAgentTurnInput, type RunAgentTurnResult } from '../agent/loop.js';
+import {
+  createRunAgentTurnExecution,
+  type RunAgentTurnInput,
+  type RunAgentTurnResult,
+  type TurnEvent
+} from '../agent/loop.js';
 import { pruneHistoryForContext } from '../context/historyPruner.js';
 import { parseProviderId, resolveProviderConfig } from '../provider/config.js';
 import type { ProviderId, ResolvedProviderConfig } from '../provider/model.js';
@@ -39,6 +44,9 @@ interface AssistantBlockWriter {
   writeAssistantLine(text: string, toolCallId?: string): void;
   writeAssistantLineBelow(toolCallId: string, text: string): void;
   replaceAssistantLine(toolCallId: string, text: string): void;
+  writeAssistantTextDelta(text: string): void;
+  finishAssistantTextBlock(): void;
+  hasStreamedAssistantText(): boolean;
   writeAssistantTextBlock(text: string): void;
   writeFooterLine(text: string): void;
   resetTurn(): void;
@@ -100,9 +108,38 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
   const sessionIdFactory = options.createSessionId ?? createSessionId;
   const prepareSessionMemory = options.prepareSessionMemory ?? prepareInteractiveSessionMemory;
   const captureTurnMemory = options.captureTurnMemory ?? captureInteractiveTurnMemory;
-  const executeTurn: (input: CliRunTurnInput) => Promise<CliRunTurnResult> = options.runTurn
+  const executeTurn: (input: CliRunTurnInput) => Promise<CliRunTurnResult & { finalResult?: Promise<CliRunTurnResult> }> = options.runTurn
     ? options.runTurn
-    : async ({ sessionId: _sessionId, ...input }) => runAgentTurn(input);
+    : async ({ sessionId: _sessionId, ...input }) => {
+        const execution = createRunAgentTurnExecution(input);
+        const turnResult = execution.turnResult;
+
+        return {
+          stopReason: 'completed',
+          finalAnswer: '',
+          history: [],
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: false,
+            finalAnswerIsNonEmpty: false,
+            finalAnswerIsSubstantive: false,
+            toolEvidenceSatisfied: false,
+            noUnresolvedToolErrors: false,
+            toolMessagesCount: 0,
+            checks: []
+          },
+          turnStream: execution.turnStream,
+          finalResult: turnResult
+        };
+      };
 
   return {
     async run() {
@@ -131,6 +168,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
           debugLogPath: parsed.debugLogPath,
           envDebugLogPath: process.env.QICLAW_DEBUG_LOG,
           showCompactToolStatus: true,
+          suppressTelemetryToolActivity: !options.runTurn,
           assistantBlockWriter,
           mode: parsed.prompt ? 'compact' : 'interactive'
         });
@@ -152,20 +190,33 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
                 observer: cliObserver.observer
               });
             },
+            async onTurnEvent(event) {
+              handleCliTurnEvent(event, assistantBlockWriter, 'compact');
+            },
             writeLine(text) {
               stdout.write(`${text}\n`);
             },
             renderFinalAnswer(text) {
-              assistantBlockWriter?.writeAssistantTextBlock(text);
+              if (!assistantBlockWriter?.hasStreamedAssistantText() && text.length > 0) {
+                assistantBlockWriter?.writeAssistantTextBlock(text);
+              }
             }
           });
+          try {
           const result = await repl.runOnce(parsed.prompt);
-          if (result.finalAnswer.length > 0) {
+          if (!assistantBlockWriter?.hasStreamedAssistantText() && result.finalAnswer.length > 0) {
             assistantBlockWriter?.writeAssistantTextBlock(result.finalAnswer);
           }
           cliObserver.flushPendingFooter();
           assistantBlockWriter?.resetTurn();
           return 0;
+        } catch (error) {
+          if (error instanceof Error && 'replTurnErrorRendered' in error && error.replTurnErrorRendered === true) {
+            assistantBlockWriter?.resetTurn();
+            return 1;
+          }
+          throw error;
+        }
         }
 
         const checkpointStorePath = getCheckpointStorePath(runtime.cwd);
@@ -194,6 +245,9 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
           multilineNoticeText: formatInteractiveInfoLine('Multiline mode on. Enter /send to submit or /cancel to discard.'),
           multilineDiscardedText: formatInteractiveInfoLine('Multiline draft discarded.'),
           readLine: options.readLine,
+          async onTurnEvent(event) {
+            handleCliTurnEvent(event, assistantBlockWriter, 'interactive');
+          },
           async runTurn(userInput) {
             let preparedMemory:
               | Awaited<ReturnType<typeof prepareInteractiveSessionMemory>>
@@ -231,55 +285,66 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
               memoryText: preparedMemory?.memoryText ?? '',
               sessionId
             });
+            const settledResultPromise = (result.finalResult
+              ? result.finalResult
+              : Promise.resolve(result))
+              .then(async (settledResult) => {
+                if (settledResult.stopReason === 'completed' || settledResult.stopReason === 'max_tool_rounds_reached') {
+                  const newTurnMessages = settledResult.history.slice(historyContext.history.length);
+                  history = [...history, ...newTurnMessages];
+                  historySummary = readTurnHistorySummary(settledResult) ?? historyContext.historySummary;
 
-            if (result.stopReason === 'completed' || result.stopReason === 'max_tool_rounds_reached') {
-              const newTurnMessages = result.history.slice(historyContext.history.length);
-              history = [...history, ...newTurnMessages];
-              historySummary = readTurnHistorySummary(result) ?? historyContext.historySummary;
+                  if (preparedMemory) {
+                    try {
+                      const captureResult = await captureTurnMemory({
+                        store: preparedMemory.store,
+                        sessionId: sessionMemoryState?.storeSessionId ?? sessionId,
+                        userInput,
+                        finalAnswer: settledResult.finalAnswer,
+                        history
+                      });
 
-              if (preparedMemory) {
-                try {
-                  const captureResult = await captureTurnMemory({
-                    store: preparedMemory.store,
-                    sessionId: sessionMemoryState?.storeSessionId ?? sessionId,
-                    userInput,
-                    finalAnswer: result.finalAnswer,
-                    history
-                  });
+                      sessionMemoryState = captureResult.saved
+                        ? captureResult.checkpointState
+                        : preparedMemory.checkpointState;
+                    } catch (error) {
+                      sessionMemoryState = preparedMemory.checkpointState;
+                      recordInteractiveMemoryFallback(cliObserver.observer, {
+                        sessionId,
+                        message: formatCliError(error),
+                        kind: 'capture'
+                      });
+                    }
+                  }
 
-                  sessionMemoryState = captureResult.saved
-                    ? captureResult.checkpointState
-                    : preparedMemory.checkpointState;
-                } catch (error) {
-                  sessionMemoryState = preparedMemory.checkpointState;
-                  recordInteractiveMemoryFallback(cliObserver.observer, {
+                  checkpointStore.save({
                     sessionId,
-                    message: formatCliError(error),
-                    kind: 'capture'
+                    taskId: 'interactive',
+                    status: settledResult.stopReason === 'completed' ? 'completed' : 'running',
+                    checkpointJson: createInteractiveCheckpointJson({
+                      version: 1,
+                      history,
+                      historySummary,
+                      sessionMemory: sessionMemoryState
+                    })
                   });
                 }
-              }
 
-              checkpointStore.save({
-                sessionId,
-                taskId: 'interactive',
-                status: result.stopReason === 'completed' ? 'completed' : 'running',
-                checkpointJson: createInteractiveCheckpointJson({
-                  version: 1,
-                  history,
-                  historySummary,
-                  sessionMemory: sessionMemoryState
-                })
+                return settledResult;
               });
-            }
 
-            return result;
+            return {
+              ...result,
+              finalResult: settledResultPromise
+            };
           },
           writeLine(text) {
             stdout.write(`${text}\n`);
           },
           renderFinalAnswer(text) {
-            assistantBlockWriter?.writeAssistantTextBlock(text);
+            if (!assistantBlockWriter?.hasStreamedAssistantText() && text.length > 0) {
+              assistantBlockWriter?.writeAssistantTextBlock(text);
+            }
           },
           afterTurnRendered() {
             cliObserver.flushPendingFooter();
@@ -287,7 +352,15 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
           }
         });
 
-        return repl.runInteractive();
+        try {
+          return await repl.runInteractive();
+        } catch (error) {
+          if (error instanceof Error && 'replTurnErrorRendered' in error && error.replTurnErrorRendered === true) {
+            assistantBlockWriter?.resetTurn();
+            return 1;
+          }
+          throw error;
+        }
       } catch (error) {
         stderr.write(`${formatCliError(error)}\n`);
         return 1;
@@ -337,6 +410,119 @@ function recordInteractiveMemoryFallback(
   }));
 }
 
+function handleCliTurnEvent(
+  event: TurnEvent,
+  assistantBlockWriter: AssistantBlockWriter | undefined,
+  mode: CliDisplayMode
+): void {
+  if (event.type === 'assistant_text_delta') {
+    assistantBlockWriter?.writeAssistantTextDelta(event.text);
+    return;
+  }
+
+  if (event.type === 'assistant_message_completed') {
+    assistantBlockWriter?.finishAssistantTextBlock();
+    return;
+  }
+
+  if (event.type === 'tool_call_started') {
+    const activityLine = formatTurnEventToolActivityLine(event, mode);
+    if (activityLine) {
+      assistantBlockWriter?.writeAssistantLine(activityLine, event.id);
+    }
+    return;
+  }
+
+  if (event.type === 'tool_call_completed') {
+    if (mode === 'interactive') {
+      assistantBlockWriter?.writeAssistantLineBelow(event.id, formatTurnEventToolCompletionLine(event));
+    } else {
+      assistantBlockWriter?.replaceAssistantLine(event.id, formatTurnEventToolCompletionLine(event));
+    }
+
+    const previewLine = formatTurnEventToolPreviewLine(event.resultPreview, mode);
+    if (previewLine) {
+      assistantBlockWriter?.writeAssistantLineBelow(event.id, previewLine);
+    }
+    return;
+  }
+
+  if (event.type === 'turn_failed') {
+    assistantBlockWriter?.writeFooterLine(`${pc.dim('─'.repeat(54))}\n${pc.red('✖')} ${pc.red(pc.bold(`FAIL: ${formatCliError(event.error)}`))}`);
+  }
+}
+
+function formatTurnEventToolActivityLine(
+  event: Extract<TurnEvent, { type: 'tool_call_started' }>,
+  mode: CliDisplayMode
+): string | undefined {
+  const label = formatTurnEventToolLabel(event.name, event.input);
+
+  if (!label) {
+    return undefined;
+  }
+
+  return mode === 'interactive' ? ` ${pc.cyan('✦')} ${label}` : `· ${label}`;
+}
+
+function formatTurnEventToolCompletionLine(
+  event: Extract<TurnEvent, { type: 'tool_call_completed' }>
+): string {
+  return event.isError
+    ? ` └─ ${pc.red('✖')} ${pc.red('Fail')}`
+    : ` └─ ${pc.green('✔')} ${pc.green('Success')}`;
+}
+
+function formatTurnEventToolPreviewLine(resultPreview: string, mode: CliDisplayMode): string | undefined {
+  const preview = resultPreview.trim();
+
+  if (preview.length === 0) {
+    return undefined;
+  }
+
+  return mode === 'interactive' ? `  ${preview}` : `· ${preview}`;
+}
+
+function formatTurnEventToolLabel(toolName: string, input: Record<string, unknown>): string | undefined {
+  if (toolName === 'shell_readonly' || toolName === 'shell_exec') {
+    return `${toolName === 'shell_readonly' ? 'shell:read' : 'shell:exec'} ${formatTurnEventCommandLabel(input)}`;
+  }
+
+  if (toolName === 'read_file') {
+    return `read ${formatTurnEventPathLabel(input, 'file')}`;
+  }
+
+  if (toolName === 'edit_file') {
+    return `edit ${formatTurnEventPathLabel(input, 'file')}`;
+  }
+
+  if (toolName === 'search') {
+    return `search ${formatTurnEventSearchLabel(input)}`;
+  }
+
+  return undefined;
+}
+
+function formatTurnEventCommandLabel(input: Record<string, unknown>): string {
+  const command = typeof input.command === 'string' ? input.command.trim() : '';
+  const args = Array.isArray(input.args)
+    ? input.args.filter((arg): arg is string => typeof arg === 'string' && arg.length > 0)
+    : [];
+  const label = [command, ...args].filter((part) => part.length > 0).join(' ').trim();
+
+  return label.length > 0 ? label : 'command';
+}
+
+function formatTurnEventPathLabel(input: Record<string, unknown>, fallbackNoun: string): string {
+  const path = typeof input.path === 'string' ? input.path.trim() : '';
+  return path.length > 0 ? path : fallbackNoun;
+}
+
+function formatTurnEventSearchLabel(input: Record<string, unknown>): string {
+  const pattern = typeof input.pattern === 'string' ? input.pattern.trim() : '';
+  return pattern.length > 0 ? pattern : 'pattern';
+}
+
 function createAssistantBlockWriter(stdout: CliStdout, mode: CliDisplayMode): AssistantBlockWriter {
   const showAssistantLabel = mode === 'compact';
   let hasStartedTurn = false;
@@ -347,6 +533,9 @@ function createAssistantBlockWriter(stdout: CliStdout, mode: CliDisplayMode): As
   let providerStatusFrameIndex = 0;
   let hasRenderedProviderStatusLine = false;
   let providerStatusTimer: ReturnType<typeof setInterval> | undefined;
+  let hasStreamedAssistantTextInTurn = false;
+  let hasOpenedInteractiveStreamTextBlock = false;
+  let isAssistantTextLineOpen = false;
   const activityLineIndexes = new Map<string, number>();
   const renderedActivityLines: string[] = [];
   const providerThinkingFrames = [
@@ -520,6 +709,26 @@ function createAssistantBlockWriter(stdout: CliStdout, mode: CliDisplayMode): As
     providerStatus = 'responding';
   }
 
+  function writeAssistantTextPrefixIfNeeded(): void {
+    if (mode !== 'compact') {
+      return;
+    }
+
+    if (!isAssistantTextLineOpen) {
+      write('  ');
+      isAssistantTextLineOpen = true;
+    }
+  }
+
+  function closeAssistantTextLineIfNeeded(): void {
+    if (!isAssistantTextLineOpen) {
+      return;
+    }
+
+    write('\n');
+    isAssistantTextLineOpen = false;
+  }
+
   return {
     startProviderThinking() {
       clearProviderStatusTimer();
@@ -591,6 +800,42 @@ function createAssistantBlockWriter(stdout: CliStdout, mode: CliDisplayMode): As
 
       writeRenderedActivityLine(text);
     },
+    writeAssistantTextDelta(text: string) {
+      if (text.length === 0) {
+        return;
+      }
+
+      ensureTurnPrelude();
+      ensureRespondingStatus();
+      activeActivityLineCount = 0;
+      hasStreamedAssistantTextInTurn = true;
+
+      if (mode === 'interactive') {
+        if (!hasOpenedInteractiveStreamTextBlock) {
+          write(`${pc.dim('─'.repeat(54))}\n`);
+          write('\n');
+          hasOpenedInteractiveStreamTextBlock = true;
+        }
+
+        write(text);
+        return;
+      }
+
+      writeAssistantTextPrefixIfNeeded();
+      write(text);
+    },
+    finishAssistantTextBlock() {
+      closeAssistantTextLineIfNeeded();
+
+      if (mode === 'interactive' && hasStreamedAssistantTextInTurn && trailingNewlineCount === 0) {
+        write('\n');
+      }
+
+      providerStatus = undefined;
+    },
+    hasStreamedAssistantText(): boolean {
+      return hasStreamedAssistantTextInTurn;
+    },
     writeAssistantTextBlock(text: string) {
       ensureTurnPrelude();
       ensureRespondingStatus();
@@ -604,6 +849,7 @@ function createAssistantBlockWriter(stdout: CliStdout, mode: CliDisplayMode): As
           write(`${line}\n`);
         }
       } else {
+        closeAssistantTextLineIfNeeded();
         for (const line of text.split('\n')) {
           write(`  ${line}\n`);
         }
@@ -614,6 +860,7 @@ function createAssistantBlockWriter(stdout: CliStdout, mode: CliDisplayMode): As
     writeFooterLine(text: string) {
       ensureTurnPrelude();
       ensureRespondingStatus();
+      closeAssistantTextLineIfNeeded();
       activeActivityLineCount = 0;
       write(`${text}\n\n`);
       providerStatus = undefined;
@@ -625,6 +872,9 @@ function createAssistantBlockWriter(stdout: CliStdout, mode: CliDisplayMode): As
       providerStatus = undefined;
       providerStatusFrameIndex = 0;
       hasRenderedProviderStatusLine = false;
+      hasStreamedAssistantTextInTurn = false;
+      hasOpenedInteractiveStreamTextBlock = false;
+      isAssistantTextLineOpen = false;
       activityLineIndexes.clear();
       renderedActivityLines.length = 0;
     }
@@ -637,6 +887,7 @@ function createCliObserver(options: {
   debugLogPath?: string;
   envDebugLogPath?: string;
   showCompactToolStatus?: boolean;
+  suppressTelemetryToolActivity?: boolean;
   assistantBlockWriter: AssistantBlockWriter;
   mode?: 'compact' | 'interactive';
 }): {
@@ -651,12 +902,24 @@ function createCliObserver(options: {
     compactObserver = createCompactCliTelemetryObserver({
       mode: options.mode,
       writeActivityLine(text, toolCallId) {
+        if (options.suppressTelemetryToolActivity) {
+          return;
+        }
+
         options.assistantBlockWriter.writeAssistantLine(text, toolCallId);
       },
       writeActivityLineBelow(toolCallId, text) {
+        if (options.suppressTelemetryToolActivity) {
+          return;
+        }
+
         options.assistantBlockWriter.writeAssistantLineBelow(toolCallId, text);
       },
       replaceActivityLine(toolCallId, text) {
+        if (options.suppressTelemetryToolActivity) {
+          return;
+        }
+
         options.assistantBlockWriter.replaceAssistantLine(toolCallId, text);
       },
       writeFooterLine(text) {

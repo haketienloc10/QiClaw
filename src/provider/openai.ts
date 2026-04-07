@@ -3,7 +3,9 @@ import type {
   FunctionTool,
   Response,
   ResponseCreateParamsNonStreaming,
-  ResponseInput
+  ResponseCreateParamsStreaming,
+  ResponseInput,
+  ResponseStreamEvent
 } from 'openai/resources/responses/responses';
 
 import type { Message } from '../core/types.js';
@@ -15,8 +17,10 @@ import {
 import type { Tool } from '../tools/registry.js';
 
 import {
+  collectProviderStream,
   normalizeProviderResponse,
   type ModelProvider,
+  type NormalizedEvent,
   type ProviderDebugMetadata,
   type ProviderFinishSummary,
   type ProviderRequest,
@@ -30,12 +34,14 @@ export interface OpenAIProviderOptions {
   model: string;
   apiKey?: string;
   baseUrl?: string;
+  createClient?: () => OpenAI;
 }
 
 export interface BuildOpenAIResponsesRequestInput {
   model: string;
   messages: Message[];
   availableTools: Tool[];
+  stream?: boolean;
 }
 
 export function getOpenAIApiKey(apiKeyOverride?: string): string {
@@ -48,14 +54,21 @@ export function getOpenAIApiKey(apiKeyOverride?: string): string {
   return apiKey;
 }
 
+function createOpenAIClient(options: OpenAIProviderOptions): OpenAI {
+  return options.createClient?.() ?? new OpenAI({
+    apiKey: getOpenAIApiKey(options.apiKey),
+    baseURL: options.baseUrl
+  });
+}
+
 export function buildOpenAIResponsesRequest(
   input: BuildOpenAIResponsesRequestInput
-): ResponseCreateParamsNonStreaming {
+): ResponseCreateParamsNonStreaming | ResponseCreateParamsStreaming {
   const { instructions, conversation } = splitSystemPrompt(input.messages);
 
   return {
     model: input.model,
-    stream: false,
+    stream: input.stream ?? false,
     instructions,
     input: conversation,
     tools: input.availableTools.map(toOpenAIFunctionTool)
@@ -125,7 +138,7 @@ function redactOpenAIOutputForPreview(output: unknown[]): unknown[] {
   });
 }
 
-export function normalizeOpenAIResponseMetadata(response: {
+export interface OpenAIResponsePayload {
   id: string;
   model: string;
   status?: string | null;
@@ -141,7 +154,9 @@ export function normalizeOpenAIResponseMetadata(response: {
   incomplete_details?: {
     reason?: string | null;
   } | null;
-}): {
+}
+
+export function normalizeOpenAIResponseMetadata(response: OpenAIResponsePayload): {
   finish: ProviderFinishSummary;
   usage: ProviderUsageSummary;
   responseMetrics: ProviderResponseMetrics;
@@ -180,37 +195,136 @@ export function normalizeOpenAIResponseMetadata(response: {
   };
 }
 
+export function toOpenAINormalizedEventsFromResponse(response: OpenAIResponsePayload): NormalizedEvent[] {
+  const metadata = normalizeOpenAIResponseMetadata(response);
+  const events: NormalizedEvent[] = [
+    { type: 'start', provider: 'openai', model: response.model }
+  ];
+
+  const text = readOpenAITextContent(response.output);
+  if (text.length > 0) {
+    events.push({ type: 'text_delta', text });
+  }
+
+  for (const toolCall of extractOpenAIToolCalls(response.output)) {
+    events.push({
+      type: 'tool_call',
+      id: toolCall.id,
+      name: toolCall.name,
+      input: toolCall.input
+    });
+  }
+
+  events.push({
+    type: 'finish',
+    finish: metadata.finish,
+    usage: metadata.usage,
+    responseMetrics: metadata.responseMetrics,
+    debug: metadata.debug
+  });
+
+  return events;
+}
+
 export function createOpenAIProvider(options: OpenAIProviderOptions): ModelProvider {
   return {
     name: 'openai',
     model: options.model,
-    async generate(request: ProviderRequest): Promise<ProviderResponse> {
-      const client = new OpenAI({
-        apiKey: getOpenAIApiKey(options.apiKey),
-        baseURL: options.baseUrl
-      });
-      const response: Response = await client.responses.create(buildOpenAIResponsesRequest({
+    async *stream(request: ProviderRequest): AsyncIterable<NormalizedEvent> {
+      const client = createOpenAIClient(options);
+      const stream = await client.responses.create(buildOpenAIResponsesRequest({
         model: options.model,
         messages: request.messages,
-        availableTools: request.availableTools
-      }));
+        availableTools: request.availableTools,
+        stream: true
+      })) as AsyncIterable<ResponseStreamEvent>;
 
-      const metadata = normalizeOpenAIResponseMetadata(response);
-      const content = readOpenAITextContent(response.output);
-      const toolCalls = extractOpenAIToolCalls(response.output);
+      let sawStart = false;
+      let completedResponse: Response | undefined;
+      const emittedToolCalls = new Map<string, { name: string; input: Record<string, unknown> }>();
 
-      if (metadata.finish.stopReason && !metadata.responseMetrics.hasTextOutput && toolCalls.length === 0) {
-        throw new Error(`OpenAI response incomplete: ${metadata.finish.stopReason}`);
+      for await (const event of stream) {
+        switch (event.type) {
+          case 'response.created':
+            if (!sawStart) {
+              sawStart = true;
+              yield {
+                type: 'start',
+                provider: 'openai',
+                model: event.response.model
+              };
+            }
+            break;
+          case 'response.output_text.delta':
+            if (event.delta) {
+              yield { type: 'text_delta', text: event.delta };
+            }
+            break;
+          case 'response.output_item.done':
+            if (event.item.type === 'function_call' && !emittedToolCalls.has(event.item.call_id)) {
+              const input = parseOpenAIToolArguments(event.item.name, event.item.arguments);
+              emittedToolCalls.set(event.item.call_id, {
+                name: event.item.name,
+                input
+              });
+              yield {
+                type: 'tool_call',
+                id: event.item.call_id,
+                name: event.item.name,
+                input
+              };
+            }
+            break;
+          case 'response.failed':
+            throw new Error('OpenAI response stream failed.');
+          case 'response.incomplete':
+            completedResponse = event.response;
+            break;
+          case 'response.completed':
+            completedResponse = event.response;
+            break;
+          default:
+            if (!isIgnorableOpenAIResponseStreamEvent(event.type)) {
+              throw new Error(`Unsupported OpenAI response stream event: ${event.type}`);
+            }
+        }
       }
 
-      return normalizeProviderResponse({
-        content,
-        toolCalls,
-        finish: metadata.finish,
-        usage: metadata.usage,
-        responseMetrics: metadata.responseMetrics,
-        debug: metadata.debug
-      });
+      if (!completedResponse) {
+        throw new Error('OpenAI stream ended without response.completed event.');
+      }
+
+      for (const event of toOpenAINormalizedEventsFromResponse(completedResponse)) {
+        if (event.type === 'start') {
+          if (!sawStart) {
+            yield event;
+          }
+          continue;
+        }
+
+        if (event.type === 'text_delta') {
+          continue;
+        }
+
+        if (event.type === 'tool_call') {
+          const emittedToolCall = emittedToolCalls.get(event.id);
+          if (!emittedToolCall) {
+            yield event;
+            continue;
+          }
+
+          if (emittedToolCall.name !== event.name || !areToolCallInputsEqual(emittedToolCall.input, event.input)) {
+            throw new Error(`OpenAI stream completed with mismatched tool_call for call_id ${event.id}.`);
+          }
+
+          continue;
+        }
+
+        yield event;
+      }
+    },
+    async generate(request: ProviderRequest): Promise<ProviderResponse> {
+      return collectProviderStream(this.stream(request));
     }
   };
 }
@@ -299,6 +413,37 @@ function parseOpenAIToolArguments(toolName: string, argumentsValue: unknown): Re
   }
 
   return parsedValue as Record<string, unknown>;
+}
+
+function areToolCallInputsEqual(left: Record<string, unknown>, right: Record<string, unknown>): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function isIgnorableOpenAIResponseStreamEvent(eventType: ResponseStreamEvent['type']): boolean {
+  return eventType === 'response.queued'
+    || eventType === 'response.in_progress'
+    || eventType === 'response.output_text.done'
+    || eventType === 'response.function_call_arguments.delta'
+    || eventType === 'response.function_call_arguments.done'
+    || eventType === 'response.content_part.added'
+    || eventType === 'response.content_part.done'
+    || eventType === 'response.output_item.added'
+    || eventType === 'response.refusal.delta'
+    || eventType === 'response.refusal.done'
+    || eventType === 'response.reasoning_text.delta'
+    || eventType === 'response.reasoning_text.done'
+    || eventType === 'response.reasoning_summary_part.added'
+    || eventType === 'response.reasoning_summary_part.done'
+    || eventType === 'response.reasoning_summary_text.delta'
+    || eventType === 'response.reasoning_summary_text.done'
+    || eventType === 'response.output_text.annotation.added'
+    || eventType.endsWith('.in_progress')
+    || eventType.endsWith('.searching')
+    || eventType.endsWith('.generating')
+    || eventType.endsWith('.interpreting')
+    || eventType.endsWith('.delta')
+    || eventType.endsWith('.done')
+    || eventType.endsWith('.completed');
 }
 
 function parseOpenAIToolArgumentsValue(toolName: string, argumentsValue: unknown): unknown {

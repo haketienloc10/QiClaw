@@ -131,6 +131,12 @@ export function createCompactCliTelemetryObserver(
         return;
       }
 
+      if (event.type === 'turn_failed') {
+        stopAllToolActivityAnimations();
+        toolActivityLabels.clear();
+        return;
+      }
+
       if (event.type === 'turn_summary') {
         pendingFooter = createPendingFooterState(pendingFooter?.durationMs, event.data);
         return;
@@ -245,7 +251,7 @@ function formatToolActionLabel(data: ToolCallStartedTelemetryData): string | und
   }
 
   if (data.toolName === 'search') {
-    return `search ${formatSearchLabel(data.inputRawRedacted)}`;
+    return formatSearchToolActionLabel(data.inputRawRedacted);
   }
 
   return undefined;
@@ -309,16 +315,71 @@ function formatPathToolLabel(input: unknown, fallbackNoun: string): string {
   return path.length > 0 ? path : fallbackNoun;
 }
 
-function formatSearchLabel(input: unknown): string {
+function formatSearchToolActionLabel(input: unknown): string {
+  const query = formatSearchQueryValue(input);
+  const maxResults = formatSearchNumericOption(input, 'maxResults');
+  const includeContext = formatSearchBooleanOption(input, 'includeContext');
+  const parts = [
+    query ? `query=${JSON.stringify(query)}` : undefined,
+    maxResults,
+    includeContext
+  ].filter((part): part is string => Boolean(part));
+
+  if (parts.length === 0) {
+    return 'search';
+  }
+
+  return `search(${parts.join(', ')})`;
+}
+
+function formatSearchQueryValue(input: unknown): string | undefined {
   if (!input || typeof input !== 'object') {
-    return 'pattern';
+    return undefined;
+  }
+
+  const query = typeof (input as { query?: unknown }).query === 'string'
+    ? (input as { query: string }).query.trim()
+    : '';
+
+  if (query.length > 0) {
+    return query;
   }
 
   const pattern = typeof (input as { pattern?: unknown }).pattern === 'string'
     ? (input as { pattern: string }).pattern.trim()
     : '';
 
-  return pattern.length > 0 ? pattern : 'pattern';
+  return pattern.length > 0 ? pattern : undefined;
+}
+
+function formatSearchNumericOption(
+  input: unknown,
+  key: 'maxResults'
+): string | undefined {
+  if (!input || typeof input !== 'object') {
+    return undefined;
+  }
+
+  const value = (input as Record<string, unknown>)[key];
+
+  return typeof value === 'number' && Number.isFinite(value)
+    ? `${key}=${value}`
+    : undefined;
+}
+
+function formatSearchBooleanOption(
+  input: unknown,
+  key: 'includeContext'
+): string | undefined {
+  if (!input || typeof input !== 'object') {
+    return undefined;
+  }
+
+  const value = (input as Record<string, unknown>)[key];
+
+  return typeof value === 'boolean'
+    ? `${key}=${value}`
+    : undefined;
 }
 
 function formatFooterLine(

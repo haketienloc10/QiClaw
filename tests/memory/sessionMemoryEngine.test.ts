@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   captureInteractiveTurnMemory,
@@ -35,6 +35,22 @@ function createCandidate(overrides: Partial<SessionMemoryCandidate> = {}): Sessi
 }
 
 describe('captureInteractiveTurnMemory', () => {
+  const globalOpen = vi.spyOn(GlobalMemoryStore.prototype, 'open').mockResolvedValue(undefined);
+  const globalPut = vi.spyOn(GlobalMemoryStore.prototype, 'put').mockResolvedValue('global-entry');
+  const globalSeal = vi.spyOn(GlobalMemoryStore.prototype, 'seal').mockResolvedValue(undefined);
+
+  beforeEach(() => {
+    globalOpen.mockClear();
+    globalPut.mockClear();
+    globalSeal.mockClear();
+  });
+
+  afterAll(() => {
+    globalOpen.mockRestore();
+    globalPut.mockRestore();
+    globalSeal.mockRestore();
+  });
+
   it('runs write maintenance preflight before persisting or sealing', async () => {
     const put = vi.fn(async () => undefined);
     const seal = vi.fn(async () => undefined);
@@ -52,6 +68,9 @@ describe('captureInteractiveTurnMemory', () => {
       expect(ensureWriteReady).toHaveBeenCalledTimes(1);
       expect(put).toHaveBeenCalledTimes(1);
       expect(seal).toHaveBeenCalledTimes(1);
+      expect(globalOpen).toHaveBeenCalledTimes(1);
+      expect(globalPut).toHaveBeenCalledTimes(1);
+      expect(globalSeal).toHaveBeenCalledTimes(1);
     } finally {
       ensureWriteReady.mockRestore();
     }

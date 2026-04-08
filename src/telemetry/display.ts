@@ -319,6 +319,11 @@ function formatSearchToolActionLabel(input: unknown): string {
   const query = formatSearchQueryValue(input);
   const maxResults = formatSearchNumericOption(input, 'maxResults');
   const includeContext = formatSearchBooleanOption(input, 'includeContext');
+
+  if (query && !maxResults && !includeContext) {
+    return `search ${query}`;
+  }
+
   const parts = [
     query ? `query=${JSON.stringify(query)}` : undefined,
     maxResults,
@@ -411,7 +416,7 @@ function formatInteractiveFooterLine(summary: TurnSummaryTelemetryData, duration
     `${summary.providerRounds} provider`,
     summary.toolCallsTotal > 0 ? `${summary.toolCallsTotal} tools` : undefined,
     formatTokenFooter(summary, 'interactive'),
-    durationMs === undefined ? undefined : `⏱️ ` + formatDurationSeconds(durationMs)
+    durationMs === undefined ? undefined : `⏱️` + formatDurationSeconds(durationMs)
   ].filter((part): part is string => Boolean(part));
 
   return `${pc.dim('─'.repeat(54))}\n${status}${parts.length > 0 ? ` • ${parts.join(pc.dim(' • '))}` : ''}`;

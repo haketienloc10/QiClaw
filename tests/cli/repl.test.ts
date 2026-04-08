@@ -717,7 +717,7 @@ describe('createRepl', () => {
       ' ✦ shell:read git status\n',
       '──────────────────────────────────────────────────────\n\nTôi sẽ kiểm tra trước.\n\nTóm tắt:\n- xong\n',
       '──────────────────────────────────────────────────────\n',
-      '✔ DONE • 2 provider • 1 tools • 516 in / 274 out • ⏱️ 4.8s\n\n',
+      '✔ DONE • 2 provider • 1 tools • 516 in / 274 out • ⏱️4.8s\n\n',
       'Goodbye.\n'
     ]);
   });
@@ -1290,6 +1290,9 @@ describe('buildCli', () => {
 
   it('prefers --debug-log over QICLAW_DEBUG_LOG and writes JSONL events to the selected file', async () => {
     await withProviderEnvSnapshot(async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-03-31T12:34:56.000Z'));
+
       const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-debug-log-'));
       tempDirs.push(tempDir);
 
@@ -1349,14 +1352,17 @@ describe('buildCli', () => {
 
       await expect(cli.run()).resolves.toBe(0);
 
-      const selectedLog = await readFile(flagLogPath, 'utf8');
+      const selectedLog = await readFile(join(tempDir, 'from-flag', 'telemetry-2026-03-31.jsonl'), 'utf8');
       expect(selectedLog).toContain('"type":"tool_call_started"');
-      await expect(readFile(envLogPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(tempDir, 'from-env', 'telemetry-2026-03-31.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     });
   });
 
   it('falls back to QICLAW_DEBUG_LOG when --debug-log is not provided', async () => {
     await withProviderEnvSnapshot(async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-03-31T12:34:56.000Z'));
+
       const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-debug-log-env-'));
       tempDirs.push(tempDir);
 
@@ -1415,7 +1421,7 @@ describe('buildCli', () => {
 
       await expect(cli.run()).resolves.toBe(0);
 
-      const selectedLog = await readFile(envLogPath, 'utf8');
+      const selectedLog = await readFile(join(tempDir, 'from-env', 'telemetry-2026-03-31.jsonl'), 'utf8');
       expect(selectedLog).toContain('"type":"turn_started"');
     });
   });
@@ -1528,7 +1534,7 @@ describe('buildCli', () => {
 
       await expect(cli.run()).resolves.toBe(0);
 
-      const selectedLog = await readFile(logPath, 'utf8');
+      const selectedLog = await readFile(join(tempDir, 'provider', 'telemetry-2026-03-31.jsonl'), 'utf8');
       const events = selectedLog
         .trim()
         .split('\n')
@@ -2589,7 +2595,7 @@ describe('buildCli', () => {
       '└────────────────────────────────────────────────────┘\n',
       '\n──────────────────────────────────────────────────────\n\nXin chào\n',
       '──────────────────────────────────────────────────────\n',
-      '✔ DONE • 1 provider • 12 in / 8 out • ⏱️ 1.2s\n\n',
+      '✔ DONE • 1 provider • 12 in / 8 out • ⏱️1.2s\n\n',
       'Goodbye.\n'
     ]);
     expect(output).not.toContain('Xin chàoGoodbye.\n');
@@ -3002,7 +3008,7 @@ describe('buildCli', () => {
       '└────────────────────────────────────────────────────┘\n',
       '\n──────────────────────────────────────────────────────\n\nXin chào\n',
       '──────────────────────────────────────────────────────\n',
-      '✔ DONE • 1 provider • 12 in / 8 out • ⏱️ 0.9s\n\n',
+      '✔ DONE • 1 provider • 12 in / 8 out • ⏱️0.9s\n\n',
       'Goodbye.\n'
     ]);
     expect(output).not.toContain('Xin chào\n\n\n────────────────');
@@ -5013,7 +5019,8 @@ describe('buildCli', () => {
     expect(stripAnsi(writes.join(''))).toContain('answer: remember my preference');
     expect(stderrWrites).toEqual([]);
 
-    const loggedEvents = (await readFile(logPath, 'utf8'))
+    const logDateSuffix = new Date().toISOString().slice(0, 10);
+    const loggedEvents = (await readFile(join(tempDir, `memory-fallback-${logDateSuffix}.jsonl`), 'utf8'))
       .trim()
       .split('\n')
       .map((line) => JSON.parse(line))

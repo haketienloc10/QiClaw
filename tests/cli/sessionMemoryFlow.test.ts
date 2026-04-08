@@ -194,78 +194,84 @@ describe('interactive session memory flow', () => {
   it('keeps first interactive turn empty then recalls stored memory on the next turn in the same session', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'qiclaw-session-memory-'));
     tempDirs.push(tempDir);
+    const previousGlobalMemoryDir = process.env.QICLAW_GLOBAL_MEMORY_DIR;
+    process.env.QICLAW_GLOBAL_MEMORY_DIR = join(tempDir, 'global-memory');
 
-    const interactiveInputs: Array<{ userInput: string; sessionId?: string; memoryText?: string }> = [];
-    const interactiveCli = buildCli({
-      argv: [],
-      cwd: tempDir,
-      stdout: { write() { return true; } },
-      createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
-        availableTools: [],
+    try {
+      const interactiveInputs: Array<{ userInput: string; sessionId?: string; memoryText?: string }> = [];
+      const interactiveCli = buildCli({
+        argv: [],
         cwd: tempDir,
-        observer: runtimeOptions.observer ?? { record() {} },
-        agentSpec: defaultAgentSpec,
-        systemPrompt: 'Test prompt',
-        maxToolRounds: 3
-      }),
-      createSessionId: () => 'session-memory-1',
-      readLine: (() => {
-        const inputs = ['remember that my favorite editor is neovim', 'what editor do i prefer?', '/exit'];
-        return async () => inputs.shift();
-      })(),
-      runTurn: async (input) => {
-        interactiveInputs.push({
-          userInput: input.userInput,
-          sessionId: input.sessionId,
-          memoryText: input.memoryText
-        });
+        stdout: { write() { return true; } },
+        createRuntime: (runtimeOptions) => ({
+          provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+          availableTools: [],
+          cwd: tempDir,
+          observer: runtimeOptions.observer ?? { record() {} },
+          agentSpec: defaultAgentSpec,
+          systemPrompt: 'Test prompt',
+          maxToolRounds: 3
+        }),
+        createSessionId: () => 'session-memory-1',
+        readLine: (() => {
+          const inputs = ['remember that my favorite editor is neovim', 'what editor do i prefer?', '/exit'];
+          return async () => inputs.shift();
+        })(),
+        runTurn: async (input) => {
+          interactiveInputs.push({
+            userInput: input.userInput,
+            sessionId: input.sessionId,
+            memoryText: input.memoryText
+          });
 
-        const finalAnswer = input.userInput.includes('remember')
-          ? 'I will remember that your favorite editor is neovim.'
-          : 'You prefer neovim.';
+          const finalAnswer = input.userInput.includes('remember')
+            ? 'I will remember that your favorite editor is neovim.'
+            : 'You prefer neovim.';
 
-        return {
-          stopReason: 'completed',
-          finalAnswer,
-          history: [
-            ...(input.history ?? []),
-            { role: 'user', content: input.userInput },
-            { role: 'assistant', content: finalAnswer }
-          ],
-          historySummary: 'editor preference stored',
-          toolRoundsUsed: 0,
-          doneCriteria: {
-            goal: input.userInput,
-            checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
-            requiresToolEvidence: false,
-            requiresSubstantiveFinalAnswer: false,
-            forbidSuccessAfterToolErrors: false
-          },
-          verification: {
-            isVerified: true,
-            finalAnswerIsNonEmpty: true,
-            finalAnswerIsSubstantive: true,
-            toolEvidenceSatisfied: true,
-            noUnresolvedToolErrors: true,
-            toolMessagesCount: 0,
-            checks: []
-          }
-        };
-      }
-    });
+          return {
+            stopReason: 'completed',
+            finalAnswer,
+            history: [
+              ...(input.history ?? []),
+              { role: 'user', content: input.userInput },
+              { role: 'assistant', content: finalAnswer }
+            ],
+            historySummary: 'editor preference stored',
+            toolRoundsUsed: 0,
+            doneCriteria: {
+              goal: input.userInput,
+              checklist: [input.userInput],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            },
+            verification: {
+              isVerified: true,
+              finalAnswerIsNonEmpty: true,
+              finalAnswerIsSubstantive: true,
+              toolEvidenceSatisfied: true,
+              noUnresolvedToolErrors: true,
+              toolMessagesCount: 0,
+              checks: []
+            }
+          };
+        }
+      });
 
-    await expect(interactiveCli.run()).resolves.toBe(0);
-    expect(interactiveInputs).toHaveLength(2);
-    expect(interactiveInputs[0]).toEqual({
-      userInput: 'remember that my favorite editor is neovim',
-      sessionId: 'session-memory-1',
-      memoryText: ''
-    });
-    expect(interactiveInputs[1].sessionId).toBe('session-memory-1');
-    expect(interactiveInputs[1].memoryText).toContain('Memory:');
-    expect(interactiveInputs[1].memoryText).toContain('favorite editor is neovim');
+      await expect(interactiveCli.run()).resolves.toBe(0);
+      expect(interactiveInputs).toHaveLength(2);
+      expect(interactiveInputs[0]).toEqual({
+        userInput: 'remember that my favorite editor is neovim',
+        sessionId: 'session-memory-1',
+        memoryText: ''
+      });
+      expect(interactiveInputs[1].sessionId).toBe('session-memory-1');
+      expect(interactiveInputs[1].memoryText).toContain('Memory:');
+      expect(interactiveInputs[1].memoryText).toContain('favorite editor is neovim');
+    } finally {
+      restoreEnv('QICLAW_GLOBAL_MEMORY_DIR', previousGlobalMemoryDir);
+    }
   }, 15000);
 
   it('persists procedure memory after a turn with a successful tool result and recalls it on the next turn', async () => {
@@ -467,77 +473,83 @@ describe('interactive session memory flow', () => {
   it('keeps first Vietnamese explicit save turn empty then recalls stored memory on the next turn in the same session', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'qiclaw-session-memory-'));
     tempDirs.push(tempDir);
+    const previousGlobalMemoryDir = process.env.QICLAW_GLOBAL_MEMORY_DIR;
+    process.env.QICLAW_GLOBAL_MEMORY_DIR = join(tempDir, 'global-memory');
 
-    const interactiveInputs: Array<{ userInput: string; sessionId?: string; memoryText?: string }> = [];
-    const interactiveCli = buildCli({
-      argv: [],
-      cwd: tempDir,
-      stdout: { write() { return true; } },
-      createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
-        availableTools: [],
+    try {
+      const interactiveInputs: Array<{ userInput: string; sessionId?: string; memoryText?: string }> = [];
+      const interactiveCli = buildCli({
+        argv: [],
         cwd: tempDir,
-        observer: runtimeOptions.observer ?? { record() {} },
-        agentSpec: defaultAgentSpec,
-        systemPrompt: 'Test prompt',
-        maxToolRounds: 3
-      }),
-      createSessionId: () => 'session-memory-vi-explicit',
-      readLine: (() => {
-        const inputs = ['hãy nhớ rằng tôi thích trả lời bằng tiếng Việt', 'tôi thích trả lời bằng ngôn ngữ nào?', '/exit'];
-        return async () => inputs.shift();
-      })(),
-      runTurn: async (input) => {
-        interactiveInputs.push({
-          userInput: input.userInput,
-          sessionId: input.sessionId,
-          memoryText: input.memoryText
-        });
+        stdout: { write() { return true; } },
+        createRuntime: (runtimeOptions) => ({
+          provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+          availableTools: [],
+          cwd: tempDir,
+          observer: runtimeOptions.observer ?? { record() {} },
+          agentSpec: defaultAgentSpec,
+          systemPrompt: 'Test prompt',
+          maxToolRounds: 3
+        }),
+        createSessionId: () => 'session-memory-vi-explicit',
+        readLine: (() => {
+          const inputs = ['hãy nhớ rằng tôi thích trả lời bằng tiếng Việt', 'tôi thích trả lời bằng ngôn ngữ nào?', '/exit'];
+          return async () => inputs.shift();
+        })(),
+        runTurn: async (input) => {
+          interactiveInputs.push({
+            userInput: input.userInput,
+            sessionId: input.sessionId,
+            memoryText: input.memoryText
+          });
 
-        const finalAnswer = input.userInput.includes('hãy nhớ')
-          ? 'Tôi sẽ nhớ rằng bạn thích trả lời bằng tiếng Việt.'
-          : 'Bạn thích trả lời bằng tiếng Việt.';
+          const finalAnswer = input.userInput.includes('hãy nhớ')
+            ? 'Tôi sẽ nhớ rằng bạn thích trả lời bằng tiếng Việt.'
+            : 'Bạn thích trả lời bằng tiếng Việt.';
 
-        return {
-          stopReason: 'completed',
-          finalAnswer,
-          history: [
-            ...(input.history ?? []),
-            { role: 'user', content: input.userInput },
-            { role: 'assistant', content: finalAnswer }
-          ],
-          historySummary: 'đã lưu sở thích trả lời bằng tiếng Việt',
-          toolRoundsUsed: 0,
-          doneCriteria: {
-            goal: input.userInput,
-            checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
-            requiresToolEvidence: false,
-            requiresSubstantiveFinalAnswer: false,
-            forbidSuccessAfterToolErrors: false
-          },
-          verification: {
-            isVerified: true,
-            finalAnswerIsNonEmpty: true,
-            finalAnswerIsSubstantive: true,
-            toolEvidenceSatisfied: true,
-            noUnresolvedToolErrors: true,
-            toolMessagesCount: 0,
-            checks: []
-          }
-        };
-      }
-    });
+          return {
+            stopReason: 'completed',
+            finalAnswer,
+            history: [
+              ...(input.history ?? []),
+              { role: 'user', content: input.userInput },
+              { role: 'assistant', content: finalAnswer }
+            ],
+            historySummary: 'đã lưu sở thích trả lời bằng tiếng Việt',
+            toolRoundsUsed: 0,
+            doneCriteria: {
+              goal: input.userInput,
+              checklist: [input.userInput],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            },
+            verification: {
+              isVerified: true,
+              finalAnswerIsNonEmpty: true,
+              finalAnswerIsSubstantive: true,
+              toolEvidenceSatisfied: true,
+              noUnresolvedToolErrors: true,
+              toolMessagesCount: 0,
+              checks: []
+            }
+          };
+        }
+      });
 
-    await expect(interactiveCli.run()).resolves.toBe(0);
-    expect(interactiveInputs).toHaveLength(2);
-    expect(interactiveInputs[0]).toEqual({
-      userInput: 'hãy nhớ rằng tôi thích trả lời bằng tiếng Việt',
-      sessionId: 'session-memory-vi-explicit',
-      memoryText: ''
-    });
-    expect(interactiveInputs[1].memoryText).toContain('Memory:');
-    expect(interactiveInputs[1].memoryText).toContain('tiếng Việt');
+      await expect(interactiveCli.run()).resolves.toBe(0);
+      expect(interactiveInputs).toHaveLength(2);
+      expect(interactiveInputs[0]).toEqual({
+        userInput: 'hãy nhớ rằng tôi thích trả lời bằng tiếng Việt',
+        sessionId: 'session-memory-vi-explicit',
+        memoryText: ''
+      });
+      expect(interactiveInputs[1].memoryText).toContain('Memory:');
+      expect(interactiveInputs[1].memoryText).toContain('tiếng Việt');
+    } finally {
+      restoreEnv('QICLAW_GLOBAL_MEMORY_DIR', previousGlobalMemoryDir);
+    }
   });
 
   it('persists Vietnamese procedure memory after a turn with a successful tool result and recalls it on the next turn', async () => {
@@ -769,92 +781,37 @@ describe('interactive session memory flow', () => {
   it('restores the checkpoint sessionId and recalls the same session memory after restarting the CLI', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'qiclaw-session-memory-'));
     tempDirs.push(tempDir);
+    const previousGlobalMemoryDir = process.env.QICLAW_GLOBAL_MEMORY_DIR;
+    process.env.QICLAW_GLOBAL_MEMORY_DIR = join(tempDir, 'global-memory');
 
-    const firstRunCli = buildCli({
-      argv: [],
-      cwd: tempDir,
-      stdout: { write() { return true; } },
-      createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
-        availableTools: [],
+    try {
+      const firstRunCli = buildCli({
+        argv: [],
         cwd: tempDir,
-        observer: runtimeOptions.observer ?? { record() {} },
-        agentSpec: defaultAgentSpec,
-        systemPrompt: 'Test prompt',
-        maxToolRounds: 3
-      }),
-      createSessionId: () => 'session-memory-restore',
-      readLine: (() => {
-        const inputs = ['remember that i deploy to staging first', '/exit'];
-        return async () => inputs.shift();
-      })(),
-      runTurn: async (input) => ({
-        stopReason: 'completed',
-        finalAnswer: 'I will remember that you deploy to staging first.',
-        history: [
-          ...(input.history ?? []),
-          { role: 'user', content: input.userInput },
-          { role: 'assistant', content: 'I will remember that you deploy to staging first.' }
-        ],
-        historySummary: 'staging deployment preference stored',
-        toolRoundsUsed: 0,
-        doneCriteria: {
-          goal: input.userInput,
-          checklist: [input.userInput],
-          requiresNonEmptyFinalAnswer: true,
-          requiresToolEvidence: false,
-          requiresSubstantiveFinalAnswer: false,
-          forbidSuccessAfterToolErrors: false
-        },
-        verification: {
-          isVerified: true,
-          finalAnswerIsNonEmpty: true,
-          finalAnswerIsSubstantive: true,
-          toolEvidenceSatisfied: true,
-          noUnresolvedToolErrors: true,
-          toolMessagesCount: 0,
-          checks: []
-        }
-      })
-    });
-
-    await expect(firstRunCli.run()).resolves.toBe(0);
-
-    const restoredInputs: Array<{ userInput: string; sessionId?: string; memoryText?: string }> = [];
-    const restoredCli = buildCli({
-      argv: [],
-      cwd: tempDir,
-      stdout: { write() { return true; } },
-      createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
-        availableTools: [],
-        cwd: tempDir,
-        observer: runtimeOptions.observer ?? { record() {} },
-        agentSpec: defaultAgentSpec,
-        systemPrompt: 'Test prompt',
-        maxToolRounds: 3
-      }),
-      createSessionId: () => 'new-session-id-should-not-be-used',
-      readLine: (() => {
-        const inputs = ['where do i deploy first?', '/exit'];
-        return async () => inputs.shift();
-      })(),
-      runTurn: async (input) => {
-        restoredInputs.push({
-          userInput: input.userInput,
-          sessionId: input.sessionId,
-          memoryText: input.memoryText
-        });
-
-        return {
+        stdout: { write() { return true; } },
+        createRuntime: (runtimeOptions) => ({
+          provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+          availableTools: [],
+          cwd: tempDir,
+          observer: runtimeOptions.observer ?? { record() {} },
+          agentSpec: defaultAgentSpec,
+          systemPrompt: 'Test prompt',
+          maxToolRounds: 3
+        }),
+        createSessionId: () => 'session-memory-restore',
+        readLine: (() => {
+          const inputs = ['remember that i deploy to staging first', '/exit'];
+          return async () => inputs.shift();
+        })(),
+        runTurn: async (input) => ({
           stopReason: 'completed',
-          finalAnswer: 'You deploy to staging first.',
+          finalAnswer: 'I will remember that you deploy to staging first.',
           history: [
             ...(input.history ?? []),
             { role: 'user', content: input.userInput },
-            { role: 'assistant', content: 'You deploy to staging first.' }
+            { role: 'assistant', content: 'I will remember that you deploy to staging first.' }
           ],
-          historySummary: 'staging deployment preference restored',
+          historySummary: 'staging deployment preference stored',
           toolRoundsUsed: 0,
           doneCriteria: {
             goal: input.userInput,
@@ -873,18 +830,79 @@ describe('interactive session memory flow', () => {
             toolMessagesCount: 0,
             checks: []
           }
-        };
-      }
-    });
+        })
+      });
 
-    await expect(restoredCli.run()).resolves.toBe(0);
-    expect(restoredInputs).toEqual([
-      {
-        userInput: 'where do i deploy first?',
-        sessionId: 'session-memory-restore',
-        memoryText: expect.stringContaining('deploy to staging first')
-      }
-    ]);
+      await expect(firstRunCli.run()).resolves.toBe(0);
+
+      const restoredInputs: Array<{ userInput: string; sessionId?: string; memoryText?: string }> = [];
+      const restoredCli = buildCli({
+        argv: [],
+        cwd: tempDir,
+        stdout: { write() { return true; } },
+        createRuntime: (runtimeOptions) => ({
+          provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+          availableTools: [],
+          cwd: tempDir,
+          observer: runtimeOptions.observer ?? { record() {} },
+          agentSpec: defaultAgentSpec,
+          systemPrompt: 'Test prompt',
+          maxToolRounds: 3
+        }),
+        createSessionId: () => 'new-session-id-should-not-be-used',
+        readLine: (() => {
+          const inputs = ['where do i deploy first?', '/exit'];
+          return async () => inputs.shift();
+        })(),
+        runTurn: async (input) => {
+          restoredInputs.push({
+            userInput: input.userInput,
+            sessionId: input.sessionId,
+            memoryText: input.memoryText
+          });
+
+          return {
+            stopReason: 'completed',
+            finalAnswer: 'You deploy to staging first.',
+            history: [
+              ...(input.history ?? []),
+              { role: 'user', content: input.userInput },
+              { role: 'assistant', content: 'You deploy to staging first.' }
+            ],
+            historySummary: 'staging deployment preference restored',
+            toolRoundsUsed: 0,
+            doneCriteria: {
+              goal: input.userInput,
+              checklist: [input.userInput],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            },
+            verification: {
+              isVerified: true,
+              finalAnswerIsNonEmpty: true,
+              finalAnswerIsSubstantive: true,
+              toolEvidenceSatisfied: true,
+              noUnresolvedToolErrors: true,
+              toolMessagesCount: 0,
+              checks: []
+            }
+          };
+        }
+      });
+
+      await expect(restoredCli.run()).resolves.toBe(0);
+      expect(restoredInputs).toEqual([
+        {
+          userInput: 'where do i deploy first?',
+          sessionId: 'session-memory-restore',
+          memoryText: expect.stringContaining('deploy to staging first')
+        }
+      ]);
+    } finally {
+      restoreEnv('QICLAW_GLOBAL_MEMORY_DIR', previousGlobalMemoryDir);
+    }
   });
 
   it('does not bleed restored memory from another session when a newer checkpoint in the same cwd has no session memory state', async () => {

@@ -12,6 +12,7 @@ import { getDefaultModelForProvider, parseProviderId, resolveProviderConfig } fr
 import { createJsonLineLogger } from '../../src/telemetry/logger.js';
 import { createInMemoryMetricsObserver } from '../../src/telemetry/metrics.js';
 import { createNoopObserver, createTelemetryEvent, type TelemetryObserver } from '../../src/telemetry/observer.js';
+import { searchTool } from '../../src/tools/search.js';
 import type { Tool } from '../../src/tools/tool.js';
 
 const tempDirs: string[] = [];
@@ -797,8 +798,8 @@ describe('buildCli', () => {
           toolRound: 1,
           toolName: 'search',
           toolCallId: 'toolu_3',
-          inputPreview: '{"pattern":"package"}',
-          inputRawRedacted: { pattern: 'package' }
+          inputPreview: '{"query":"package"}',
+          inputRawRedacted: { query: 'package' }
         }));
         input.observer?.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
           turnId: 'turn-1',
@@ -2787,6 +2788,89 @@ describe('buildCli', () => {
       '  read:src/cli/main.ts'
     ]);
     expect(output.match(/  · read src\/cli\/main\.ts\n/g)).toHaveLength(1);
+  });
+
+  it('renders streamed search tool activity from query input without falling back to pattern', async () => {
+    const writes: string[] = [];
+    const cwd = join(tmpdir(), `qiclaw-prompt-search-stream-${Math.random().toString(36).slice(2)}`);
+    let providerRound = 0;
+    const cli = buildCli({
+      argv: ['--prompt', 'run search please'],
+      cwd,
+      stdout: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      createRuntime: (runtimeOptions) => ({
+        provider: {
+          name: 'test-provider',
+          model: 'test-model',
+          async generate() {
+            throw new Error('not used');
+          },
+          async *stream() {
+            providerRound += 1;
+            yield { type: 'start', provider: 'test-provider', model: 'test-model' } as const;
+
+            if (providerRound === 1) {
+              yield {
+                type: 'tool_call',
+                id: 'toolu_search_1',
+                name: 'search',
+                input: { query: 'package' }
+              } as const;
+              yield {
+                type: 'finish',
+                finish: { stopReason: 'tool_use' },
+                responseMetrics: {
+                  contentBlockCount: 1,
+                  toolCallCount: 1,
+                  hasTextOutput: false,
+                  contentBlocksByType: { tool_use: 1 }
+                },
+                debug: {
+                  toolCallSummaries: [{ id: 'toolu_search_1', name: 'search' }],
+                  responsePreviewRedacted: '[{"type":"tool_use"}]'
+                }
+              } as const;
+              return;
+            }
+
+            yield {
+              type: 'text_delta',
+              text: 'found package'
+            } as const;
+            yield {
+              type: 'finish',
+              finish: { stopReason: 'stop' },
+              responseMetrics: {
+                contentBlockCount: 1,
+                toolCallCount: 0,
+                hasTextOutput: true,
+                contentBlocksByType: { text: 1 }
+              },
+              debug: {
+                responsePreviewRedacted: 'found package'
+              }
+            } as const;
+          }
+        },
+        availableTools: [searchTool],
+        cwd,
+        observer: runtimeOptions.observer ?? createNoopObserver(),
+        agentSpec: defaultAgentSpec,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      })
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+
+    const output = stripAnsi(writes.join(''));
+    expect(output).toContain('  · search package\n');
+    expect(output).not.toContain('  · search pattern\n');
   });
 
   it('renders streamed interactive text that already ends with a newline without adding extra blank lines before footer', async () => {

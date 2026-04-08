@@ -526,6 +526,12 @@ function formatTurnEventPathLabel(input: Record<string, unknown>, fallbackNoun: 
 }
 
 function formatTurnEventSearchLabel(input: Record<string, unknown>): string {
+  const query = typeof input.query === 'string' ? input.query.trim() : '';
+
+  if (query.length > 0) {
+    return query;
+  }
+
   const pattern = typeof input.pattern === 'string' ? input.pattern.trim() : '';
   return pattern.length > 0 ? pattern : 'pattern';
 }

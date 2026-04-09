@@ -2,6 +2,7 @@ import type {
   AgentCapabilityClass,
   AgentDiagnosticsParticipationLevel,
   AgentMutationMode,
+  AgentPackageManifest,
   AgentRedactionSensitivity,
   AgentRuntimePolicy,
   LoadedAgentPackage,
@@ -53,6 +54,10 @@ export function validateLoadedAgentPackage(agentPackage: LoadedAgentPackage): st
     errors.push(`Base package "${agentPackage.preset}" must provide AGENT.md.`);
   }
 
+  if (!agentPackage.manifest.extends && !agentPackage.promptFiles['USER.md']) {
+    errors.push(`Base package "${agentPackage.preset}" must provide USER.md.`);
+  }
+
   const manifestPolicy = agentPackage.manifest.policy;
   const allowedCapabilityClasses = isPlainObject(manifestPolicy)
     ? (manifestPolicy.allowedCapabilityClasses as unknown)
@@ -101,6 +106,8 @@ export function validateManifestShape(preset: string, manifest: LoadedAgentPacka
 
   const errors: string[] = [];
   const policy = manifest.policy;
+  const completion = manifest.completion;
+  const diagnostics = manifest.diagnostics;
 
   if (manifest.extends !== undefined) {
     if (typeof manifest.extends !== 'string') {
@@ -110,16 +117,64 @@ export function validateManifestShape(preset: string, manifest: LoadedAgentPacka
     }
   }
 
-  if (policy === undefined) {
-    return errors;
+  if (policy !== undefined) {
+    if (!isPlainObject(policy)) {
+      errors.push(`Agent package "${preset}" must set policy to a plain object when provided.`);
+      return errors;
+    }
+
+    errors.push(...validateRuntimePolicyShape(preset, policy as AgentRuntimePolicy));
   }
 
-  if (!isPlainObject(policy)) {
-    errors.push(`Agent package "${preset}" must set policy to a plain object when provided.`);
-    return errors;
+  if (completion !== undefined) {
+    if (!isPlainObject(completion)) {
+      errors.push(`Agent package "${preset}" must set completion to a plain object when provided.`);
+      return errors;
+    }
+
+    errors.push(...validateCompletionShape(preset, completion as NonNullable<AgentPackageManifest['completion']>));
   }
 
-  errors.push(...validateRuntimePolicyShape(preset, policy as AgentRuntimePolicy));
+  if (diagnostics !== undefined) {
+    if (!isPlainObject(diagnostics)) {
+      errors.push(`Agent package "${preset}" must set diagnostics to a plain object when provided.`);
+      return errors;
+    }
+
+    errors.push(...validateDiagnosticsShape(preset, diagnostics as NonNullable<AgentPackageManifest['diagnostics']>));
+  }
+
+  return errors;
+}
+
+function validateCompletionShape(preset: string, completion: NonNullable<AgentPackageManifest['completion']>): string[] {
+  const errors: string[] = [];
+
+  if (completion.completionMode !== undefined && typeof completion.completionMode !== 'string') {
+    errors.push(`Agent package "${preset}" must set completion.completionMode to a string when provided.`);
+  }
+
+  if (completion.doneCriteriaShape !== undefined && typeof completion.doneCriteriaShape !== 'string') {
+    errors.push(`Agent package "${preset}" must set completion.doneCriteriaShape to a string when provided.`);
+  }
+
+  if (completion.evidenceRequirement !== undefined && typeof completion.evidenceRequirement !== 'string') {
+    errors.push(`Agent package "${preset}" must set completion.evidenceRequirement to a string when provided.`);
+  }
+
+  if (completion.stopVsDoneDistinction !== undefined && typeof completion.stopVsDoneDistinction !== 'string') {
+    errors.push(`Agent package "${preset}" must set completion.stopVsDoneDistinction to a string when provided.`);
+  }
+
+  return errors;
+}
+
+function validateDiagnosticsShape(preset: string, diagnostics: NonNullable<AgentPackageManifest['diagnostics']>): string[] {
+  const errors: string[] = [];
+
+  if (diagnostics.traceabilityExpectation !== undefined && typeof diagnostics.traceabilityExpectation !== 'string') {
+    errors.push(`Agent package "${preset}" must set diagnostics.traceabilityExpectation to a string when provided.`);
+  }
 
   return errors;
 }

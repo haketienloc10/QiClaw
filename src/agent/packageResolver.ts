@@ -9,9 +9,8 @@ import {
   validateLoadedAgentPackage,
   validateResolvedAgentPackage
 } from './packageValidator.js';
+import { agentPromptSlotFileNames } from './spec.js';
 import type { AgentPackageSourceTier, AgentPromptSlotFileName, LoadedAgentPackage, ResolvedAgentPackage } from './spec.js';
-
-const promptSlotFileNames: AgentPromptSlotFileName[] = ['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'CHECKLIST.md'];
 
 export async function resolveAgentPackage(
   preset: string,
@@ -21,10 +20,12 @@ export async function resolveAgentPackage(
   const stack: string[] = [];
   const packageChain = await loadResolvedChain(preset, options, visited, stack, preset);
   const effectivePolicy = mergePolicyChain(packageChain);
+  const effectiveCompletion = mergeCompletionChain(packageChain);
+  const effectiveDiagnostics = mergeDiagnosticsChain(packageChain);
   const effectivePromptFiles = mergePromptFileChain(packageChain);
   const resolvedFiles = packageChain.flatMap((agentPackage) => [
     agentPackage.manifestPath,
-    ...promptSlotFileNames.flatMap((slotFileName) => {
+    ...agentPromptSlotFileNames.flatMap((slotFileName) => {
       const promptFile = agentPackage.promptFiles[slotFileName];
       return promptFile ? [promptFile.filePath] : [];
     })
@@ -35,6 +36,8 @@ export async function resolveAgentPackage(
     extendsChain: packageChain.map((agentPackage) => agentPackage.preset),
     packageChain,
     effectivePolicy,
+    effectiveCompletion,
+    effectiveDiagnostics,
     effectivePromptFiles,
     resolvedFiles
   };
@@ -117,6 +120,24 @@ function mergePolicyChain(packageChain: LoadedAgentPackage[]) {
       allowedCapabilityClasses: agentPackage.manifest?.policy?.allowedCapabilityClasses ?? merged.allowedCapabilityClasses
     };
   }, {});
+}
+
+function mergeCompletionChain(packageChain: LoadedAgentPackage[]) {
+  return [...packageChain].reverse().reduce<ResolvedAgentPackage['effectiveCompletion']>((merged, agentPackage) => {
+    return {
+      ...merged,
+      ...agentPackage.manifest?.completion
+    };
+  }, undefined);
+}
+
+function mergeDiagnosticsChain(packageChain: LoadedAgentPackage[]) {
+  return [...packageChain].reverse().reduce<ResolvedAgentPackage['effectiveDiagnostics']>((merged, agentPackage) => {
+    return {
+      ...merged,
+      ...agentPackage.manifest?.diagnostics
+    };
+  }, undefined);
 }
 
 function mergePromptFileChain(packageChain: LoadedAgentPackage[]): Partial<Record<AgentPromptSlotFileName, LoadedAgentPackage['promptFiles'][AgentPromptSlotFileName]>> {

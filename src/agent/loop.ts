@@ -241,12 +241,12 @@ export async function collectCompletedTurn(stream: AsyncIterable<TurnEvent>): Pr
 function resolveTurnCompletionSpec(input: RunAgentTurnInput): AgentCompletionSpec | undefined {
   if (input.resolvedPackage) {
     const policy = input.resolvedPackage.effectivePolicy;
-    const legacyCompletion = input.agentSpec?.completion;
+    const completion = input.resolvedPackage.effectiveCompletion;
     return {
-      completionMode: legacyCompletion?.completionMode ?? 'runtime-policy',
-      doneCriteriaShape: legacyCompletion?.doneCriteriaShape ?? 'runtime-policy',
-      evidenceRequirement: legacyCompletion?.evidenceRequirement ?? 'runtime-policy',
-      stopVsDoneDistinction: legacyCompletion?.stopVsDoneDistinction ?? 'runtime-policy',
+      completionMode: completion?.completionMode ?? 'runtime-policy',
+      doneCriteriaShape: completion?.doneCriteriaShape ?? 'runtime-policy',
+      evidenceRequirement: completion?.evidenceRequirement ?? 'runtime-policy',
+      stopVsDoneDistinction: completion?.stopVsDoneDistinction ?? 'runtime-policy',
       maxToolRounds: policy.maxToolRounds ?? input.maxToolRounds,
       requiresToolEvidence: policy.requiresToolEvidence,
       requiresSubstantiveFinalAnswer: policy.requiresSubstantiveFinalAnswer,

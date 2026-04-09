@@ -25,6 +25,10 @@ function createLoadedPackage(overrides: Partial<LoadedAgentPackage> = {}): Loade
       'AGENT.md': {
         filePath: '/tmp/reviewer/AGENT.md',
         content: 'You are a reviewer.'
+      },
+      'USER.md': {
+        filePath: '/tmp/reviewer/USER.md',
+        content: 'User interaction framing.'
       }
     },
     ...overrides
@@ -38,9 +42,10 @@ describe('packageValidator', () => {
     ]);
   });
 
-  it('reports when a base package is missing AGENT.md', () => {
+  it('reports when a base package is missing AGENT.md and USER.md', () => {
     expect(validateLoadedAgentPackage(createLoadedPackage({ promptFiles: {} }))).toEqual([
-      'Base package "reviewer" must provide AGENT.md.'
+      'Base package "reviewer" must provide AGENT.md.',
+      'Base package "reviewer" must provide USER.md.'
     ]);
   });
 

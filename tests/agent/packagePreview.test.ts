@@ -35,6 +35,10 @@ const resolvedPackage: ResolvedAgentPackage = {
         'STYLE.md': {
           filePath: '/workspace/.qiclaw/agents/reviewer/STYLE.md',
           content: 'Project style'
+        },
+        'USER.md': {
+          filePath: '/workspace/.qiclaw/agents/reviewer/USER.md',
+          content: 'Project user instructions'
         }
       }
     },
@@ -85,12 +89,17 @@ const resolvedPackage: ResolvedAgentPackage = {
     'TOOLS.md': {
       filePath: '/builtin/readonly/TOOLS.md',
       content: 'Builtin tools'
+    },
+    'USER.md': {
+      filePath: '/workspace/.qiclaw/agents/reviewer/USER.md',
+      content: 'Project user instructions'
     }
   },
   resolvedFiles: [
     '/workspace/.qiclaw/agents/reviewer/agent.json',
     '/workspace/.qiclaw/agents/reviewer/AGENT.md',
     '/workspace/.qiclaw/agents/reviewer/STYLE.md',
+    '/workspace/.qiclaw/agents/reviewer/USER.md',
     '/builtin/readonly/agent.json',
     '/builtin/readonly/SOUL.md',
     '/builtin/readonly/TOOLS.md'
@@ -107,12 +116,14 @@ describe('packagePreview', () => {
         'AGENT.md': '/workspace/.qiclaw/agents/reviewer/AGENT.md',
         'SOUL.md': '/builtin/readonly/SOUL.md',
         'STYLE.md': '/workspace/.qiclaw/agents/reviewer/STYLE.md',
-        'TOOLS.md': '/builtin/readonly/TOOLS.md'
+        'TOOLS.md': '/builtin/readonly/TOOLS.md',
+        'USER.md': '/workspace/.qiclaw/agents/reviewer/USER.md'
       },
       resolvedFiles: [
         '/workspace/.qiclaw/agents/reviewer/agent.json',
         '/workspace/.qiclaw/agents/reviewer/AGENT.md',
         '/workspace/.qiclaw/agents/reviewer/STYLE.md',
+        '/workspace/.qiclaw/agents/reviewer/USER.md',
         '/builtin/readonly/agent.json',
         '/builtin/readonly/SOUL.md',
         '/builtin/readonly/TOOLS.md'
@@ -134,13 +145,15 @@ describe('packagePreview', () => {
     const soulIndex = renderedPromptText.indexOf('SOUL.md\nBuiltin soul');
     const styleIndex = renderedPromptText.indexOf('STYLE.md\nProject style');
     const toolsIndex = renderedPromptText.indexOf('TOOLS.md\nBuiltin tools');
+    const userIndex = renderedPromptText.indexOf('USER.md\nProject user instructions');
     const constraintsIndex = renderedPromptText.indexOf('Runtime constraints summary');
 
     expect(agentIndex).toBeGreaterThanOrEqual(0);
     expect(soulIndex).toBeGreaterThan(agentIndex);
     expect(styleIndex).toBeGreaterThan(soulIndex);
     expect(toolsIndex).toBeGreaterThan(styleIndex);
-    expect(constraintsIndex).toBeGreaterThan(toolsIndex);
+    expect(userIndex).toBeGreaterThan(toolsIndex);
+    expect(constraintsIndex).toBeGreaterThan(userIndex);
     expect(renderedPromptText).toContain('- Allowed capability classes: read');
     expect(renderedPromptText).toContain('- Max tool rounds: 4');
     expect(renderedPromptText).toContain('- Mutation mode: none');
@@ -170,7 +183,7 @@ describe('packagePreview', () => {
     expect(resolved.resolvedFiles.some((filePath) => filePath.includes('/src/agent/builtin-packages/readonly/agent.json'))).toBe(true);
     expect(resolved.resolvedFiles.some((filePath) => filePath.includes('/src/agent/builtin-packages/default/AGENT.md'))).toBe(true);
     expect(resolved.effectivePromptFiles['AGENT.md']?.filePath).toContain('/src/agent/builtin-packages/readonly/AGENT.md');
-    expect(resolved.effectivePromptFiles['CHECKLIST.md']?.filePath).toContain('/src/agent/builtin-packages/readonly/CHECKLIST.md');
+    expect(resolved.effectivePromptFiles['USER.md']?.filePath).toContain('/src/agent/builtin-packages/readonly/USER.md');
   });
 
   it('resolves builtin package assets from dist output when loading the built registry module', async () => {

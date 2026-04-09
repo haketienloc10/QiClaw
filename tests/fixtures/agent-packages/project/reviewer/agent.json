@@ -5,5 +5,9 @@
     "maxToolRounds": 4,
     "mutationMode": "none",
     "includeMemory": true
+  },
+  "completion": {
+    "evidenceRequirement": "explicit",
+    "stopVsDoneDistinction": "done-vs-stop"
   }
 }

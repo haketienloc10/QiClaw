@@ -2,14 +2,13 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { validateManifestShape } from './packageValidator.js';
+import { agentPromptSlotFileNames } from './spec.js';
 import type {
   AgentPackageSourceTier,
   AgentPromptFile,
   AgentPromptSlotFileName,
   LoadedAgentPackage
 } from './spec.js';
-
-const promptSlotFileNames: AgentPromptSlotFileName[] = ['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'CHECKLIST.md'];
 
 export async function loadAgentPackageFromDirectory(
   directoryPath: string,
@@ -38,7 +37,7 @@ export async function loadAgentPackageFromDirectory(
       continue;
     }
 
-    if (!promptSlotFileNames.includes(entry.name as AgentPromptSlotFileName)) {
+    if (!agentPromptSlotFileNames.includes(entry.name as AgentPromptSlotFileName)) {
       continue;
     }
 

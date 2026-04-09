@@ -1,6 +1,7 @@
 export type AgentCapabilityClass = 'read' | 'write' | 'search' | 'exec_readonly' | 'execute';
 export type AgentPackageSourceTier = 'project' | 'user' | 'builtin';
-export type AgentPromptSlotFileName = 'AGENT.md' | 'SOUL.md' | 'STYLE.md' | 'TOOLS.md' | 'CHECKLIST.md';
+export const agentPromptSlotFileNames = ['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'USER.md'] as const;
+export type AgentPromptSlotFileName = (typeof agentPromptSlotFileNames)[number];
 export type AgentMutationMode = 'none' | 'workspace-write';
 export type AgentDiagnosticsParticipationLevel = 'none' | 'normal' | 'trace-oriented' | 'audit-oriented';
 export type AgentRedactionSensitivity = 'standard' | 'standard-to-high' | 'high';
@@ -71,9 +72,22 @@ export interface AgentRuntimePolicy {
   redactionSensitivity?: AgentRedactionSensitivity;
 }
 
+export interface AgentCompletionMetadata {
+  completionMode?: string;
+  doneCriteriaShape?: string;
+  evidenceRequirement?: string;
+  stopVsDoneDistinction?: string;
+}
+
+export interface AgentPackageDiagnosticsManifest {
+  traceabilityExpectation?: string;
+}
+
 export interface AgentPackageManifest {
   extends?: string;
   policy?: AgentRuntimePolicy;
+  completion?: AgentCompletionMetadata;
+  diagnostics?: AgentPackageDiagnosticsManifest;
 }
 
 export interface AgentPromptFile {
@@ -96,6 +110,8 @@ export interface ResolvedAgentPackage {
   extendsChain: string[];
   packageChain: LoadedAgentPackage[];
   effectivePolicy: AgentRuntimePolicy;
+  effectiveCompletion?: AgentPackageManifest['completion'];
+  effectiveDiagnostics?: AgentPackageManifest['diagnostics'];
   effectivePromptFiles: Partial<Record<AgentPromptSlotFileName, AgentPromptFile>>;
   resolvedFiles: string[];
 }

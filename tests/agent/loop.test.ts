@@ -50,24 +50,42 @@ afterEach(() => {
 const defaultResolvedPackage = resolveBuiltinAgentPackage('default');
 const readonlyResolvedPackage = resolveBuiltinAgentPackage('readonly');
 
-function createBridgeResolvedPackage(policy: ResolvedAgentPackage['effectivePolicy']): ResolvedAgentPackage {
+function createBridgeResolvedPackage(options: {
+  policy: ResolvedAgentPackage['effectivePolicy'];
+  completion?: ResolvedAgentPackage['effectiveCompletion'];
+  diagnostics?: ResolvedAgentPackage['effectiveDiagnostics'];
+}): ResolvedAgentPackage {
   return {
     preset: 'custom-bridge',
     sourceTier: 'project',
     extendsChain: ['custom-bridge'],
     packageChain: [],
-    effectivePolicy: policy,
+    effectivePolicy: options.policy,
+    effectiveCompletion: options.completion,
+    effectiveDiagnostics: options.diagnostics,
     effectivePromptFiles: {
       'AGENT.md': {
         filePath: '/virtual/AGENT.md',
-        content: 'Bridge agent purpose'
+        content: 'Purpose: Bridge agent purpose\nScope boundary: Bridge boundary'
+      },
+      'SOUL.md': {
+        filePath: '/virtual/SOUL.md',
+        content: 'Behavioral framing: Bridge framing\nSafety stance: Bridge safety\nEscalation policy: Bridge escalation'
+      },
+      'STYLE.md': {
+        filePath: '/virtual/STYLE.md',
+        content: 'Operating surface: Bridge operating surface'
       },
       'TOOLS.md': {
         filePath: '/virtual/TOOLS.md',
-        content: 'Bridge tool policy'
+        content: 'Tool-use policy: Bridge tool policy'
+      },
+      'USER.md': {
+        filePath: '/virtual/USER.md',
+        content: 'Bridge user instructions'
       }
     },
-    resolvedFiles: ['/virtual/AGENT.md', '/virtual/TOOLS.md']
+    resolvedFiles: ['/virtual/AGENT.md', '/virtual/SOUL.md', '/virtual/STYLE.md', '/virtual/TOOLS.md', '/virtual/USER.md']
   };
 }
 
@@ -1725,15 +1743,17 @@ describe('agent loop', () => {
 
   it('accepts a direct resolvedPackage runtime override during the bridge phase', async () => {
     const resolvedPackage = createBridgeResolvedPackage({
-      allowedCapabilityClasses: ['read', 'search'],
-      maxToolRounds: 3,
-      mutationMode: 'none',
-      includeMemory: false,
-      includeSkills: true,
-      includeHistorySummary: false,
-      requiresToolEvidence: true,
-      requiresSubstantiveFinalAnswer: false,
-      forbidSuccessAfterToolErrors: true
+      policy: {
+        allowedCapabilityClasses: ['read', 'search'],
+        maxToolRounds: 3,
+        mutationMode: 'none',
+        includeMemory: false,
+        includeSkills: true,
+        includeHistorySummary: false,
+        requiresToolEvidence: true,
+        requiresSubstantiveFinalAnswer: false,
+        forbidSuccessAfterToolErrors: true
+      }
     });
 
     const runtime = createAgentRuntime({
@@ -1753,6 +1773,45 @@ describe('agent loop', () => {
     expect(runtime.maxToolRounds).toBe(3);
   });
 
+  it('keeps resolvedPackage completion and diagnostics metadata on direct runtime overrides', async () => {
+    const resolvedPackage = createBridgeResolvedPackage({
+      policy: {
+        allowedCapabilityClasses: ['read'],
+        maxToolRounds: 3,
+        mutationMode: 'none',
+        diagnosticsParticipationLevel: 'trace-oriented',
+        redactionSensitivity: 'high'
+      },
+      completion: {
+        completionMode: 'resolved-mode',
+        doneCriteriaShape: 'resolved-shape',
+        evidenceRequirement: 'resolved-evidence',
+        stopVsDoneDistinction: 'resolved-stop-vs-done'
+      },
+      diagnostics: {
+        traceabilityExpectation: 'resolved-traceability'
+      }
+    });
+
+    const runtime = createAgentRuntime({
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-20250514',
+      apiKey: 'anthropic-runtime-key',
+      cwd: '/tmp/runtime-resolved-package-metadata',
+      resolvedPackage
+    });
+
+    expect(runtime.resolvedPackage?.effectiveCompletion).toEqual({
+      completionMode: 'resolved-mode',
+      doneCriteriaShape: 'resolved-shape',
+      evidenceRequirement: 'resolved-evidence',
+      stopVsDoneDistinction: 'resolved-stop-vs-done'
+    });
+    expect(runtime.resolvedPackage?.effectiveDiagnostics).toEqual({
+      traceabilityExpectation: 'resolved-traceability'
+    });
+  });
+
   it('prefers resolvedPackage context gating over legacy agentSpec contextProfile on the runtime path', async () => {
     const seenRequests: string[][] = [];
     const provider = createScriptedProvider([
@@ -1762,14 +1821,16 @@ describe('agent loop', () => {
       }
     ], seenRequests);
     const resolvedPackage = createBridgeResolvedPackage({
-      allowedCapabilityClasses: ['read'],
-      maxToolRounds: 2,
-      includeMemory: false,
-      includeSkills: false,
-      includeHistorySummary: false,
-      requiresToolEvidence: false,
-      requiresSubstantiveFinalAnswer: false,
-      forbidSuccessAfterToolErrors: false
+      policy: {
+        allowedCapabilityClasses: ['read'],
+        maxToolRounds: 2,
+        includeMemory: false,
+        includeSkills: false,
+        includeHistorySummary: false,
+        requiresToolEvidence: false,
+        requiresSubstantiveFinalAnswer: false,
+        forbidSuccessAfterToolErrors: false
+      }
     });
     const legacyAgentSpec: AgentSpec = {
       identity: {
@@ -1830,7 +1891,7 @@ describe('agent loop', () => {
     expect(result.history.at(-1)?.content).toBe('Done.');
   });
 
-  it('prefers resolvedPackage completion policy over legacy agentSpec completion on the runtime path', async () => {
+  it('prefers resolvedPackage completion metadata and policy over legacy agentSpec completion on the runtime path', async () => {
     const provider = createScriptedProvider([
       {
         message: { role: 'assistant', content: 'Done.' },
@@ -1838,11 +1899,19 @@ describe('agent loop', () => {
       }
     ]);
     const resolvedPackage = createBridgeResolvedPackage({
-      allowedCapabilityClasses: ['read'],
-      maxToolRounds: 2,
-      requiresToolEvidence: false,
-      requiresSubstantiveFinalAnswer: false,
-      forbidSuccessAfterToolErrors: false
+      policy: {
+        allowedCapabilityClasses: ['read'],
+        maxToolRounds: 2,
+        requiresToolEvidence: false,
+        requiresSubstantiveFinalAnswer: false,
+        forbidSuccessAfterToolErrors: false
+      },
+      completion: {
+        completionMode: 'resolved-mode',
+        doneCriteriaShape: 'resolved-shape',
+        evidenceRequirement: 'resolved-evidence',
+        stopVsDoneDistinction: 'resolved-stop-vs-done'
+      }
     });
     const legacyAgentSpec: AgentSpec = {
       identity: {
@@ -1887,9 +1956,12 @@ describe('agent loop', () => {
     expect(result.doneCriteria).toMatchObject({
       requiresToolEvidence: false,
       requiresSubstantiveFinalAnswer: false,
-      forbidSuccessAfterToolErrors: false
+      forbidSuccessAfterToolErrors: false,
+      completionMode: 'resolved-mode',
+      doneCriteriaShape: 'resolved-shape',
+      evidenceRequirement: 'resolved-evidence',
+      stopVsDoneDistinction: 'resolved-stop-vs-done'
     });
-    expect(result.doneCriteria.completionMode).toBe('legacy-mode');
     expect(result.verification).toMatchObject({
       isVerified: true,
       toolEvidenceSatisfied: true,

@@ -42,6 +42,12 @@ describe('packageResolver', () => {
         includeSkills: true,
         includeMemory: true
       },
+      effectiveCompletion: {
+        completionMode: 'runtime-policy',
+        doneCriteriaShape: 'checklist-driven',
+        evidenceRequirement: 'explicit',
+        stopVsDoneDistinction: 'done-vs-stop'
+      },
       effectivePromptFiles: {
         'AGENT.md': {
           content: 'Project reviewer override\n'
@@ -61,12 +67,34 @@ describe('packageResolver', () => {
       join(cwd, '.qiclaw', 'agents', 'reviewer', 'AGENT.md'),
       join(cwd, '.qiclaw', 'agents', 'reviewer', 'STYLE.md'),
       join(cwd, '.qiclaw', 'agents', 'reviewer', 'TOOLS.md'),
-      join(cwd, '.qiclaw', 'agents', 'reviewer', 'CHECKLIST.md'),
+      join(cwd, '.qiclaw', 'agents', 'reviewer', 'USER.md'),
       join(builtinPackagesDirectory, 'readonly', 'agent.json'),
       join(builtinPackagesDirectory, 'readonly', 'AGENT.md'),
       join(builtinPackagesDirectory, 'readonly', 'SOUL.md'),
-      join(builtinPackagesDirectory, 'readonly', 'TOOLS.md')
+      join(builtinPackagesDirectory, 'readonly', 'TOOLS.md'),
+      join(builtinPackagesDirectory, 'readonly', 'USER.md')
     ]);
+  });
+
+  it('resolves USER.md from the user package when no project package overrides it', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'agent-package-resolver-'));
+    tempDirs.push(tempDir);
+
+    const cwd = join(tempDir, 'workspace');
+    const homeDirectory = join(tempDir, 'home');
+    const builtinPackagesDirectory = join(tempDir, 'builtin-packages');
+    await mkdir(cwd, { recursive: true });
+
+    await copyFixtureTree(join(fixtureRoot, 'user', 'reviewer'), join(homeDirectory, '.qiclaw', 'agents', 'reviewer'));
+    await copyFixtureTree(join(fixtureRoot, 'builtin', 'readonly'), join(builtinPackagesDirectory, 'readonly'));
+
+    const resolved = await resolveAgentPackage('reviewer', { cwd, homeDirectory, builtinPackagesDirectory });
+
+    expect(resolved.sourceTier).toBe('user');
+    expect(resolved.effectivePromptFiles['USER.md']).toMatchObject({
+      filePath: join(homeDirectory, '.qiclaw', 'agents', 'reviewer', 'USER.md'),
+      content: 'Base reviewer user instructions\n'
+    });
   });
 
   it('fails when an extends target cannot be resolved from any source tier', async () => {

@@ -1,6 +1,7 @@
+import { agentPromptSlotFileNames } from './spec.js';
 import type { AgentPromptSlotFileName, ResolvedAgentPackage } from './spec.js';
 
-const promptSlotFileNames: AgentPromptSlotFileName[] = ['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md'];
+const promptSlotFileNames: AgentPromptSlotFileName[] = [...agentPromptSlotFileNames];
 
 export function renderAgentSystemPrompt(resolvedPackage: ResolvedAgentPackage): string {
   const sections = promptSlotFileNames

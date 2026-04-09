@@ -3538,6 +3538,7 @@ describe('buildCli', () => {
       }
     }, null, 2)}\n`);
     await writeFile(join(presetDir, 'AGENT.md'), 'Project readonly override\n');
+    await writeFile(join(presetDir, 'USER.md'), 'Project user override\n');
 
     const writes: string[] = [];
     const cli = buildCli({
@@ -3602,6 +3603,7 @@ describe('buildCli', () => {
       }
     }, null, 2)}\n`);
     await writeFile(join(presetDir, 'AGENT.md'), 'Project readonly override\n');
+    await writeFile(join(presetDir, 'USER.md'), 'Project user override\n');
 
     const stdoutWrites: string[] = [];
     const cli = buildCli({
@@ -3626,6 +3628,7 @@ describe('buildCli', () => {
     expect(stdoutWrites.join('')).not.toContain('CHECKLIST.md:');
     expect(stdoutWrites.join('')).toContain('Rendered system prompt:\n');
     expect(stdoutWrites.join('')).toContain('AGENT.md\nProject readonly override\n');
+    expect(stdoutWrites.join('')).toContain('USER.md\nProject user override\n');
     expect(stdoutWrites.join('')).toContain('Runtime constraints summary\n');
     expect(stdoutWrites.join('')).not.toContain('Completion mode:');
   });

@@ -1,6 +1,6 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -91,6 +91,14 @@ describe('specRegistry builtin parity', () => {
     expect(spec.policies.toolUsePolicy).toBe(
       'Use tools when the task depends on observed project state instead of relying on unsupported assumptions.'
     );
+    expect(spec.completion.completionMode).toBe('Single-turn task completion with evidence-aware verification.');
+    expect(spec.completion.doneCriteriaShape).toBe(
+      'Return a non-empty final answer and provide tool evidence when the task requires inspection.'
+    );
+    expect(spec.completion.evidenceRequirement).toBe('Use direct project evidence for inspection-style claims.');
+    expect(spec.completion.stopVsDoneDistinction).toBe(
+      'A provider stop is not enough unless the final answer satisfies verification criteria.'
+    );
     expect(spec.completion.maxToolRounds).toBe(10);
     expect(spec.diagnosticsProfile).toEqual({
       diagnosticsParticipationLevel: 'normal',
@@ -111,6 +119,16 @@ describe('specRegistry builtin parity', () => {
     expect(spec.policies.toolUsePolicy).toBe(
       'Use read and search tools to gather project evidence before making inspection claims.'
     );
+    expect(spec.completion.completionMode).toBe('Single-turn read-only inspection with strict evidence-aware verification.');
+    expect(spec.completion.doneCriteriaShape).toBe(
+      'Return a substantive final answer grounded in direct project inspection evidence.'
+    );
+    expect(spec.completion.evidenceRequirement).toBe(
+      'Use successful read/search tool results for inspection-style claims.'
+    );
+    expect(spec.completion.stopVsDoneDistinction).toBe(
+      'A provider stop is insufficient unless the answer is substantive and consistent with the observed tool results.'
+    );
     expect(spec.completion.requiresToolEvidence).toBe(true);
     expect(spec.completion.maxToolRounds).toBe(6);
     expect(resolved.extendsChain).toEqual(['readonly', 'default']);
@@ -118,6 +136,21 @@ describe('specRegistry builtin parity', () => {
 });
 
 describe('specRegistry builtin validation', () => {
+  it('loads builtin assets from source and dist without CHECKLIST.md leftovers', async () => {
+    const projectRoot = resolve(join(import.meta.dirname, '..', '..'));
+    const directories = [
+      join(projectRoot, 'src', 'agent', 'builtin-packages'),
+      join(projectRoot, 'dist', 'agent', 'builtin-packages')
+    ];
+
+    for (const directoryPath of directories) {
+      await expect(readFile(join(directoryPath, 'default', 'CHECKLIST.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(directoryPath, 'readonly', 'CHECKLIST.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(directoryPath, 'default', 'USER.md'), 'utf8')).resolves.toContain('Default user instructions');
+      await expect(readFile(join(directoryPath, 'readonly', 'USER.md'), 'utf8')).resolves.toContain('Readonly user instructions');
+    }
+  });
+
   it('validates loaded builtin packages before resolving them', async () => {
     const builtinPackagesDirectory = await createBuiltinPackagesDirectory();
     await writeBuiltinPackageFixture(builtinPackagesDirectory, 'default', {
@@ -132,12 +165,7 @@ describe('specRegistry builtin validation', () => {
         'SOUL.md': 'Behavioral framing: Minimal\nSafety stance: Minimal\nEscalation policy: Minimal',
         'STYLE.md': 'Operating surface: Minimal',
         'TOOLS.md': 'Tool-use policy: Minimal',
-        'CHECKLIST.md': [
-          'Completion mode: Minimal',
-          'Done criteria shape: Minimal',
-          'Evidence requirement: Minimal',
-          'Stop-vs-done distinction: Minimal'
-        ].join('\n')
+        'USER.md': 'Minimal user instructions'
       }
     });
     await writeBuiltinPackageFixture(builtinPackagesDirectory, 'readonly', {
@@ -154,12 +182,7 @@ describe('specRegistry builtin validation', () => {
         'SOUL.md': 'Behavioral framing: Readonly\nSafety stance: Readonly\nEscalation policy: Readonly',
         'STYLE.md': 'Operating surface: Readonly',
         'TOOLS.md': 'Tool-use policy: Readonly',
-        'CHECKLIST.md': [
-          'Completion mode: Readonly',
-          'Done criteria shape: Readonly',
-          'Evidence requirement: Readonly',
-          'Stop-vs-done distinction: Readonly'
-        ].join('\n')
+        'USER.md': 'Readonly user instructions'
       }
     });
 
@@ -184,12 +207,7 @@ describe('specRegistry builtin validation', () => {
         'SOUL.md': 'Behavioral framing: Default\nSafety stance: Default\nEscalation policy: Default',
         'STYLE.md': 'Operating surface: Default',
         'TOOLS.md': 'Tool-use policy: Default',
-        'CHECKLIST.md': [
-          'Completion mode: Default',
-          'Done criteria shape: Default',
-          'Evidence requirement: Default',
-          'Stop-vs-done distinction: Default'
-        ].join('\n')
+        'USER.md': 'Default user instructions'
       }
     });
     await writeBuiltinPackageFixture(builtinPackagesDirectory, 'readonly', {
@@ -206,12 +224,7 @@ describe('specRegistry builtin validation', () => {
         'SOUL.md': 'Behavioral framing: Readonly\nSafety stance: Readonly\nEscalation policy: Readonly',
         'STYLE.md': 'Operating surface: Readonly',
         'TOOLS.md': 'Tool-use policy: Readonly',
-        'CHECKLIST.md': [
-          'Completion mode: Readonly',
-          'Done criteria shape: Readonly',
-          'Evidence requirement: Readonly',
-          'Stop-vs-done distinction: Readonly'
-        ].join('\n')
+        'USER.md': 'Readonly user instructions'
       }
     });
 
@@ -239,12 +252,7 @@ describe('specRegistry builtin validation', () => {
         'SOUL.md': 'Behavioral framing: Default\nSafety stance: Default\nEscalation policy: Default',
         'STYLE.md': 'Operating surface: Default',
         'TOOLS.md': 'Tool-use policy: Default',
-        'CHECKLIST.md': [
-          'Completion mode: Default',
-          'Done criteria shape: Default',
-          'Evidence requirement: Default',
-          'Stop-vs-done distinction: Default'
-        ].join('\n')
+        'USER.md': 'Default user instructions'
       }
     });
     await writeBuiltinPackageFixture(builtinPackagesDirectory, 'readonly', {
@@ -261,12 +269,7 @@ describe('specRegistry builtin validation', () => {
         'SOUL.md': 'Behavioral framing: Readonly\nSafety stance: Readonly\nEscalation policy: Readonly',
         'STYLE.md': 'Operating surface: Readonly',
         'TOOLS.md': 'Tool-use policy: Readonly',
-        'CHECKLIST.md': [
-          'Completion mode: Readonly',
-          'Done criteria shape: Readonly',
-          'Evidence requirement: Readonly',
-          'Stop-vs-done distinction: Readonly'
-        ].join('\n')
+        'USER.md': 'Readonly user instructions'
       }
     });
 

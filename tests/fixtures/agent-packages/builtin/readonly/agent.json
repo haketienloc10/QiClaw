@@ -4,5 +4,11 @@
     "maxToolRounds": 6,
     "mutationMode": "none",
     "includeSkills": true
+  },
+  "completion": {
+    "completionMode": "runtime-policy",
+    "doneCriteriaShape": "checklist-driven",
+    "evidenceRequirement": "implicit",
+    "stopVsDoneDistinction": "base-done-vs-stop"
   }
 }

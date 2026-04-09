@@ -7,9 +7,8 @@ import {
   validateLoadedAgentPackage,
   validateResolvedAgentPackage
 } from './packageValidator.js';
+import { agentPromptSlotFileNames } from './spec.js';
 import type { AgentPromptSlotFileName, AgentSpec, LoadedAgentPackage, ResolvedAgentPackage } from './spec.js';
-
-const promptSlotFileNames: AgentPromptSlotFileName[] = ['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'CHECKLIST.md'];
 const builtinPackagesDirectory = dirname(getBuiltinAgentPackageDirectory('default'));
 const builtinAgentSpecNames = readdirSync(builtinPackagesDirectory, { withFileTypes: true })
   .filter((entry) => entry.isDirectory())
@@ -77,13 +76,21 @@ function resolveBuiltinAgentPackageWithStack(name: string, stack: string[]): Res
       allowedCapabilityClasses:
         loaded.manifest?.policy?.allowedCapabilityClasses ?? parentPackage?.effectivePolicy.allowedCapabilityClasses
     },
+    effectiveCompletion: {
+      ...(parentPackage?.effectiveCompletion ?? {}),
+      ...(loaded.manifest?.completion ?? {})
+    },
+    effectiveDiagnostics: {
+      ...(parentPackage?.effectiveDiagnostics ?? {}),
+      ...(loaded.manifest?.diagnostics ?? {})
+    },
     effectivePromptFiles: {
       ...(parentPackage?.effectivePromptFiles ?? {}),
       ...loaded.promptFiles
     },
     resolvedFiles: [
       loaded.manifestPath,
-      ...promptSlotFileNames.flatMap((slotFileName) => {
+      ...agentPromptSlotFileNames.flatMap((slotFileName) => {
         const promptFile = loaded.promptFiles[slotFileName];
         return promptFile ? [promptFile.filePath] : [];
       }),
@@ -104,7 +111,7 @@ function loadBuiltinPackage(name: BuiltinAgentSpecName): LoadedAgentPackage {
   const manifestPath = join(directoryPath, 'agent.json');
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as LoadedAgentPackage['manifest'];
   const promptFiles = Object.fromEntries(
-    promptSlotFileNames.flatMap((slotFileName) => {
+    agentPromptSlotFileNames.flatMap((slotFileName) => {
       const filePath = join(directoryPath, slotFileName);
 
       try {
@@ -134,7 +141,6 @@ function deriveAgentSpecFromResolvedPackage(resolvedPackage: ResolvedAgentPackag
   const soulPrompt = requirePromptFileContent(resolvedPackage, 'SOUL.md').split('\n');
   const stylePrompt = requirePromptFileContent(resolvedPackage, 'STYLE.md').split('\n');
   const toolsPrompt = requirePromptFileContent(resolvedPackage, 'TOOLS.md').split('\n');
-  const checklistPrompt = requirePromptFileContent(resolvedPackage, 'CHECKLIST.md').split('\n');
   const mutationMode = resolvedPackage.effectivePolicy.mutationMode;
 
   return {
@@ -158,10 +164,10 @@ function deriveAgentSpecFromResolvedPackage(resolvedPackage: ResolvedAgentPackag
           : 'Mutate the project surface only when the task requires it and keep changes tightly scoped.'
     },
     completion: {
-      completionMode: readLineValue(checklistPrompt, 'Completion mode: '),
-      doneCriteriaShape: readLineValue(checklistPrompt, 'Done criteria shape: '),
-      evidenceRequirement: readLineValue(checklistPrompt, 'Evidence requirement: '),
-      stopVsDoneDistinction: readLineValue(checklistPrompt, 'Stop-vs-done distinction: '),
+      completionMode: resolvedPackage.effectiveCompletion?.completionMode ?? '',
+      doneCriteriaShape: resolvedPackage.effectiveCompletion?.doneCriteriaShape ?? '',
+      evidenceRequirement: resolvedPackage.effectiveCompletion?.evidenceRequirement ?? '',
+      stopVsDoneDistinction: resolvedPackage.effectiveCompletion?.stopVsDoneDistinction ?? '',
       maxToolRounds: resolvedPackage.effectivePolicy.maxToolRounds ?? 1,
       requiresToolEvidence: resolvedPackage.effectivePolicy.requiresToolEvidence,
       requiresSubstantiveFinalAnswer: resolvedPackage.effectivePolicy.requiresSubstantiveFinalAnswer,
@@ -176,7 +182,7 @@ function deriveAgentSpecFromResolvedPackage(resolvedPackage: ResolvedAgentPackag
     diagnosticsProfile: resolvedPackage.effectivePolicy.diagnosticsParticipationLevel
       ? {
           diagnosticsParticipationLevel: resolvedPackage.effectivePolicy.diagnosticsParticipationLevel,
-          traceabilityExpectation: readOptionalLineValue(checklistPrompt, 'Traceability expectation: '),
+          traceabilityExpectation: resolvedPackage.effectiveDiagnostics?.traceabilityExpectation,
           redactionSensitivity: resolvedPackage.effectivePolicy.redactionSensitivity
         }
       : undefined
@@ -234,6 +240,17 @@ function compileResolvedAgentPackage(name: string, spec: AgentSpec): ResolvedAge
       diagnosticsParticipationLevel: spec.diagnosticsProfile?.diagnosticsParticipationLevel,
       redactionSensitivity: spec.diagnosticsProfile?.redactionSensitivity
     },
+    effectiveCompletion: {
+      completionMode: spec.completion.completionMode,
+      doneCriteriaShape: spec.completion.doneCriteriaShape,
+      evidenceRequirement: spec.completion.evidenceRequirement,
+      stopVsDoneDistinction: spec.completion.stopVsDoneDistinction
+    },
+    effectiveDiagnostics: spec.diagnosticsProfile?.traceabilityExpectation
+      ? {
+          traceabilityExpectation: spec.diagnosticsProfile.traceabilityExpectation
+        }
+      : undefined,
     effectivePromptFiles: buildPromptFiles(spec),
     resolvedFiles: []
   };
@@ -276,17 +293,9 @@ function buildPromptFiles(spec: AgentSpec): Partial<Record<AgentPromptSlotFileNa
           : ''
       ].filter((line) => line.length > 0).join('\n')
     },
-    'CHECKLIST.md': {
-      filePath: 'builtin://CHECKLIST.md',
-      content: [
-        `Completion mode: ${spec.completion.completionMode}`,
-        `Done criteria shape: ${spec.completion.doneCriteriaShape}`,
-        `Evidence requirement: ${spec.completion.evidenceRequirement}`,
-        `Stop-vs-done distinction: ${spec.completion.stopVsDoneDistinction}`,
-        spec.diagnosticsProfile?.traceabilityExpectation
-          ? `Traceability expectation: ${spec.diagnosticsProfile.traceabilityExpectation}`
-          : ''
-      ].filter((line) => line.length > 0).join('\n')
+    'USER.md': {
+      filePath: 'builtin://USER.md',
+      content: ''
     }
   };
 }

@@ -157,7 +157,7 @@ describe('MemvidSessionStore', () => {
 
     const putSpy = vi.spyOn(memvid!, 'put');
     const findSpy = vi.spyOn(memvid!, 'find');
-    const embedder = (store as { embedder?: { embedQuery(text: string): Promise<number[]> } }).embedder!;
+    const embedder = (store as unknown as { embedder?: { embedQuery(text: string): Promise<number[]> } }).embedder!;
     const embedQuerySpy = vi.spyOn(embedder, 'embedQuery').mockImplementation(async () => new Array(768).fill(0.1));
 
     await store.put(createEntry({ sessionId: 'session_ollama' }));

@@ -23,7 +23,7 @@ import { measurePromptTelemetry } from '../telemetry/providerMetrics.js';
 import type { Tool } from '../tools/registry.js';
 
 import { buildDoneCriteria, type DoneCriteria } from './doneCriteria.js';
-import type { AgentSpec } from './spec.js';
+import type { AgentCompletionSpec, AgentSpec, ResolvedAgentPackage } from './spec.js';
 import { verifyAgentTurn, type AgentTurnVerification } from './verifier.js';
 
 export interface RunAgentTurnInput {
@@ -34,6 +34,7 @@ export interface RunAgentTurnInput {
   cwd: string;
   maxToolRounds: number;
   agentSpec?: AgentSpec;
+  resolvedPackage?: ResolvedAgentPackage;
   observer?: TelemetryObserver;
   memoryText?: string;
   skillsText?: string;
@@ -237,6 +238,25 @@ export async function collectCompletedTurn(stream: AsyncIterable<TurnEvent>): Pr
   return terminal;
 }
 
+function resolveTurnCompletionSpec(input: RunAgentTurnInput): AgentCompletionSpec | undefined {
+  if (input.resolvedPackage) {
+    const policy = input.resolvedPackage.effectivePolicy;
+    const legacyCompletion = input.agentSpec?.completion;
+    return {
+      completionMode: legacyCompletion?.completionMode ?? 'runtime-policy',
+      doneCriteriaShape: legacyCompletion?.doneCriteriaShape ?? 'runtime-policy',
+      evidenceRequirement: legacyCompletion?.evidenceRequirement ?? 'runtime-policy',
+      stopVsDoneDistinction: legacyCompletion?.stopVsDoneDistinction ?? 'runtime-policy',
+      maxToolRounds: policy.maxToolRounds ?? input.maxToolRounds,
+      requiresToolEvidence: policy.requiresToolEvidence,
+      requiresSubstantiveFinalAnswer: policy.requiresSubstantiveFinalAnswer,
+      forbidSuccessAfterToolErrors: policy.forbidSuccessAfterToolErrors
+    };
+  }
+
+  return input.agentSpec?.completion;
+}
+
 function assertValidTurnCompletedEvent(
   event: Extract<TurnEvent, { type: 'turn_completed' }>
 ): asserts event is Extract<TurnEvent, { type: 'turn_completed' }> {
@@ -260,7 +280,9 @@ export async function* runAgentTurnStream(
 ): AsyncIterable<TurnEvent> {
   const observer = state?.observer ?? input.observer ?? createNoopObserver();
   const history: Message[] = [...(input.history ?? []), { role: 'user', content: input.userInput }];
-  const doneCriteria = buildDoneCriteria(input.userInput, input.agentSpec?.completion);
+  const completionSpec = resolveTurnCompletionSpec(input);
+  const resolvedPolicy = input.resolvedPackage?.effectivePolicy;
+  const doneCriteria = buildDoneCriteria(input.userInput, completionSpec);
   const telemetry = state?.telemetry ?? createTurnTelemetryState();
   let finalAnswer = '';
 
@@ -273,6 +295,9 @@ export async function* runAgentTurnStream(
         memoryText: input.memoryText,
         skillsText: input.skillsText,
         historySummary: input.historySummary,
+        includeMemory: resolvedPolicy?.includeMemory ?? input.agentSpec?.contextProfile?.includeMemory,
+        includeSkills: resolvedPolicy?.includeSkills ?? input.agentSpec?.contextProfile?.includeSkills,
+        includeHistorySummary: resolvedPolicy?.includeHistorySummary ?? input.agentSpec?.contextProfile?.includeHistorySummary,
         history
       });
 
@@ -886,6 +911,10 @@ async function* readProviderStream(
   messages: Message[],
   availableTools: Tool[]
 ): AsyncIterable<NormalizedEvent> {
+  if (typeof provider.stream !== 'function') {
+    throw new Error(`Provider ${provider.name} does not support streaming.`);
+  }
+
   for await (const event of provider.stream({ messages, availableTools })) {
     yield event;
   }
@@ -897,6 +926,10 @@ function readProviderStreamWithTimeout(
   availableTools: Tool[],
   timeoutMs: number
 ): AsyncIterable<NormalizedEvent> {
+  if (typeof provider.stream !== 'function') {
+    throw new Error(`Provider ${provider.name} does not support streaming.`);
+  }
+
   return withProviderStreamTimeout(provider.stream({ messages, availableTools }), timeoutMs, provider.name);
 }
 

@@ -317,24 +317,12 @@ function formatPathToolLabel(input: unknown, fallbackNoun: string): string {
 
 function formatSearchToolActionLabel(input: unknown): string {
   const query = formatSearchQueryValue(input);
-  const maxResults = formatSearchNumericOption(input, 'maxResults');
-  const includeContext = formatSearchBooleanOption(input, 'includeContext');
 
-  if (query && !maxResults && !includeContext) {
-    return `search ${query}`;
-  }
-
-  const parts = [
-    query ? `query=${JSON.stringify(query)}` : undefined,
-    maxResults,
-    includeContext
-  ].filter((part): part is string => Boolean(part));
-
-  if (parts.length === 0) {
+  if (!query) {
     return 'search';
   }
 
-  return `search(${parts.join(', ')})`;
+  return `search ${query}`;
 }
 
 function formatSearchQueryValue(input: unknown): string | undefined {

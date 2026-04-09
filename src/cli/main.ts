@@ -1,7 +1,10 @@
-import { mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import pc from 'picocolors';
+import { createAgentPackagePreview } from '../agent/packagePreview.js';
+import { resolveAgentPackage as resolveAgentPackageForPreview } from '../agent/packageResolver.js';
 import { createAgentRuntime, type AgentRuntime } from '../agent/runtime.js';
+import type { ResolvedAgentPackage } from '../agent/spec.js';
 import {
   createRunAgentTurnExecution,
   type RunAgentTurnInput,
@@ -29,7 +32,7 @@ import {
   createCompactCliTelemetryObserver,
   type CompactCliTelemetryObserver
 } from '../telemetry/display.js';
-import { createFileJsonLineWriter, createJsonLineLogger } from '../telemetry/logger.js';
+import { createJsonLineLogger, type JsonLineWriter } from '../telemetry/logger.js';
 import { createInMemoryMetricsObserver } from '../telemetry/metrics.js';
 import type { TelemetryObserver } from '../telemetry/observer.js';
 import { createRepl } from './repl.js';
@@ -91,7 +94,12 @@ export interface BuildCliOptions {
   stdout?: Pick<NodeJS.WriteStream, 'write'>;
   stderr?: Pick<NodeJS.WriteStream, 'write'>;
   readLine?: (promptLabel: string) => Promise<string | undefined>;
-  createRuntime?: (options: ResolvedProviderConfig & { cwd: string; observer?: AgentRuntime['observer']; agentSpecName?: string }) => AgentRuntime;
+  createRuntime?: (options: ResolvedProviderConfig & {
+    cwd: string;
+    observer?: AgentRuntime['observer'];
+    agentSpecName?: string;
+    resolvedPackage?: ResolvedAgentPackage;
+  }) => AgentRuntime;
   createCheckpointStore?: (filename: string) => CheckpointStore;
   createSessionId?: () => string;
   runTurn?: (input: CliRunTurnInput) => Promise<CliRunTurnResult>;
@@ -150,17 +158,27 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
       try {
         loadCliEnvFiles(cwd);
         const parsed = parseArgs(argv);
+
+        if (parsed.agentSpecPreviewName) {
+          stdout.write(await formatAgentSpecPreview(parsed.agentSpecPreviewName, cwd));
+          return 0;
+        }
+
         const providerConfig = resolveProviderConfig({
           provider: parsed.provider,
           model: parsed.model,
           baseUrl: parsed.baseUrl,
           apiKey: parsed.apiKey
         });
+        const resolvedPackage = parsed.agentSpecName
+          ? await resolveAgentPackageForCliExecution(parsed.agentSpecName, cwd)
+          : undefined;
         const runtime = createRuntime({
           ...providerConfig,
           cwd,
           observer: undefined,
-          agentSpecName: parsed.agentSpecName
+          agentSpecName: parsed.agentSpecName,
+          resolvedPackage
         });
         const memoryConfig = resolveMemoryEmbeddingConfig(process.env);
 
@@ -191,6 +209,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
                 cwd: runtime.cwd,
                 maxToolRounds: runtime.maxToolRounds,
                 agentSpec: runtime.agentSpec,
+                resolvedPackage: runtime.resolvedPackage ?? undefined,
                 observer: cliObserver.observer
               });
             },
@@ -285,6 +304,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
               cwd: runtime.cwd,
               maxToolRounds: runtime.maxToolRounds,
               agentSpec: runtime.agentSpec,
+              resolvedPackage: runtime.resolvedPackage ?? undefined,
               observer: cliObserver.observer,
               history: historyContext.history,
               historySummary: historyContext.historySummary,
@@ -958,12 +978,12 @@ function createCliObserver(options: {
     observers.push(compactObserver);
   }
   const selectedDebugLogPath = options.debugLogPath ?? options.envDebugLogPath;
-  let recallInputsDebugWriter: ReturnType<typeof createFileJsonLineWriter> | undefined;
+  let recallInputsDebugWriter: JsonLineWriter | undefined;
 
   if (selectedDebugLogPath) {
     const resolvedDebugLogPath = resolveCliPath(options.cwd, selectedDebugLogPath);
     mkdirSync(dirname(resolvedDebugLogPath), { recursive: true });
-    const debugWriter = createFileJsonLineWriter(resolvedDebugLogPath);
+    const debugWriter = createCliJsonLineWriter(resolvedDebugLogPath);
     recallInputsDebugWriter = debugWriter;
     observers.push(createJsonLineLogger(debugWriter));
   }
@@ -999,6 +1019,16 @@ function createCliObserver(options: {
       return (record: RecallInputsDebugRecord) => {
         recallInputsDebugWriter?.appendLine(`${JSON.stringify(record)}\n`);
       };
+    }
+  };
+}
+
+function createCliJsonLineWriter(filePath: string): JsonLineWriter {
+  appendFileSync(filePath, '', 'utf8');
+
+  return {
+    appendLine(line: string) {
+      appendFileSync(filePath, line, 'utf8');
     }
   };
 }
@@ -1067,6 +1097,51 @@ function formatInteractiveInfoLine(text: string): string {
   return `${pc.cyan('ℹ')} ${pc.dim(text)}`;
 }
 
+async function formatAgentSpecPreview(agentSpecName: string, cwd: string): Promise<string> {
+  const preview = createAgentPackagePreview(await resolveAgentPackagePreview(agentSpecName, cwd));
+  const sectionFileLines = ['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'CHECKLIST.md']
+    .map((slot) => `- ${slot}: ${preview.sectionFiles[slot as keyof typeof preview.sectionFiles] ?? '(not provided)'}`)
+    .join('\n');
+  const effectivePolicyText = JSON.stringify(preview.effectiveRuntimePolicy, null, 2);
+
+  return [
+    `Agent spec preview: ${preview.preset}`,
+    `Source tier: ${preview.sourceTier}`,
+    `Inheritance chain: ${preview.extendsChain.join(' -> ')}`,
+    'Section files:',
+    sectionFileLines,
+    'Effective runtime policy:',
+    effectivePolicyText,
+    'Rendered system prompt:',
+    preview.renderedPromptText,
+    ''
+  ].join('\n');
+}
+
+async function resolveAgentPackagePreview(agentSpecName: string, cwd: string) {
+  try {
+    return await resolveAgentPackageForPreview(agentSpecName, { cwd });
+  } catch (error) {
+    if (error instanceof Error && error.message === `Agent package "${agentSpecName}" extends unknown package "${agentSpecName}".`) {
+      throw new Error(`Unknown agent spec: ${agentSpecName}`);
+    }
+
+    throw error;
+  }
+}
+
+async function resolveAgentPackageForCliExecution(agentSpecName: string, cwd: string) {
+  try {
+    return await resolveAgentPackageForPreview(agentSpecName, { cwd });
+  } catch (error) {
+    if (error instanceof Error && error.message === `Agent package "${agentSpecName}" extends unknown package "${agentSpecName}".`) {
+      throw new Error(`Unknown agent spec: ${agentSpecName}`);
+    }
+
+    throw error;
+  }
+}
+
 function parseArgs(argv: string[]): {
   prompt?: string;
   provider: ProviderId;
@@ -1075,6 +1150,7 @@ function parseArgs(argv: string[]): {
   apiKey?: string;
   debugLogPath?: string;
   agentSpecName?: string;
+  agentSpecPreviewName?: string;
 } {
   let prompt: string | undefined;
   let provider = resolveDefaultProviderFromEnv();
@@ -1083,6 +1159,7 @@ function parseArgs(argv: string[]): {
   let apiKey: string | undefined;
   let debugLogPath: string | undefined;
   let agentSpecName: string | undefined;
+  let agentSpecPreviewName: string | undefined;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -1171,6 +1248,18 @@ function parseArgs(argv: string[]): {
       continue;
     }
 
+    if (token === '--agent-spec-preview') {
+      const value = argv[index + 1];
+
+      if (!value || value.startsWith('--')) {
+        throw new Error('Missing value for --agent-spec-preview');
+      }
+
+      agentSpecPreviewName = value;
+      index += 1;
+      continue;
+    }
+
     if (token.startsWith('--')) {
       throw new Error(`Unknown argument: ${token}`);
     }
@@ -1185,7 +1274,8 @@ function parseArgs(argv: string[]): {
     baseUrl,
     apiKey,
     debugLogPath,
-    agentSpecName
+    agentSpecName,
+    agentSpecPreviewName
   };
 }
 

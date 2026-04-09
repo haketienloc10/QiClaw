@@ -3,9 +3,8 @@ import type { ModelProvider, ResolvedProviderConfig } from '../provider/model.js
 import { createNoopObserver, type TelemetryObserver } from '../telemetry/observer.js';
 import { getBuiltinTools, type Tool } from '../tools/registry.js';
 
-import { defaultAgentSpec } from './defaultAgentSpec.js';
-import { getBuiltinAgentSpec } from './specRegistry.js';
-import type { AgentCapabilityClass, AgentSpec } from './spec.js';
+import { getBuiltinAgentSpec, resolveAgentPackage } from './specRegistry.js';
+import type { AgentCapabilityClass, AgentSpec, ResolvedAgentPackage } from './spec.js';
 import { renderAgentSystemPrompt } from './specPrompt.js';
 
 export interface AgentRuntime {
@@ -13,7 +12,8 @@ export interface AgentRuntime {
   availableTools: Tool[];
   cwd: string;
   observer: TelemetryObserver;
-  agentSpec: AgentSpec;
+  agentSpec?: AgentSpec;
+  resolvedPackage?: ResolvedAgentPackage;
   systemPrompt: string;
   maxToolRounds: number;
 }
@@ -23,6 +23,7 @@ export interface CreateAgentRuntimeOptions extends ResolvedProviderConfig {
   observer?: TelemetryObserver;
   agentSpec?: AgentSpec;
   agentSpecName?: string;
+  resolvedPackage?: ResolvedAgentPackage;
 }
 
 const builtinToolNamesByCapabilityClass: Record<AgentCapabilityClass, string[]> = {
@@ -34,8 +35,14 @@ const builtinToolNamesByCapabilityClass: Record<AgentCapabilityClass, string[]> 
 };
 
 export function createAgentRuntime(options: CreateAgentRuntimeOptions): AgentRuntime {
-  const agentSpec = options.agentSpec ?? (options.agentSpecName ? getBuiltinAgentSpec(options.agentSpecName) : defaultAgentSpec);
-  const availableTools = filterToolsForSpec(getBuiltinTools(), agentSpec);
+  const resolvedPackage = options.resolvedPackage ?? resolveAgentPackage({
+    agentSpec: options.agentSpec,
+    agentSpecName: options.agentSpecName
+  });
+  const availableTools = filterToolsForSpec(getBuiltinTools(), resolvedPackage);
+  const agentSpec = options.resolvedPackage
+    ? undefined
+    : options.agentSpec ?? getBuiltinAgentSpec(options.agentSpecName ?? resolvedPackage.preset);
 
   return {
     provider: createProvider({
@@ -48,14 +55,15 @@ export function createAgentRuntime(options: CreateAgentRuntimeOptions): AgentRun
     cwd: options.cwd,
     observer: options.observer ?? createNoopObserver(),
     agentSpec,
-    systemPrompt: renderAgentSystemPrompt(agentSpec),
-    maxToolRounds: agentSpec.completion.maxToolRounds
+    resolvedPackage,
+    systemPrompt: renderAgentSystemPrompt(resolvedPackage),
+    maxToolRounds: resolvedPackage.effectivePolicy.maxToolRounds ?? 1
   };
 }
 
-function filterToolsForSpec(tools: Tool[], agentSpec: AgentSpec): Tool[] {
+function filterToolsForSpec(tools: Tool[], resolvedPackage: ResolvedAgentPackage): Tool[] {
   const allowedToolNames = new Set(
-    agentSpec.capabilities.allowedCapabilityClasses.flatMap((capabilityClass) => builtinToolNamesByCapabilityClass[capabilityClass] ?? [])
+    (resolvedPackage.effectivePolicy.allowedCapabilityClasses ?? []).flatMap((capabilityClass) => builtinToolNamesByCapabilityClass[capabilityClass] ?? [])
   );
 
   return tools.filter((tool) => allowedToolNames.has(tool.name));

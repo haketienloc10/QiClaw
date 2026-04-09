@@ -1,0 +1,8 @@
+{
+  "extends": 123,
+  "policy": {
+    "allowedCapabilityClasses": "read",
+    "maxToolRounds": "3",
+    "mutationMode": "dangerous"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "policy": {
+    "allowedCapabilityClasses": ["read", "write", "search", "exec_readonly", "execute"],
+    "maxToolRounds": 10,
+    "requiresSubstantiveFinalAnswer": true,
+    "forbidSuccessAfterToolErrors": true,
+    "mutationMode": "workspace-write",
+    "includeMemory": true,
+    "includeSkills": true,
+    "includeHistorySummary": true,
+    "diagnosticsParticipationLevel": "normal",
+    "redactionSensitivity": "standard"
+  }
+}

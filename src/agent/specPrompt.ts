@@ -1,90 +1,33 @@
-import type { AgentSpec } from './spec.js';
+import type { AgentPromptSlotFileName, ResolvedAgentPackage } from './spec.js';
 
-export function renderAgentSystemPrompt(spec: AgentSpec): string {
-  const sections = [
-    'You are an agent operating inside the QiClaw runtime.',
-    renderIdentitySection(spec),
-    renderCapabilitiesSection(spec),
-    renderPoliciesSection(spec),
-    renderCompletionSection(spec),
-    renderContextSection(spec),
-    renderDiagnosticsSection(spec)
-  ].filter((section) => section.length > 0);
+const promptSlotFileNames: AgentPromptSlotFileName[] = ['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'CHECKLIST.md'];
+
+export function renderAgentSystemPrompt(resolvedPackage: ResolvedAgentPackage): string {
+  const sections = promptSlotFileNames
+    .flatMap((slotFileName) => {
+      const promptFile = resolvedPackage.effectivePromptFiles[slotFileName];
+      return promptFile ? [[slotFileName, promptFile.content].join('\n')] : [];
+    })
+    .concat(renderRuntimeConstraintsSummary(resolvedPackage));
 
   return sections.join('\n\n');
 }
 
-function renderIdentitySection(spec: AgentSpec): string {
-  return [
-    'Identity:',
-    `- Purpose: ${spec.identity.purpose}`,
-    `- Behavioral framing: ${spec.identity.behavioralFraming}`,
-    `- Scope boundary: ${spec.identity.scopeBoundary}`
-  ].join('\n');
-}
-
-function renderCapabilitiesSection(spec: AgentSpec): string {
-  return [
-    'Capabilities:',
-    `- Allowed capability classes: ${spec.capabilities.allowedCapabilityClasses.join(', ')}`,
-    `- Operating surface: ${spec.capabilities.operatingSurface}`,
-    `- Capability exclusions: ${spec.capabilities.capabilityExclusions.join('; ')}`
-  ].join('\n');
-}
-
-function renderPoliciesSection(spec: AgentSpec): string {
-  return [
-    'Policies:',
-    `- Safety stance: ${spec.policies.safetyStance}`,
-    `- Tool-use policy: ${spec.policies.toolUsePolicy}`,
-    `- Escalation policy: ${spec.policies.escalationPolicy}`,
-    `- Mutation policy: ${spec.policies.mutationPolicy}`
-  ].join('\n');
-}
-
-function renderCompletionSection(spec: AgentSpec): string {
-  return [
-    'Completion:',
-    `- Completion mode: ${spec.completion.completionMode}`,
-    `- Done criteria shape: ${spec.completion.doneCriteriaShape}`,
-    `- Evidence requirement: ${spec.completion.evidenceRequirement}`,
-    `- Stop-vs-done distinction: ${spec.completion.stopVsDoneDistinction}`
-  ].join('\n');
-}
-
-function renderContextSection(spec: AgentSpec): string {
-  if (!spec.contextProfile) {
-    return '';
-  }
-
-  const hints = spec.contextProfile.priorityHints?.join('; ');
+function renderRuntimeConstraintsSummary(resolvedPackage: ResolvedAgentPackage): string {
+  const policy = resolvedPackage.effectivePolicy;
 
   return [
-    'Context profile:',
-    `- Include memory: ${spec.contextProfile.includeMemory === true ? 'yes' : 'no'}`,
-    `- Include skills: ${spec.contextProfile.includeSkills === true ? 'yes' : 'no'}`,
-    `- Include history summary: ${spec.contextProfile.includeHistorySummary === true ? 'yes' : 'no'}`,
-    hints ? `- Priority hints: ${hints}` : ''
-  ]
-    .filter((line) => line.length > 0)
-    .join('\n');
-}
-
-function renderDiagnosticsSection(spec: AgentSpec): string {
-  if (!spec.diagnosticsProfile) {
-    return '';
-  }
-
-  return [
-    'Diagnostics profile:',
-    `- Participation level: ${spec.diagnosticsProfile.diagnosticsParticipationLevel}`,
-    spec.diagnosticsProfile.traceabilityExpectation
-      ? `- Traceability expectation: ${spec.diagnosticsProfile.traceabilityExpectation}`
-      : '',
-    spec.diagnosticsProfile.redactionSensitivity
-      ? `- Redaction sensitivity: ${spec.diagnosticsProfile.redactionSensitivity}`
-      : ''
-  ]
-    .filter((line) => line.length > 0)
-    .join('\n');
+    'Runtime constraints summary',
+    `- Allowed capability classes: ${(policy.allowedCapabilityClasses ?? []).join(', ')}`,
+    `- Max tool rounds: ${policy.maxToolRounds ?? 0}`,
+    `- Mutation mode: ${policy.mutationMode ?? 'none'}`,
+    `- Requires tool evidence: ${policy.requiresToolEvidence === true ? 'yes' : 'no'}`,
+    `- Requires substantive final answer: ${policy.requiresSubstantiveFinalAnswer === true ? 'yes' : 'no'}`,
+    `- Forbid success after tool errors: ${policy.forbidSuccessAfterToolErrors === true ? 'yes' : 'no'}`,
+    `- Include memory: ${policy.includeMemory === true ? 'yes' : 'no'}`,
+    `- Include skills: ${policy.includeSkills === true ? 'yes' : 'no'}`,
+    `- Include history summary: ${policy.includeHistorySummary === true ? 'yes' : 'no'}`,
+    policy.diagnosticsParticipationLevel ? `- Diagnostics participation: ${policy.diagnosticsParticipationLevel}` : '',
+    policy.redactionSensitivity ? `- Redaction sensitivity: ${policy.redactionSensitivity}` : ''
+  ].filter((line) => line.length > 0).join('\n');
 }

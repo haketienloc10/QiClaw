@@ -5,10 +5,10 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { dispatchToolCall } from '../../src/agent/dispatcher.js';
-import { defaultAgentSpec } from '../../src/agent/defaultAgentSpec.js';
 import { collectCompletedTurn, runAgentTurn, runAgentTurnStream } from '../../src/agent/loop.js';
-import { readonlyAgentSpec } from '../../src/agent/presets/readonlyAgentSpec.js';
 import { createAgentRuntime } from '../../src/agent/runtime.js';
+import { resolveBuiltinAgentPackage } from '../../src/agent/specRegistry.js';
+import type { AgentSpec, ResolvedAgentPackage } from '../../src/agent/spec.js';
 import { createInMemoryMetricsObserver } from '../../src/telemetry/metrics.js';
 import {
   buildAnthropicMessagesRequest,
@@ -44,7 +44,32 @@ import { shellExecTool, shellReadonlyTool } from '../../src/tools/shell.js';
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  delete process.env.QICLAW_PROVIDER_TIMEOUT_MS;
 });
+
+const defaultResolvedPackage = resolveBuiltinAgentPackage('default');
+const readonlyResolvedPackage = resolveBuiltinAgentPackage('readonly');
+
+function createBridgeResolvedPackage(policy: ResolvedAgentPackage['effectivePolicy']): ResolvedAgentPackage {
+  return {
+    preset: 'custom-bridge',
+    sourceTier: 'project',
+    extendsChain: ['custom-bridge'],
+    packageChain: [],
+    effectivePolicy: policy,
+    effectivePromptFiles: {
+      'AGENT.md': {
+        filePath: '/virtual/AGENT.md',
+        content: 'Bridge agent purpose'
+      },
+      'TOOLS.md': {
+        filePath: '/virtual/TOOLS.md',
+        content: 'Bridge tool policy'
+      }
+    },
+    resolvedFiles: ['/virtual/AGENT.md', '/virtual/TOOLS.md']
+  };
+}
 
 describe('telemetry typing', () => {
   it('requires payloads for events whose contracts need data', () => {
@@ -831,6 +856,30 @@ describe('agent loop', () => {
     });
   });
 
+  it('uses generate when provider does not expose stream', async () => {
+    const generate = vi.fn(async () => normalizeProviderResponse({
+      content: 'Hello from generate'
+    }));
+    const provider: ModelProvider = {
+      name: 'scripted-generate-only',
+      model: 'test-model',
+      generate
+    };
+
+    const result = await runAgentTurn({
+      provider,
+      availableTools: [],
+      baseSystemPrompt: 'system',
+      userInput: 'say hi',
+      cwd: process.cwd(),
+      maxToolRounds: 1
+    });
+
+    expect(generate).toHaveBeenCalledOnce();
+    expect(result.finalAnswer).toBe('Hello from generate');
+    expect(result.toolRoundsUsed).toBe(0);
+  });
+
   it('keeps runAgentTurn result parity with the collected turn_completed stream payload', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'agent-loop-stream-parity-'));
     await writeFile(join(workspace, 'note.txt'), 'agent note', 'utf8');
@@ -941,7 +990,7 @@ describe('agent loop', () => {
             required: ['path'],
             additionalProperties: false
           },
-          async execute(input) {
+          async execute(input: { path: string }) {
             executedToolCalls.push(String(input.path));
             return { content: `read:${String(input.path)}` };
           }
@@ -1084,7 +1133,7 @@ describe('agent loop', () => {
             required: ['path'],
             additionalProperties: false
           },
-          async execute(input) {
+          async execute(input: { path: string }) {
             executedToolCalls.push(String(input.path));
             return { content: `read:${String(input.path)}` };
           }
@@ -1265,7 +1314,7 @@ describe('agent loop', () => {
     expect(result.history.map((entry) => entry.role)).toEqual(['user', 'assistant', 'tool', 'assistant']);
   });
 
-  it('includes prompt assembly context when optional prompt inputs are provided', async () => {
+  it('includes prompt assembly context only when each runtime context gate allows it', async () => {
     const seenRequests: string[][] = [];
     const provider = createScriptedProvider(
       [
@@ -1287,7 +1336,37 @@ describe('agent loop', () => {
       memoryText: 'Memory: user prefers concise answers',
       skillsText: 'Skills: concise_response',
       historySummary: 'Summary: prior attempt failed',
-      history: [{ role: 'assistant', content: 'Earlier answer.' }]
+      history: [{ role: 'assistant', content: 'Earlier answer.' }],
+      agentSpec: {
+        identity: {
+          purpose: 'Legacy prompt-only purpose',
+          behavioralFraming: 'Legacy prompt-only framing',
+          scopeBoundary: 'Legacy prompt-only boundary'
+        },
+        capabilities: {
+          allowedCapabilityClasses: ['read', 'write', 'search', 'exec_readonly', 'execute'],
+          operatingSurface: 'Legacy prompt-only operating surface',
+          capabilityExclusions: []
+        },
+        policies: {
+          safetyStance: 'Legacy prompt-only safety stance',
+          toolUsePolicy: 'Legacy prompt-only tool use policy',
+          escalationPolicy: 'Legacy prompt-only escalation policy',
+          mutationPolicy: 'Allow workspace edits.'
+        },
+        completion: {
+          completionMode: 'legacy-prompt-only-mode',
+          doneCriteriaShape: 'legacy-prompt-only-shape',
+          evidenceRequirement: 'legacy-prompt-only-evidence',
+          stopVsDoneDistinction: 'legacy-prompt-only-stop-vs-done',
+          maxToolRounds: 10
+        },
+        contextProfile: {
+          includeMemory: false,
+          includeSkills: false,
+          includeHistorySummary: false
+        }
+      }
     });
 
     expect(result.history).toEqual([
@@ -1297,15 +1376,14 @@ describe('agent loop', () => {
     ]);
     expect(seenRequests).toEqual([
       [
-        'system:Base prompt\n\nSkills: concise_response\n\nSummary: prior attempt failed',
-        'user:Memory: user prefers concise answers',
+        'system:Base prompt',
         'assistant:Earlier answer.',
         'user:Answer briefly.'
       ]
     ]);
   });
 
-  it('accepts AgentSpec completion metadata without changing the current loop happy path', async () => {
+  it('applies AgentSpec completion booleans to verification while keeping bridge prose as compatibility metadata', async () => {
     const calls: string[][] = [];
     const provider = createScriptedProvider([
       {
@@ -1320,17 +1398,47 @@ describe('agent loop', () => {
       baseSystemPrompt: 'Spec prompt',
       userInput: 'Answer briefly.',
       cwd: '/tmp/runtime',
-      maxToolRounds: defaultAgentSpec.completion.maxToolRounds,
-      agentSpec: defaultAgentSpec
+      maxToolRounds: 10,
+      agentSpec: {
+        identity: {
+          purpose: 'Legacy completion purpose',
+          behavioralFraming: 'Legacy completion framing',
+          scopeBoundary: 'Legacy completion boundary'
+        },
+        capabilities: {
+          allowedCapabilityClasses: ['read', 'write', 'search', 'exec_readonly', 'execute'],
+          operatingSurface: 'Legacy completion operating surface',
+          capabilityExclusions: []
+        },
+        policies: {
+          safetyStance: 'Legacy completion safety stance',
+          toolUsePolicy: 'Legacy completion tool use policy',
+          escalationPolicy: 'Legacy completion escalation policy',
+          mutationPolicy: 'Allow workspace edits.'
+        },
+        completion: {
+          completionMode: 'Single-turn task completion with evidence-aware verification.',
+          doneCriteriaShape: 'Return a non-empty final answer and provide tool evidence when the task requires inspection.',
+          evidenceRequirement: 'Use direct project evidence for inspection-style claims.',
+          stopVsDoneDistinction: 'A provider stop is not enough unless the final answer satisfies verification criteria.',
+          maxToolRounds: 10,
+          requiresToolEvidence: false,
+          requiresSubstantiveFinalAnswer: true,
+          forbidSuccessAfterToolErrors: true
+        }
+      }
     });
 
-    expect(result.doneCriteria.completionMode).toBe(defaultAgentSpec.completion.completionMode);
-    expect(result.doneCriteria.doneCriteriaShape).toBe(defaultAgentSpec.completion.doneCriteriaShape);
-    expect(result.doneCriteria.evidenceRequirement).toBe(defaultAgentSpec.completion.evidenceRequirement);
-    expect(result.doneCriteria.stopVsDoneDistinction).toBe(defaultAgentSpec.completion.stopVsDoneDistinction);
+    expect(result.doneCriteria).toMatchObject({
+      requiresToolEvidence: false,
+      requiresSubstantiveFinalAnswer: true,
+      forbidSuccessAfterToolErrors: true
+    });
+    expect(result.doneCriteria.completionMode).toBe('Single-turn task completion with evidence-aware verification.');
     expect(calls).toEqual([['system:Spec prompt', 'user:Answer briefly.']]);
     expect(result.verification.isVerified).toBe(false);
     expect(result.verification.finalAnswerIsSubstantive).toBe(false);
+    expect(result.verification.noUnresolvedToolErrors).toBe(true);
   });
 
   it('blocks a non-allowed tool before dispatcher lookup and does not count the error as inspection evidence', async () => {
@@ -1559,7 +1667,7 @@ describe('agent loop', () => {
     ]);
   });
 
-  it('creates a runtime with the selected anthropic provider, builtin tools, cwd, observer, and AgentSpec defaults', async () => {
+  it('creates a runtime from the shared resolved package model instead of the legacy prompt prose renderer', async () => {
     const runtime = createAgentRuntime({
       provider: 'anthropic',
       model: 'claude-sonnet-4-20250514',
@@ -1573,10 +1681,29 @@ describe('agent loop', () => {
     expect(runtime.provider.name).toBe('anthropic');
     expect(runtime.provider.model).toBe('claude-sonnet-4-20250514');
     expect(runtime.observer.record).toBeTypeOf('function');
-    expect(runtime.agentSpec).toEqual(defaultAgentSpec);
-    expect(runtime.systemPrompt).toContain('Identity:');
-    expect(runtime.systemPrompt).toContain(defaultAgentSpec.identity.purpose);
-    expect(runtime.maxToolRounds).toBe(defaultAgentSpec.completion.maxToolRounds);
+    expect(runtime.agentSpec?.capabilities.allowedCapabilityClasses).toEqual(['read', 'write', 'search', 'exec_readonly', 'execute']);
+    expect(runtime.resolvedPackage).toMatchObject({
+      preset: 'default',
+      sourceTier: 'builtin',
+      extendsChain: ['default'],
+      effectivePolicy: {
+        allowedCapabilityClasses: ['read', 'write', 'search', 'exec_readonly', 'execute'],
+        maxToolRounds: 10,
+        requiresSubstantiveFinalAnswer: true,
+        forbidSuccessAfterToolErrors: true,
+        mutationMode: 'workspace-write',
+        includeMemory: true,
+        includeSkills: true,
+        includeHistorySummary: true,
+        diagnosticsParticipationLevel: 'normal',
+        redactionSensitivity: 'standard'
+      }
+    });
+    expect(runtime.systemPrompt).toContain('AGENT.md');
+    expect(runtime.systemPrompt).toContain('- Allowed capability classes: read, write, search, exec_readonly, execute');
+    expect(runtime.systemPrompt).toContain('Runtime constraints summary');
+    expect(runtime.maxToolRounds).toBe(10);
+    expect(runtime.resolvedPackage?.effectivePolicy).toEqual(defaultResolvedPackage.effectivePolicy);
   });
 
   it('creates a runtime with the selected openai provider and requested model', async () => {
@@ -1596,7 +1723,181 @@ describe('agent loop', () => {
     expect(runtime.maxToolRounds).toBe(10);
   });
 
-  it('creates a runtime from the readonly built-in AgentSpec preset', async () => {
+  it('accepts a direct resolvedPackage runtime override during the bridge phase', async () => {
+    const resolvedPackage = createBridgeResolvedPackage({
+      allowedCapabilityClasses: ['read', 'search'],
+      maxToolRounds: 3,
+      mutationMode: 'none',
+      includeMemory: false,
+      includeSkills: true,
+      includeHistorySummary: false,
+      requiresToolEvidence: true,
+      requiresSubstantiveFinalAnswer: false,
+      forbidSuccessAfterToolErrors: true
+    });
+
+    const runtime = createAgentRuntime({
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-20250514',
+      apiKey: 'anthropic-runtime-key',
+      cwd: '/tmp/runtime-resolved-package',
+      resolvedPackage
+    });
+
+    expect(runtime.agentSpec).toBeUndefined();
+    expect(runtime.resolvedPackage).toBe(resolvedPackage);
+    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['read_file', 'search']);
+    expect(runtime.systemPrompt).toContain('AGENT.md');
+    expect(runtime.systemPrompt).toContain('Bridge agent purpose');
+    expect(runtime.systemPrompt).toContain('- Include memory: no');
+    expect(runtime.maxToolRounds).toBe(3);
+  });
+
+  it('prefers resolvedPackage context gating over legacy agentSpec contextProfile on the runtime path', async () => {
+    const seenRequests: string[][] = [];
+    const provider = createScriptedProvider([
+      {
+        message: { role: 'assistant', content: 'Done.' },
+        toolCalls: []
+      }
+    ], seenRequests);
+    const resolvedPackage = createBridgeResolvedPackage({
+      allowedCapabilityClasses: ['read'],
+      maxToolRounds: 2,
+      includeMemory: false,
+      includeSkills: false,
+      includeHistorySummary: false,
+      requiresToolEvidence: false,
+      requiresSubstantiveFinalAnswer: false,
+      forbidSuccessAfterToolErrors: false
+    });
+    const legacyAgentSpec: AgentSpec = {
+      identity: {
+        purpose: 'Legacy bridge purpose',
+        behavioralFraming: 'Legacy framing',
+        scopeBoundary: 'Legacy boundary'
+      },
+      capabilities: {
+        allowedCapabilityClasses: ['read', 'write', 'search', 'exec_readonly', 'execute'],
+        operatingSurface: 'Legacy operating surface',
+        capabilityExclusions: []
+      },
+      policies: {
+        safetyStance: 'Legacy safety stance',
+        toolUsePolicy: 'Legacy tool use policy',
+        escalationPolicy: 'Legacy escalation policy',
+        mutationPolicy: 'Allow workspace edits.'
+      },
+      completion: {
+        completionMode: 'legacy-mode',
+        doneCriteriaShape: 'legacy-shape',
+        evidenceRequirement: 'legacy-evidence',
+        stopVsDoneDistinction: 'legacy-stop-vs-done',
+        maxToolRounds: 9,
+        requiresToolEvidence: true,
+        requiresSubstantiveFinalAnswer: true,
+        forbidSuccessAfterToolErrors: true
+      },
+      contextProfile: {
+        includeMemory: true,
+        includeSkills: true,
+        includeHistorySummary: true
+      }
+    };
+
+    const result = await runAgentTurn({
+      provider,
+      availableTools: getBuiltinTools(),
+      baseSystemPrompt: 'Bridge prompt',
+      userInput: 'Answer briefly.',
+      cwd: '/tmp/runtime-bridge-context',
+      maxToolRounds: 2,
+      agentSpec: legacyAgentSpec,
+      resolvedPackage,
+      memoryText: 'Memory: should be hidden',
+      skillsText: 'Skills: should be hidden',
+      historySummary: 'Summary: should be hidden',
+      history: [{ role: 'assistant', content: 'Earlier answer.' }]
+    });
+
+    expect(seenRequests).toEqual([
+      [
+        'system:Bridge prompt',
+        'assistant:Earlier answer.',
+        'user:Answer briefly.'
+      ]
+    ]);
+    expect(result.history.at(-1)?.content).toBe('Done.');
+  });
+
+  it('prefers resolvedPackage completion policy over legacy agentSpec completion on the runtime path', async () => {
+    const provider = createScriptedProvider([
+      {
+        message: { role: 'assistant', content: 'Done.' },
+        toolCalls: []
+      }
+    ]);
+    const resolvedPackage = createBridgeResolvedPackage({
+      allowedCapabilityClasses: ['read'],
+      maxToolRounds: 2,
+      requiresToolEvidence: false,
+      requiresSubstantiveFinalAnswer: false,
+      forbidSuccessAfterToolErrors: false
+    });
+    const legacyAgentSpec: AgentSpec = {
+      identity: {
+        purpose: 'Legacy bridge purpose',
+        behavioralFraming: 'Legacy framing',
+        scopeBoundary: 'Legacy boundary'
+      },
+      capabilities: {
+        allowedCapabilityClasses: ['read', 'write', 'search', 'exec_readonly', 'execute'],
+        operatingSurface: 'Legacy operating surface',
+        capabilityExclusions: []
+      },
+      policies: {
+        safetyStance: 'Legacy safety stance',
+        toolUsePolicy: 'Legacy tool use policy',
+        escalationPolicy: 'Legacy escalation policy',
+        mutationPolicy: 'Allow workspace edits.'
+      },
+      completion: {
+        completionMode: 'legacy-mode',
+        doneCriteriaShape: 'legacy-shape',
+        evidenceRequirement: 'legacy-evidence',
+        stopVsDoneDistinction: 'legacy-stop-vs-done',
+        maxToolRounds: 9,
+        requiresToolEvidence: true,
+        requiresSubstantiveFinalAnswer: true,
+        forbidSuccessAfterToolErrors: true
+      }
+    };
+
+    const result = await runAgentTurn({
+      provider,
+      availableTools: getBuiltinTools(),
+      baseSystemPrompt: 'Bridge prompt',
+      userInput: 'Answer briefly.',
+      cwd: '/tmp/runtime-bridge-completion',
+      maxToolRounds: 2,
+      agentSpec: legacyAgentSpec,
+      resolvedPackage
+    });
+
+    expect(result.doneCriteria).toMatchObject({
+      requiresToolEvidence: false,
+      requiresSubstantiveFinalAnswer: false,
+      forbidSuccessAfterToolErrors: false
+    });
+    expect(result.doneCriteria.completionMode).toBe('legacy-mode');
+    expect(result.verification).toMatchObject({
+      isVerified: true,
+      toolEvidenceSatisfied: true,
+      noUnresolvedToolErrors: true
+    });
+  });
+
+  it('creates a runtime from the readonly resolved package preset', async () => {
     const runtime = createAgentRuntime({
       provider: 'anthropic',
       model: 'claude-sonnet-4-20250514',
@@ -1606,10 +1907,14 @@ describe('agent loop', () => {
     });
 
     expect(runtime.cwd).toBe('/tmp/runtime-readonly');
-    expect(runtime.agentSpec).toEqual(readonlyAgentSpec);
+    expect(runtime.agentSpec?.capabilities.allowedCapabilityClasses).toEqual(['read', 'search', 'exec_readonly']);
     expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['read_file', 'search', 'shell_readonly']);
-    expect(runtime.maxToolRounds).toBe(readonlyAgentSpec.completion.maxToolRounds);
-    expect(runtime.systemPrompt).toContain(readonlyAgentSpec.identity.purpose);
+    expect(runtime.maxToolRounds).toBe(6);
+    expect(runtime.systemPrompt).toContain('AGENT');
+    expect(runtime.systemPrompt).toContain('- Allowed capability classes: read, search, exec_readonly');
+    expect(runtime.systemPrompt).toContain('- Mutation mode: none');
+    expect(runtime.systemPrompt).toContain('Runtime constraints summary');
+    expect(runtime.resolvedPackage?.effectivePolicy).toEqual(readonlyResolvedPackage.effectivePolicy);
   });
 
   it('records deterministic telemetry events while a turn runs', async () => {
@@ -2582,7 +2887,7 @@ describe('agent loop', () => {
       model: 'test-model',
       async generate() {
         return await new Promise<ProviderResponse>(() => undefined);
-      }
+      },
     };
 
     const turnPromise = runAgentTurn({
@@ -2609,7 +2914,7 @@ describe('agent loop', () => {
       model: 'test-model',
       async generate() {
         return await new Promise<ProviderResponse>(() => undefined);
-      }
+      },
     };
 
     const turnPromise = runAgentTurn({
@@ -2824,7 +3129,10 @@ describe('agent loop', () => {
         doneCriteria: {
           goal: 'Read note.txt carefully.',
           checklist: ['Read note.txt carefully.'],
-          requiresToolEvidence: true
+          requiresNonEmptyFinalAnswer: true as const,
+          requiresToolEvidence: true,
+          requiresSubstantiveFinalAnswer: false,
+          forbidSuccessAfterToolErrors: false
         },
         turnCompleted: false
       };
@@ -2841,7 +3149,10 @@ describe('agent loop', () => {
       doneCriteria: {
         goal: 'Read note.txt carefully.',
         checklist: ['Read note.txt carefully.'],
-        requiresToolEvidence: true
+        requiresNonEmptyFinalAnswer: true as const,
+        requiresToolEvidence: true,
+        requiresSubstantiveFinalAnswer: false,
+        forbidSuccessAfterToolErrors: false
       },
       turnCompleted: false
     });
@@ -2877,7 +3188,10 @@ describe('agent loop', () => {
         doneCriteria: {
           goal: 'Answer briefly.',
           checklist: ['Answer briefly.'],
-          requiresToolEvidence: false
+          requiresNonEmptyFinalAnswer: true as const,
+          requiresToolEvidence: false,
+          requiresSubstantiveFinalAnswer: false,
+          forbidSuccessAfterToolErrors: false
         },
         turnCompleted: true
       };
@@ -2890,7 +3204,10 @@ describe('agent loop', () => {
         doneCriteria: {
           goal: 'Answer briefly.',
           checklist: ['Answer briefly.'],
-          requiresToolEvidence: false
+          requiresNonEmptyFinalAnswer: true as const,
+          requiresToolEvidence: false,
+          requiresSubstantiveFinalAnswer: false,
+          forbidSuccessAfterToolErrors: false
         },
         turnCompleted: true
       };
@@ -2911,7 +3228,10 @@ describe('agent loop', () => {
         doneCriteria: {
           goal: 'Answer briefly.',
           checklist: ['Answer briefly.'],
-          requiresToolEvidence: false
+          requiresNonEmptyFinalAnswer: true as const,
+          requiresToolEvidence: false,
+          requiresSubstantiveFinalAnswer: false,
+          forbidSuccessAfterToolErrors: false
         },
         turnCompleted: true
       };
@@ -2932,7 +3252,10 @@ describe('agent loop', () => {
         doneCriteria: {
           goal: 'Answer briefly.',
           checklist: ['Answer briefly.'],
-          requiresToolEvidence: false
+          requiresNonEmptyFinalAnswer: true as const,
+          requiresToolEvidence: false,
+          requiresSubstantiveFinalAnswer: false,
+          forbidSuccessAfterToolErrors: false
         },
         turnCompleted: true
       };

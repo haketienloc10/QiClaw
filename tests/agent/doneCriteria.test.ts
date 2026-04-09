@@ -3,72 +3,73 @@ import { describe, expect, it } from 'vitest';
 import type { Message } from '../../src/core/types.js';
 import type { ToolResultMessage } from '../../src/provider/model.js';
 import { buildDoneCriteria } from '../../src/agent/doneCriteria.js';
-import { defaultAgentSpec } from '../../src/agent/defaultAgentSpec.js';
+import { resolveBuiltinAgentPackage } from '../../src/agent/specRegistry.js';
 import { verifyAgentTurn } from '../../src/agent/verifier.js';
+
+const defaultResolvedPackage = resolveBuiltinAgentPackage('default');
 
 describe('done criteria', () => {
   it('builds deterministic criteria for a simple goal', () => {
-    expect(buildDoneCriteria('Answer with a short greeting.')).toEqual({
+    expect(buildDoneCriteria('Answer with a short greeting.')).toMatchObject({
       goal: 'Answer with a short greeting.',
       checklist: ['Answer with a short greeting.'],
       requiresNonEmptyFinalAnswer: true,
       requiresToolEvidence: false,
       requiresSubstantiveFinalAnswer: false,
       forbidSuccessAfterToolErrors: false,
-      toolEvidenceReason: undefined,
-      completionMode: undefined,
-      doneCriteriaShape: undefined,
-      evidenceRequirement: undefined,
-      stopVsDoneDistinction: undefined
+      toolEvidenceReason: undefined
     });
   });
 
   it('splits a compound goal into a deterministic checklist and requires tool evidence for inspection goals', () => {
-    expect(buildDoneCriteria('Read package.json and summarize scripts, then inspect tests')).toEqual({
+    expect(buildDoneCriteria('Read package.json and summarize scripts, then inspect tests')).toMatchObject({
       goal: 'Read package.json and summarize scripts, then inspect tests',
       checklist: ['Read package.json', 'summarize scripts', 'inspect tests'],
       requiresNonEmptyFinalAnswer: true,
       requiresToolEvidence: true,
       requiresSubstantiveFinalAnswer: false,
       forbidSuccessAfterToolErrors: false,
-      toolEvidenceReason: 'Goal asks for project inspection via read/search/check/review actions.',
-      completionMode: undefined,
-      doneCriteriaShape: undefined,
-      evidenceRequirement: undefined,
-      stopVsDoneDistinction: undefined
+      toolEvidenceReason: 'Goal asks for project inspection via read/search/check/review actions.'
     });
   });
 
   it('does not require tool evidence for purely linguistic review wording', () => {
-    expect(buildDoneCriteria('Review this answer and shorten it.')).toEqual({
+    expect(buildDoneCriteria('Review this answer and shorten it.')).toMatchObject({
       goal: 'Review this answer and shorten it.',
       checklist: ['Review this answer', 'shorten it.'],
       requiresNonEmptyFinalAnswer: true,
       requiresToolEvidence: false,
       requiresSubstantiveFinalAnswer: false,
       forbidSuccessAfterToolErrors: false,
-      toolEvidenceReason: undefined,
-      completionMode: undefined,
-      doneCriteriaShape: undefined,
-      evidenceRequirement: undefined,
-      stopVsDoneDistinction: undefined
+      toolEvidenceReason: undefined
     });
   });
 
-  it('includes completion metadata from AgentSpec when provided', () => {
-    expect(buildDoneCriteria('Answer with a short greeting.', defaultAgentSpec.completion)).toEqual({
+  it('prefers runtime completion booleans while preserving legacy bridge prose as compatibility metadata', () => {
+    const criteria = buildDoneCriteria('Answer with a short greeting.', {
+      maxToolRounds: defaultResolvedPackage.effectivePolicy.maxToolRounds ?? 1,
+      requiresToolEvidence: defaultResolvedPackage.effectivePolicy.requiresToolEvidence,
+      requiresSubstantiveFinalAnswer: defaultResolvedPackage.effectivePolicy.requiresSubstantiveFinalAnswer,
+      forbidSuccessAfterToolErrors: defaultResolvedPackage.effectivePolicy.forbidSuccessAfterToolErrors,
+      completionMode: 'Single-turn task completion with evidence-aware verification.',
+      doneCriteriaShape: 'Return a non-empty final answer and provide tool evidence when the task requires inspection.',
+      evidenceRequirement: 'Use direct project evidence for inspection-style claims.',
+      stopVsDoneDistinction: 'A provider stop is not enough unless the final answer satisfies verification criteria.'
+    });
+
+    expect(criteria).toMatchObject({
       goal: 'Answer with a short greeting.',
       checklist: ['Answer with a short greeting.'],
       requiresNonEmptyFinalAnswer: true,
       requiresToolEvidence: false,
       requiresSubstantiveFinalAnswer: true,
       forbidSuccessAfterToolErrors: true,
-      toolEvidenceReason: undefined,
-      completionMode: 'Single-turn task completion with evidence-aware verification.',
-      doneCriteriaShape: 'Return a non-empty final answer and provide tool evidence when the task requires inspection.',
-      evidenceRequirement: 'Use direct project evidence for inspection-style claims.',
-      stopVsDoneDistinction: 'A provider stop is not enough unless the final answer satisfies verification criteria.'
+      toolEvidenceReason: undefined
     });
+    expect(criteria.completionMode).toBe('Single-turn task completion with evidence-aware verification.');
+    expect(criteria.doneCriteriaShape).toBe('Return a non-empty final answer and provide tool evidence when the task requires inspection.');
+    expect(criteria.evidenceRequirement).toBe('Use direct project evidence for inspection-style claims.');
+    expect(criteria.stopVsDoneDistinction).toBe('A provider stop is not enough unless the final answer satisfies verification criteria.');
   });
 });
 

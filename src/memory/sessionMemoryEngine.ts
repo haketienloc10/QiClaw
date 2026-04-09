@@ -239,10 +239,14 @@ export async function captureInteractiveTurnMemory(
   await input.store.seal();
 
   if (shouldCaptureGlobalMemory(entry)) {
-    const globalStore = new GlobalMemoryStore({ memoryConfig: input.memoryConfig });
-    await globalStore.open();
-    await globalStore.put(entry);
-    await globalStore.seal();
+    try {
+      const globalStore = new GlobalMemoryStore({ memoryConfig: input.memoryConfig });
+      await globalStore.open();
+      await globalStore.put(entry);
+      await globalStore.seal();
+    } catch {
+      // Keep session memory capture best-effort even if global persistence fails.
+    }
   }
 
   const meta = await input.store.readMeta();

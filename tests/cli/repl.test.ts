@@ -1,11 +1,13 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { defaultAgentSpec } from '../../src/agent/defaultAgentSpec.js';
+import { getBuiltinAgentSpec } from '../../src/agent/specRegistry.js';
+import type { ResolvedAgentPackage } from '../../src/agent/spec.js';
 import { buildCli, type CliRunTurnResult } from '../../src/cli/main.js';
+import type { NormalizedEvent } from '../../src/provider/model.js';
 import { createRepl } from '../../src/cli/repl.js';
 import type { TurnEvent } from '../../src/agent/loop.js';
 import { getDefaultModelForProvider, parseProviderId, resolveProviderConfig } from '../../src/provider/config.js';
@@ -28,6 +30,8 @@ const providerEnvKeys = [
 ] as const;
 
 type ProviderEnvSnapshot = Partial<Record<(typeof providerEnvKeys)[number], string>>;
+
+const defaultAgentSpec = getBuiltinAgentSpec('default');
 
 function snapshotProviderEnv(): ProviderEnvSnapshot {
   return {
@@ -71,7 +75,7 @@ function createSuccessfulRunTurn(): (input: { userInput: string }) => Promise<Cl
     doneCriteria: {
       goal: input.userInput,
       checklist: [input.userInput],
-      requiresNonEmptyFinalAnswer: true,
+      requiresNonEmptyFinalAnswer: true as const,
       requiresToolEvidence: false,
       requiresSubstantiveFinalAnswer: false,
       forbidSuccessAfterToolErrors: false
@@ -88,15 +92,55 @@ function createSuccessfulRunTurn(): (input: { userInput: string }) => Promise<Cl
   });
 }
 
-function createTestRuntime(cwd: string, observer?: TelemetryObserver) {
+function createBridgeResolvedPackage(policy: ResolvedAgentPackage['effectivePolicy']): ResolvedAgentPackage {
   return {
-    provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+    preset: 'cli-bridge',
+    sourceTier: 'project',
+    extendsChain: ['cli-bridge'],
+    packageChain: [],
+    effectivePolicy: policy,
+    effectivePromptFiles: {
+      'AGENT.md': {
+        filePath: '/virtual/AGENT.md',
+        content: 'CLI bridge agent purpose'
+      }
+    },
+    resolvedFiles: ['/virtual/AGENT.md']
+  };
+}
+
+function createNoopTestProvider() {
+  return {
+    name: 'test-provider',
+    model: 'test-model',
+    async generate() {
+      throw new Error('not used');
+    },
+    async *stream() {
+      throw new Error('not used');
+    }
+  };
+}
+
+function createTestRuntime(
+  cwd: string,
+  observer?: TelemetryObserver,
+  overrides: Partial<{
+    agentSpec: typeof defaultAgentSpec | undefined;
+    resolvedPackage: ResolvedAgentPackage;
+    systemPrompt: string;
+    maxToolRounds: number;
+  }> = {}
+) {
+  return {
+    provider: createNoopTestProvider(),
     availableTools: [],
     cwd,
     observer: observer ?? { record() {} },
-    agentSpec: defaultAgentSpec,
-    systemPrompt: 'Test prompt',
-    maxToolRounds: 3
+    agentSpec: overrides.agentSpec ?? defaultAgentSpec,
+    resolvedPackage: overrides.resolvedPackage ?? createBridgeResolvedPackage({ maxToolRounds: overrides.maxToolRounds ?? 3 }),
+    systemPrompt: overrides.systemPrompt ?? 'Test prompt',
+    maxToolRounds: overrides.maxToolRounds ?? 3
   };
 }
 
@@ -283,7 +327,7 @@ describe('createRepl', () => {
         doneCriteria: {
           goal: 'hello',
           checklist: ['hello'],
-          requiresNonEmptyFinalAnswer: true,
+          requiresNonEmptyFinalAnswer: true as const,
           requiresToolEvidence: false,
           requiresSubstantiveFinalAnswer: false,
           forbidSuccessAfterToolErrors: false
@@ -603,11 +647,12 @@ describe('createRepl', () => {
         }
       },
       createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        provider: createNoopTestProvider(),
         availableTools: [],
         cwd: '/tmp/qiclaw-interactive-layout',
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -689,7 +734,7 @@ describe('createRepl', () => {
           doneCriteria: {
             goal: input.userInput,
             checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
+            requiresNonEmptyFinalAnswer: true as const,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
@@ -738,11 +783,12 @@ describe('createRepl', () => {
         }
       },
       createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        provider: createNoopTestProvider(),
         availableTools: [],
         cwd: '/tmp/qiclaw-interactive-multi-turn-layout',
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -763,6 +809,96 @@ describe('createRepl', () => {
 });
 
 describe('buildCli', () => {
+  it('passes runtime resolvedPackage through prompt-mode turn execution during the bridge phase', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-resolved-package-prompt-'));
+    tempDirs.push(tempDir);
+
+    let observedResolvedPackage: ResolvedAgentPackage | undefined;
+    const runtimeResolvedPackage = createBridgeResolvedPackage({
+      maxToolRounds: 7,
+      includeMemory: false,
+      requiresToolEvidence: false
+    });
+    const { cli } = createPromptCliTestHarness({
+      cwd: tempDir,
+      runTurn: async (input) => {
+        observedResolvedPackage = input.resolvedPackage;
+
+        return {
+          stopReason: 'completed',
+          finalAnswer: `handled: ${input.userInput}`,
+          history: [],
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true as const,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
+            toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
+            toolMessagesCount: 0,
+            checks: []
+          }
+        };
+      },
+      stdout: {
+        write() {
+          return true;
+        }
+      }
+    });
+
+    const cliWithResolvedPackage = buildCli({
+      argv: ['--prompt', 'inspect package.json'],
+      cwd: tempDir,
+      stdout: { write() { return true; } },
+      createRuntime: (runtimeOptions) => createTestRuntime(tempDir, runtimeOptions.observer, {
+        agentSpec: undefined,
+        resolvedPackage: runtimeResolvedPackage,
+        maxToolRounds: 7
+      }),
+      runTurn: async (input) => {
+        observedResolvedPackage = input.resolvedPackage;
+
+        return {
+          stopReason: 'completed',
+          finalAnswer: `handled: ${input.userInput}`,
+          history: [],
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true as const,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
+            toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
+            toolMessagesCount: 0,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(cliWithResolvedPackage.run()).resolves.toBe(0);
+    expect(observedResolvedPackage).toBe(runtimeResolvedPackage);
+    expect(observedResolvedPackage?.effectivePolicy.maxToolRounds).toBe(7);
+    void cli;
+  });
+
   it('keeps prompt mode output compact with safe summaries when tool telemetry events are recorded', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-telemetry-'));
     tempDirs.push(tempDir);
@@ -827,7 +963,7 @@ describe('buildCli', () => {
           doneCriteria: {
             goal: input.userInput,
             checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
+            requiresNonEmptyFinalAnswer: true as const,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
@@ -908,7 +1044,7 @@ describe('buildCli', () => {
           doneCriteria: {
             goal: input.userInput,
             checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
+            requiresNonEmptyFinalAnswer: true as const,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
@@ -983,7 +1119,7 @@ describe('buildCli', () => {
           doneCriteria: {
             goal: input.userInput,
             checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
+            requiresNonEmptyFinalAnswer: true as const,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
@@ -1021,11 +1157,12 @@ describe('buildCli', () => {
         }
       },
       createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        provider: createNoopTestProvider(),
         availableTools: [],
         cwd: '/tmp/qiclaw-interactive-tool-placement',
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -1130,7 +1267,7 @@ describe('buildCli', () => {
           doneCriteria: {
             goal: input.userInput,
             checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
+            requiresNonEmptyFinalAnswer: true as const,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
@@ -1189,11 +1326,12 @@ describe('buildCli', () => {
         }
       } as Pick<NodeJS.WriteStream, 'write'> & { isTTY: boolean },
       createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        provider: createNoopTestProvider(),
         availableTools: [],
         cwd: '/tmp/qiclaw-interactive-tool-non-tty',
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -1263,7 +1401,7 @@ describe('buildCli', () => {
           doneCriteria: {
             goal: input.userInput,
             checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
+            requiresNonEmptyFinalAnswer: true as const,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
@@ -1290,9 +1428,6 @@ describe('buildCli', () => {
 
   it('prefers --debug-log over QICLAW_DEBUG_LOG and writes JSONL events to the selected file', async () => {
     await withProviderEnvSnapshot(async () => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date('2026-03-31T12:34:56.000Z'));
-
       const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-debug-log-'));
       tempDirs.push(tempDir);
 
@@ -1305,7 +1440,7 @@ describe('buildCli', () => {
         cwd: tempDir,
         stdout: { write() { return true; } },
         createRuntime: (runtimeOptions) => ({
-          provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+          provider: createNoopTestProvider(),
           availableTools: [],
           cwd: tempDir,
           observer: runtimeOptions.observer ?? createNoopObserver(),
@@ -1332,7 +1467,7 @@ describe('buildCli', () => {
             doneCriteria: {
               goal: input.userInput,
               checklist: [input.userInput],
-              requiresNonEmptyFinalAnswer: true,
+              requiresNonEmptyFinalAnswer: true as const,
               requiresToolEvidence: false,
               requiresSubstantiveFinalAnswer: false,
               forbidSuccessAfterToolErrors: false
@@ -1352,17 +1487,14 @@ describe('buildCli', () => {
 
       await expect(cli.run()).resolves.toBe(0);
 
-      const selectedLog = await readFile(join(tempDir, 'from-flag', 'telemetry-2026-03-31.jsonl'), 'utf8');
+      const selectedLog = await readFile(flagLogPath, 'utf8');
       expect(selectedLog).toContain('"type":"tool_call_started"');
-      await expect(readFile(join(tempDir, 'from-env', 'telemetry-2026-03-31.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(envLogPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     });
   });
 
   it('falls back to QICLAW_DEBUG_LOG when --debug-log is not provided', async () => {
     await withProviderEnvSnapshot(async () => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date('2026-03-31T12:34:56.000Z'));
-
       const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-debug-log-env-'));
       tempDirs.push(tempDir);
 
@@ -1374,7 +1506,7 @@ describe('buildCli', () => {
         cwd: tempDir,
         stdout: { write() { return true; } },
         createRuntime: (runtimeOptions) => ({
-          provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+          provider: createNoopTestProvider(),
           availableTools: [],
           cwd: tempDir,
           observer: runtimeOptions.observer ?? createNoopObserver(),
@@ -1401,7 +1533,7 @@ describe('buildCli', () => {
             doneCriteria: {
               goal: input.userInput,
               checklist: [input.userInput],
-              requiresNonEmptyFinalAnswer: true,
+              requiresNonEmptyFinalAnswer: true as const,
               requiresToolEvidence: false,
               requiresSubstantiveFinalAnswer: false,
               forbidSuccessAfterToolErrors: false
@@ -1421,7 +1553,7 @@ describe('buildCli', () => {
 
       await expect(cli.run()).resolves.toBe(0);
 
-      const selectedLog = await readFile(join(tempDir, 'from-env', 'telemetry-2026-03-31.jsonl'), 'utf8');
+      const selectedLog = await readFile(envLogPath, 'utf8');
       expect(selectedLog).toContain('"type":"turn_started"');
     });
   });
@@ -1446,7 +1578,7 @@ describe('buildCli', () => {
           }
         },
         createRuntime: (runtimeOptions) => ({
-          provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+          provider: createNoopTestProvider(),
           availableTools: [],
           cwd: tempDir,
           observer: runtimeOptions.observer ?? createNoopObserver(),
@@ -1514,7 +1646,7 @@ describe('buildCli', () => {
             doneCriteria: {
               goal: input.userInput,
               checklist: [input.userInput],
-              requiresNonEmptyFinalAnswer: true,
+              requiresNonEmptyFinalAnswer: true as const,
               requiresToolEvidence: false,
               requiresSubstantiveFinalAnswer: false,
               forbidSuccessAfterToolErrors: false
@@ -1534,7 +1666,7 @@ describe('buildCli', () => {
 
       await expect(cli.run()).resolves.toBe(0);
 
-      const selectedLog = await readFile(join(tempDir, 'provider', 'telemetry-2026-03-31.jsonl'), 'utf8');
+      const selectedLog = await readFile(logPath, 'utf8');
       const events = selectedLog
         .trim()
         .split('\n')
@@ -1585,11 +1717,12 @@ describe('buildCli', () => {
         }
       } as Pick<NodeJS.WriteStream, 'write'> & { isTTY: boolean },
       createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        provider: createNoopTestProvider(),
         availableTools: [],
         cwd: '/tmp/qiclaw-provider-thinking-immediate',
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -1650,7 +1783,7 @@ describe('buildCli', () => {
           doneCriteria: {
             goal: input.userInput,
             checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
+            requiresNonEmptyFinalAnswer: true as const,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
@@ -1694,11 +1827,12 @@ describe('buildCli', () => {
         }
       } as Pick<NodeJS.WriteStream, 'write'> & { isTTY: boolean },
       createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        provider: createNoopTestProvider(),
         availableTools: [],
         cwd: '/tmp/qiclaw-provider-thinking-multi-round',
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 6
       }),
@@ -1770,7 +1904,7 @@ describe('buildCli', () => {
           doneCriteria: {
             goal: input.userInput,
             checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
+            requiresNonEmptyFinalAnswer: true as const,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
@@ -1818,11 +1952,12 @@ describe('buildCli', () => {
         }
       } as Pick<NodeJS.WriteStream, 'write'> & { isTTY: boolean },
       createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        provider: createNoopTestProvider(),
         availableTools: [],
         cwd: '/tmp/qiclaw-provider-layout',
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -1868,7 +2003,7 @@ describe('buildCli', () => {
           doneCriteria: {
             goal: input.userInput,
             checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
+            requiresNonEmptyFinalAnswer: true as const,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
@@ -1909,11 +2044,12 @@ describe('buildCli', () => {
         }
       } as Pick<NodeJS.WriteStream, 'write'> & { isTTY: boolean },
       createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        provider: createNoopTestProvider(),
         availableTools: [],
         cwd: '/tmp/qiclaw-provider-thinking-footer',
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -1971,7 +2107,7 @@ describe('buildCli', () => {
           doneCriteria: {
             goal: input.userInput,
             checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
+            requiresNonEmptyFinalAnswer: true as const,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
@@ -2010,11 +2146,12 @@ describe('buildCli', () => {
         }
       } as Pick<NodeJS.WriteStream, 'write'> & { isTTY: boolean },
       createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        provider: createNoopTestProvider(),
         availableTools: [],
         cwd: '/tmp/qiclaw-provider-thinking-fallback-tty',
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -2059,7 +2196,7 @@ describe('buildCli', () => {
           doneCriteria: {
             goal: input.userInput,
             checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
+            requiresNonEmptyFinalAnswer: true as const,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
@@ -2103,11 +2240,12 @@ describe('buildCli', () => {
         }
       } as Pick<NodeJS.WriteStream, 'write'> & { isTTY: boolean },
       createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        provider: createNoopTestProvider(),
         availableTools: [],
         cwd: '/tmp/qiclaw-provider-thinking-cycle-fallback-tty',
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -2155,7 +2293,7 @@ describe('buildCli', () => {
           doneCriteria: {
             goal: input.userInput,
             checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
+            requiresNonEmptyFinalAnswer: true as const,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
@@ -2205,11 +2343,12 @@ describe('buildCli', () => {
         }
       },
       createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        provider: createNoopTestProvider(),
         availableTools: [],
         cwd: '/tmp/qiclaw-provider-thinking-error-cleanup',
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -2257,11 +2396,12 @@ describe('buildCli', () => {
         }
       } as Pick<NodeJS.WriteStream, 'write'> & { isTTY: boolean },
       createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        provider: createNoopTestProvider(),
         availableTools: [],
         cwd: '/tmp/qiclaw-provider-thinking-non-tty',
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -2292,7 +2432,7 @@ describe('buildCli', () => {
           doneCriteria: {
             goal: input.userInput,
             checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
+            requiresNonEmptyFinalAnswer: true as const,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
@@ -2365,7 +2505,7 @@ describe('buildCli', () => {
           expect(runtimeOptions.model).toBe('gpt-4.1');
 
           return {
-            provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+            provider: createNoopTestProvider(),
             availableTools: [],
             cwd: '/tmp/qiclaw-test',
             observer: runtimeOptions.observer ?? createNoopObserver(),
@@ -2382,7 +2522,7 @@ describe('buildCli', () => {
           doneCriteria: {
             goal: input.userInput,
             checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
+            requiresNonEmptyFinalAnswer: true as const,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
@@ -2415,7 +2555,7 @@ describe('buildCli', () => {
         doneCriteria: {
           goal: input.userInput,
           checklist: [input.userInput],
-          requiresNonEmptyFinalAnswer: true,
+          requiresNonEmptyFinalAnswer: true as const,
           requiresToolEvidence: false,
           requiresSubstantiveFinalAnswer: false,
           forbidSuccessAfterToolErrors: false
@@ -2447,7 +2587,7 @@ describe('buildCli', () => {
             doneCriteria: {
               goal: input.userInput,
               checklist: [input.userInput],
-              requiresNonEmptyFinalAnswer: true,
+              requiresNonEmptyFinalAnswer: true as const,
               requiresToolEvidence: false,
               requiresSubstantiveFinalAnswer: false,
               forbidSuccessAfterToolErrors: false
@@ -2487,7 +2627,7 @@ describe('buildCli', () => {
         doneCriteria: {
           goal: input.userInput,
           checklist: [input.userInput],
-          requiresNonEmptyFinalAnswer: true,
+          requiresNonEmptyFinalAnswer: true as const,
           requiresToolEvidence: false,
           requiresSubstantiveFinalAnswer: false,
           forbidSuccessAfterToolErrors: false
@@ -2521,7 +2661,7 @@ describe('buildCli', () => {
             doneCriteria: {
               goal: input.userInput,
               checklist: [input.userInput],
-              requiresNonEmptyFinalAnswer: true,
+              requiresNonEmptyFinalAnswer: true as const,
               requiresToolEvidence: false,
               requiresSubstantiveFinalAnswer: false,
               forbidSuccessAfterToolErrors: false
@@ -2567,7 +2707,7 @@ describe('buildCli', () => {
             doneCriteria: {
               goal: input.userInput,
               checklist: [input.userInput],
-              requiresNonEmptyFinalAnswer: true,
+              requiresNonEmptyFinalAnswer: true as const,
               requiresToolEvidence: false,
               requiresSubstantiveFinalAnswer: false,
               forbidSuccessAfterToolErrors: false
@@ -2639,7 +2779,7 @@ describe('buildCli', () => {
         doneCriteria: {
           goal: input.userInput,
           checklist: [input.userInput],
-          requiresNonEmptyFinalAnswer: true,
+          requiresNonEmptyFinalAnswer: true as const,
           requiresToolEvidence: false,
           requiresSubstantiveFinalAnswer: false,
           forbidSuccessAfterToolErrors: false
@@ -2685,7 +2825,7 @@ describe('buildCli', () => {
             doneCriteria: {
               goal: input.userInput,
               checklist: [input.userInput],
-              requiresNonEmptyFinalAnswer: true,
+              requiresNonEmptyFinalAnswer: true as const,
               requiresToolEvidence: false,
               requiresSubstantiveFinalAnswer: false,
               forbidSuccessAfterToolErrors: false
@@ -2729,9 +2869,9 @@ describe('buildCli', () => {
           async generate() {
             throw new Error('not used');
           },
-          async *stream() {
+          async *stream(): AsyncIterable<NormalizedEvent> {
             providerRound += 1;
-            yield { type: 'start', provider: 'test-provider', model: 'test-model' } as const;
+            yield { type: 'start', provider: 'test-provider', model: 'test-model' };
 
             if (providerRound === 1) {
               yield {
@@ -2739,7 +2879,7 @@ describe('buildCli', () => {
                 id: 'toolu_1',
                 name: 'read_file',
                 input: { path: 'src/cli/main.ts' }
-              } as const;
+              };
               yield {
                 type: 'finish',
                 finish: { stopReason: 'tool_use' },
@@ -2753,14 +2893,14 @@ describe('buildCli', () => {
                   toolCallSummaries: [{ id: 'toolu_1', name: 'read_file' }],
                   responsePreviewRedacted: '[{"type":"tool_use"}]'
                 }
-              } as const;
+              };
               return;
             }
 
             yield {
               type: 'text_delta',
               text: 'read:src/cli/main.ts'
-            } as const;
+            };
             yield {
               type: 'finish',
               finish: { stopReason: 'stop' },
@@ -2773,13 +2913,14 @@ describe('buildCli', () => {
               debug: {
                 responsePreviewRedacted: 'read:src/cli/main.ts'
               }
-            } as const;
+            };
           }
         },
         availableTools: [createReadFileTool()],
         cwd,
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       })
@@ -2816,9 +2957,9 @@ describe('buildCli', () => {
           async generate() {
             throw new Error('not used');
           },
-          async *stream() {
+          async *stream(): AsyncIterable<NormalizedEvent> {
             providerRound += 1;
-            yield { type: 'start', provider: 'test-provider', model: 'test-model' } as const;
+            yield { type: 'start', provider: 'test-provider', model: 'test-model' };
 
             if (providerRound === 1) {
               yield {
@@ -2826,7 +2967,7 @@ describe('buildCli', () => {
                 id: 'toolu_search_1',
                 name: 'search',
                 input: { query: 'package' }
-              } as const;
+              };
               yield {
                 type: 'finish',
                 finish: { stopReason: 'tool_use' },
@@ -2840,14 +2981,14 @@ describe('buildCli', () => {
                   toolCallSummaries: [{ id: 'toolu_search_1', name: 'search' }],
                   responsePreviewRedacted: '[{"type":"tool_use"}]'
                 }
-              } as const;
+              };
               return;
             }
 
             yield {
               type: 'text_delta',
               text: 'found package'
-            } as const;
+            };
             yield {
               type: 'finish',
               finish: { stopReason: 'stop' },
@@ -2860,13 +3001,14 @@ describe('buildCli', () => {
               debug: {
                 responsePreviewRedacted: 'found package'
               }
-            } as const;
+            };
           }
         },
         availableTools: [searchTool],
         cwd,
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       })
@@ -2904,7 +3046,7 @@ describe('buildCli', () => {
         doneCriteria: {
           goal: input.userInput,
           checklist: [input.userInput],
-          requiresNonEmptyFinalAnswer: true,
+          requiresNonEmptyFinalAnswer: true as const,
           requiresToolEvidence: false,
           requiresSubstantiveFinalAnswer: false,
           forbidSuccessAfterToolErrors: false
@@ -2934,7 +3076,7 @@ describe('buildCli', () => {
             doneCriteria: {
               goal: input.userInput,
               checklist: [input.userInput],
-              requiresNonEmptyFinalAnswer: true,
+              requiresNonEmptyFinalAnswer: true as const,
               requiresToolEvidence: false,
               requiresSubstantiveFinalAnswer: false,
               forbidSuccessAfterToolErrors: false
@@ -2980,7 +3122,7 @@ describe('buildCli', () => {
             doneCriteria: {
               goal: input.userInput,
               checklist: [input.userInput],
-              requiresNonEmptyFinalAnswer: true,
+              requiresNonEmptyFinalAnswer: true as const,
               requiresToolEvidence: false,
               requiresSubstantiveFinalAnswer: false,
               forbidSuccessAfterToolErrors: false
@@ -3045,7 +3187,7 @@ describe('buildCli', () => {
         doneCriteria: {
           goal: 'run tool please',
           checklist: ['run tool please'],
-          requiresNonEmptyFinalAnswer: false,
+          requiresNonEmptyFinalAnswer: true as const,
           requiresToolEvidence: true,
           requiresSubstantiveFinalAnswer: false,
           forbidSuccessAfterToolErrors: false
@@ -3131,7 +3273,7 @@ describe('buildCli', () => {
         doneCriteria: {
           goal: 'run tool please',
           checklist: ['run tool please'],
-          requiresNonEmptyFinalAnswer: false,
+          requiresNonEmptyFinalAnswer: true as const,
           requiresToolEvidence: true,
           requiresSubstantiveFinalAnswer: false,
           forbidSuccessAfterToolErrors: false
@@ -3228,7 +3370,7 @@ describe('buildCli', () => {
           doneCriteria: {
             goal: input.userInput,
             checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
+            requiresNonEmptyFinalAnswer: true as const,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
@@ -3291,7 +3433,7 @@ describe('buildCli', () => {
           doneCriteria: {
             goal: input.userInput,
             checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
+            requiresNonEmptyFinalAnswer: true as const,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
@@ -3344,7 +3486,7 @@ describe('buildCli', () => {
         expect(runtimeOptions.agentSpecName).toBe('readonly');
 
         return {
-          provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+          provider: createNoopTestProvider(),
           availableTools: [],
           cwd: '/tmp/qiclaw-readonly-spec-test',
           observer: runtimeOptions.observer ?? createNoopObserver(),
@@ -3361,7 +3503,7 @@ describe('buildCli', () => {
         doneCriteria: {
           goal: input.userInput,
           checklist: [input.userInput],
-          requiresNonEmptyFinalAnswer: true,
+          requiresNonEmptyFinalAnswer: true as const,
           requiresToolEvidence: false,
           requiresSubstantiveFinalAnswer: false,
           forbidSuccessAfterToolErrors: false
@@ -3380,6 +3522,142 @@ describe('buildCli', () => {
 
     await expect(cli.run()).resolves.toBe(0);
     expectRenderedCliOutput(writes, '\nQiClaw\n  handled: inspect package.json\n');
+  });
+
+  it('uses the same project-tier resolved package for prompt execution as preview', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-agent-runtime-project-'));
+    tempDirs.push(tempDir);
+    const presetDir = join(tempDir, '.qiclaw', 'agents', 'readonly');
+    await mkdir(presetDir, { recursive: true });
+    await writeFile(join(presetDir, 'agent.json'), `${JSON.stringify({
+      extends: 'default',
+      policy: {
+        allowedCapabilityClasses: ['read'],
+        maxToolRounds: 2,
+        mutationMode: 'none'
+      }
+    }, null, 2)}\n`);
+    await writeFile(join(presetDir, 'AGENT.md'), 'Project readonly override\n');
+
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: ['--agent-spec', 'readonly', '--prompt', 'inspect package.json'],
+      cwd: tempDir,
+      stdout: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      runTurn: async (input) => {
+        expect(input.resolvedPackage?.sourceTier).toBe('project');
+        expect(input.resolvedPackage?.preset).toBe('readonly');
+        expect(input.resolvedPackage?.extendsChain).toEqual(['readonly', 'default']);
+        expect(input.resolvedPackage?.effectivePolicy.allowedCapabilityClasses).toEqual(['read']);
+        expect(input.resolvedPackage?.effectivePolicy.maxToolRounds).toBe(2);
+        expect(input.resolvedPackage?.effectivePromptFiles['AGENT.md']?.filePath).toBe(join(presetDir, 'AGENT.md'));
+        expect(input.baseSystemPrompt).toContain('AGENT.md\nProject readonly override');
+
+        return {
+          stopReason: 'completed',
+          finalAnswer: `handled: ${input.userInput}`,
+          history: [],
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true as const,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
+            toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
+            toolMessagesCount: 0,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+    expectRenderedCliOutput(writes, '\nQiClaw\n  handled: inspect package.json\n');
+  });
+
+  it('prints a package preview using project-tier resolution and exits before runtime execution when --agent-spec-preview is provided', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-agent-preview-project-'));
+    tempDirs.push(tempDir);
+    const presetDir = join(tempDir, '.qiclaw', 'agents', 'readonly');
+    await mkdir(presetDir, { recursive: true });
+    await writeFile(join(presetDir, 'agent.json'), `${JSON.stringify({
+      extends: 'default',
+      policy: {
+        allowedCapabilityClasses: ['read'],
+        maxToolRounds: 2,
+        mutationMode: 'none'
+      }
+    }, null, 2)}\n`);
+    await writeFile(join(presetDir, 'AGENT.md'), 'Project readonly override\n');
+
+    const stdoutWrites: string[] = [];
+    const cli = buildCli({
+      argv: ['--agent-spec-preview', 'readonly'],
+      cwd: tempDir,
+      stdout: {
+        write(chunk) {
+          stdoutWrites.push(String(chunk));
+          return true;
+        }
+      },
+      createRuntime: () => {
+        throw new Error('createRuntime should not be called for preview mode');
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+    expect(stdoutWrites.join('')).toContain('Agent spec preview: readonly\n');
+    expect(stdoutWrites.join('')).toContain('Source tier: project\n');
+    expect(stdoutWrites.join('')).toContain('Inheritance chain: readonly -> default\n');
+    expect(stdoutWrites.join('')).toContain(`AGENT.md: ${join(tempDir, '.qiclaw', 'agents', 'readonly', 'AGENT.md')}\n`);
+    expect(stdoutWrites.join('')).toContain('Rendered system prompt:\n');
+    expect(stdoutWrites.join('')).toContain('AGENT.md\nProject readonly override\n');
+    expect(stdoutWrites.join('')).toContain('Runtime constraints summary\n');
+  });
+
+  it('returns exit code 1 and prints an error when --agent-spec-preview is missing a value', async () => {
+    const stderrWrites: string[] = [];
+    const cli = buildCli({
+      argv: ['--agent-spec-preview'],
+      stderr: {
+        write(chunk) {
+          stderrWrites.push(String(chunk));
+          return true;
+        }
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(1);
+    expect(stderrWrites).toEqual(['Missing value for --agent-spec-preview\n']);
+  });
+
+  it('returns exit code 1 and prints an error when --agent-spec-preview is unknown', async () => {
+    const stderrWrites: string[] = [];
+    const cli = buildCli({
+      argv: ['--agent-spec-preview', 'ghost'],
+      stderr: {
+        write(chunk) {
+          stderrWrites.push(String(chunk));
+          return true;
+        }
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(1);
+    expect(stderrWrites).toEqual(['Unknown agent spec: ghost\n']);
   });
 
   it('returns exit code 1 and prints an error when --agent-spec is missing a value', async () => {
@@ -3524,7 +3802,7 @@ describe('buildCli', () => {
         doneCriteria: {
           goal: input.userInput,
           checklist: [input.userInput],
-          requiresNonEmptyFinalAnswer: true,
+          requiresNonEmptyFinalAnswer: true as const,
           requiresToolEvidence: false,
           requiresSubstantiveFinalAnswer: false,
           forbidSuccessAfterToolErrors: false
@@ -3962,11 +4240,12 @@ describe('buildCli', () => {
         }
       },
       createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        provider: createNoopTestProvider(),
         availableTools: [],
         cwd: '/tmp/qiclaw-prompt-layout',
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -4017,7 +4296,7 @@ describe('buildCli', () => {
           doneCriteria: {
             goal: input.userInput,
             checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
+            requiresNonEmptyFinalAnswer: true as const,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
@@ -4058,11 +4337,12 @@ describe('buildCli', () => {
         }
       },
       createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        provider: createNoopTestProvider(),
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -4093,7 +4373,7 @@ describe('buildCli', () => {
             doneCriteria: {
               goal: input.userInput,
               checklist: [input.userInput],
-              requiresNonEmptyFinalAnswer: true,
+              requiresNonEmptyFinalAnswer: true as const,
               requiresToolEvidence: false,
               requiresSubstantiveFinalAnswer: false,
               forbidSuccessAfterToolErrors: false
@@ -4123,7 +4403,7 @@ describe('buildCli', () => {
           doneCriteria: {
             goal: input.userInput,
             checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
+            requiresNonEmptyFinalAnswer: true as const,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
@@ -4177,11 +4457,12 @@ describe('buildCli', () => {
         }
       },
       createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        provider: createNoopTestProvider(),
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -4220,7 +4501,7 @@ describe('buildCli', () => {
             doneCriteria: {
               goal: input.userInput,
               checklist: [input.userInput],
-              requiresNonEmptyFinalAnswer: true,
+              requiresNonEmptyFinalAnswer: true as const,
               requiresToolEvidence: false,
               requiresSubstantiveFinalAnswer: false,
               forbidSuccessAfterToolErrors: false
@@ -4259,7 +4540,7 @@ describe('buildCli', () => {
           doneCriteria: {
             goal: input.userInput,
             checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
+            requiresNonEmptyFinalAnswer: true as const,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
@@ -4338,6 +4619,7 @@ describe('buildCli', () => {
         cwd: tempDir,
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -4376,11 +4658,12 @@ describe('buildCli', () => {
         }
       },
       createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        provider: createNoopTestProvider(),
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -4409,7 +4692,7 @@ describe('buildCli', () => {
           doneCriteria: {
             goal: input.userInput,
             checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
+            requiresNonEmptyFinalAnswer: true as const,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
@@ -4439,7 +4722,7 @@ describe('buildCli', () => {
               doneCriteria: {
                 goal: input.userInput,
                 checklist: [input.userInput],
-                requiresNonEmptyFinalAnswer: true,
+                requiresNonEmptyFinalAnswer: true as const,
                 requiresToolEvidence: false,
                 requiresSubstantiveFinalAnswer: false,
                 forbidSuccessAfterToolErrors: false
@@ -4464,7 +4747,7 @@ describe('buildCli', () => {
               doneCriteria: {
                 goal: input.userInput,
                 checklist: [input.userInput],
-                requiresNonEmptyFinalAnswer: true,
+                requiresNonEmptyFinalAnswer: true as const,
                 requiresToolEvidence: false,
                 requiresSubstantiveFinalAnswer: false,
                 forbidSuccessAfterToolErrors: false
@@ -4513,11 +4796,12 @@ describe('buildCli', () => {
         }
       },
       createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        provider: createNoopTestProvider(),
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -4535,7 +4819,7 @@ describe('buildCli', () => {
           doneCriteria: {
             goal: input.userInput,
             checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
+            requiresNonEmptyFinalAnswer: true as const,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
@@ -4613,11 +4897,12 @@ describe('buildCli', () => {
         }
       },
       createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        provider: createNoopTestProvider(),
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -4665,7 +4950,7 @@ describe('buildCli', () => {
           doneCriteria: {
             goal: input.userInput,
             checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
+            requiresNonEmptyFinalAnswer: true as const,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
@@ -4736,11 +5021,12 @@ describe('buildCli', () => {
         }
       },
       createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        provider: createNoopTestProvider(),
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -4800,11 +5086,12 @@ describe('buildCli', () => {
         }
       },
       createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        provider: createNoopTestProvider(),
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -4856,11 +5143,12 @@ describe('buildCli', () => {
         }
       },
       createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        provider: createNoopTestProvider(),
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -4886,7 +5174,7 @@ describe('buildCli', () => {
           doneCriteria: {
             goal: input.userInput,
             checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
+            requiresNonEmptyFinalAnswer: true as const,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
@@ -4963,11 +5251,12 @@ describe('buildCli', () => {
         throw new Error('capture memory failed');
       },
       createRuntime: (runtimeOptions) => ({
-        provider: { name: 'test-provider', model: 'test-model', async generate() { throw new Error('not used'); } },
+        provider: createNoopTestProvider(),
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? createNoopObserver(),
         agentSpec: defaultAgentSpec,
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -4992,7 +5281,7 @@ describe('buildCli', () => {
           doneCriteria: {
             goal: input.userInput,
             checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
+            requiresNonEmptyFinalAnswer: true as const,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
@@ -5019,8 +5308,7 @@ describe('buildCli', () => {
     expect(stripAnsi(writes.join(''))).toContain('answer: remember my preference');
     expect(stderrWrites).toEqual([]);
 
-    const logDateSuffix = new Date().toISOString().slice(0, 10);
-    const loggedEvents = (await readFile(join(tempDir, `memory-fallback-${logDateSuffix}.jsonl`), 'utf8'))
+    const loggedEvents = (await readFile(logPath, 'utf8'))
       .trim()
       .split('\n')
       .map((line) => JSON.parse(line))

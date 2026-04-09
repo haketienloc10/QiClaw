@@ -1,0 +1,1 @@
+Malformed manifest fixture.

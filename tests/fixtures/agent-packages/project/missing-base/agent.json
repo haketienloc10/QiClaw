@@ -1,0 +1,8 @@
+{
+  "extends": "ghost-base",
+  "policy": {
+    "allowedCapabilityClasses": ["read"],
+    "maxToolRounds": 2,
+    "mutationMode": "none"
+  }
+}

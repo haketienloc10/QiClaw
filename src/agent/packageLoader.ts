@@ -1,0 +1,69 @@
+import { readdir, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
+import { validateManifestShape } from './packageValidator.js';
+import type {
+  AgentPackageSourceTier,
+  AgentPromptFile,
+  AgentPromptSlotFileName,
+  LoadedAgentPackage
+} from './spec.js';
+
+const promptSlotFileNames: AgentPromptSlotFileName[] = ['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'CHECKLIST.md'];
+
+export async function loadAgentPackageFromDirectory(
+  directoryPath: string,
+  options: { preset: string; sourceTier: AgentPackageSourceTier }
+): Promise<LoadedAgentPackage> {
+  const entries = await readdir(directoryPath, { withFileTypes: true });
+  const promptFiles: Partial<Record<AgentPromptSlotFileName, AgentPromptFile>> = {};
+  let manifest: LoadedAgentPackage['manifest'];
+
+  for (const entry of entries) {
+    if (!entry.isFile()) {
+      continue;
+    }
+
+    if (entry.name === 'agent.json') {
+      const manifestPath = join(directoryPath, entry.name);
+      const raw = await readFile(manifestPath, 'utf8');
+      const parsedManifest = JSON.parse(normalizeLineEndings(raw)) as LoadedAgentPackage['manifest'];
+      const manifestErrors = validateManifestShape(options.preset, parsedManifest);
+
+      if (manifestErrors.length > 0) {
+        throw new Error(`Agent package "${options.preset}" has invalid manifest in ${manifestPath}.\n${manifestErrors.join('\n')}`);
+      }
+
+      manifest = parsedManifest;
+      continue;
+    }
+
+    if (!promptSlotFileNames.includes(entry.name as AgentPromptSlotFileName)) {
+      continue;
+    }
+
+    const filePath = join(directoryPath, entry.name);
+    const raw = await readFile(filePath, 'utf8');
+    promptFiles[entry.name as AgentPromptSlotFileName] = {
+      filePath,
+      content: normalizeMarkdownContent(raw)
+    };
+  }
+
+  return {
+    preset: options.preset,
+    sourceTier: options.sourceTier,
+    directoryPath,
+    manifestPath: join(directoryPath, 'agent.json'),
+    manifest,
+    promptFiles
+  };
+}
+
+function normalizeMarkdownContent(value: string): string {
+  return normalizeLineEndings(value);
+}
+
+function normalizeLineEndings(value: string): string {
+  return value.replaceAll('\r\n', '\n');
+}

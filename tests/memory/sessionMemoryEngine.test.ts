@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   captureInteractiveTurnMemory,
@@ -35,22 +35,6 @@ function createCandidate(overrides: Partial<SessionMemoryCandidate> = {}): Sessi
 }
 
 describe('captureInteractiveTurnMemory', () => {
-  const globalOpen = vi.spyOn(GlobalMemoryStore.prototype, 'open').mockResolvedValue(undefined);
-  const globalPut = vi.spyOn(GlobalMemoryStore.prototype, 'put').mockResolvedValue('global-entry');
-  const globalSeal = vi.spyOn(GlobalMemoryStore.prototype, 'seal').mockResolvedValue(undefined);
-
-  beforeEach(() => {
-    globalOpen.mockClear();
-    globalPut.mockClear();
-    globalSeal.mockClear();
-  });
-
-  afterAll(() => {
-    globalOpen.mockRestore();
-    globalPut.mockRestore();
-    globalSeal.mockRestore();
-  });
-
   it('runs write maintenance preflight before persisting or sealing', async () => {
     const put = vi.fn(async () => undefined);
     const seal = vi.fn(async () => undefined);
@@ -68,9 +52,6 @@ describe('captureInteractiveTurnMemory', () => {
       expect(ensureWriteReady).toHaveBeenCalledTimes(1);
       expect(put).toHaveBeenCalledTimes(1);
       expect(seal).toHaveBeenCalledTimes(1);
-      expect(globalOpen).toHaveBeenCalledTimes(1);
-      expect(globalPut).toHaveBeenCalledTimes(1);
-      expect(globalSeal).toHaveBeenCalledTimes(1);
     } finally {
       ensureWriteReady.mockRestore();
     }
@@ -167,6 +148,39 @@ describe('captureInteractiveTurnMemory', () => {
       summaryText: 'tôi dùng pnpm',
       explicitSave: true
     });
+  });
+
+  it('keeps the session save when global memory persistence fails for an explicit save', async () => {
+    const put = vi.fn(async () => undefined);
+    const seal = vi.fn(async () => undefined);
+    const globalOpen = vi.spyOn(GlobalMemoryStore.prototype, 'open').mockResolvedValue(undefined);
+    const globalPut = vi.spyOn(GlobalMemoryStore.prototype, 'put').mockRejectedValue(new Error('global put failed'));
+    const globalSeal = vi.spyOn(GlobalMemoryStore.prototype, 'seal').mockResolvedValue(undefined);
+
+    try {
+      const result = await captureInteractiveTurnMemory({
+        store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory.mv2' }) } as never,
+        sessionId: 'session_1',
+        userInput: 'remember that my favorite editor is neovim',
+        finalAnswer: 'I will remember that your favorite editor is neovim.'
+      });
+
+      expect(result.saved).toBe(true);
+      expect(result.entry).toMatchObject({
+        memoryType: 'fact',
+        summaryText: 'that my favorite editor is neovim',
+        explicitSave: true
+      });
+      expect(put).toHaveBeenCalledTimes(1);
+      expect(seal).toHaveBeenCalledTimes(1);
+      expect(globalOpen).toHaveBeenCalledTimes(1);
+      expect(globalPut).toHaveBeenCalledTimes(1);
+      expect(globalSeal).not.toHaveBeenCalled();
+    } finally {
+      globalOpen.mockRestore();
+      globalPut.mockRestore();
+      globalSeal.mockRestore();
+    }
   });
 
   it('does not persist Vietnamese question-style remember phrasing as an explicit save', async () => {

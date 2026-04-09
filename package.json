@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/copy-agent-assets.mjs",
     "dev": "tsx src/cli/main.ts",
     "test": "vitest run",
     "typecheck:test": "tsc -p tsconfig.test.json"

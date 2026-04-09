@@ -1,0 +1,9 @@
+{
+  "extends": "readonly",
+  "policy": {
+    "allowedCapabilityClasses": ["read"],
+    "maxToolRounds": 4,
+    "mutationMode": "none",
+    "includeMemory": true
+  }
+}

@@ -95,7 +95,7 @@ export interface ModelProvider {
   name: string;
   model: string;
   generate(request: ProviderRequest): Promise<ProviderResponse>;
-  stream(request: ProviderRequest): AsyncIterable<NormalizedEvent>;
+  stream?: (request: ProviderRequest) => AsyncIterable<NormalizedEvent>;
 }
 
 export function normalizeProviderResponse(input: ProviderResponseNormalizationInput): ProviderResponse {

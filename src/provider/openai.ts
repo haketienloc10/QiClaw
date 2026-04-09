@@ -330,7 +330,7 @@ export function createOpenAIProvider(options: OpenAIProviderOptions): ModelProvi
       }
     },
     async generate(request: ProviderRequest): Promise<ProviderResponse> {
-      return collectProviderStream(this.stream(request));
+      return collectProviderStream(this.stream!(request));
     }
   };
 }

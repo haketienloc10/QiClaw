@@ -354,7 +354,7 @@ describe('createOpenAIProvider', () => {
     });
 
     const events: unknown[] = [];
-    for await (const event of provider.stream({
+    for await (const event of provider.stream!({
       messages: [{ role: 'user', content: 'Inspect note.txt' }],
       availableTools: []
     })) {
@@ -430,7 +430,7 @@ describe('createOpenAIProvider', () => {
     });
 
     await expect(async () => {
-      for await (const _event of provider.stream({
+      for await (const _event of provider.stream!({
         messages: [{ role: 'user', content: 'Inspect note.txt' }],
         availableTools: []
       })) {
@@ -471,7 +471,7 @@ describe('createOpenAIProvider', () => {
     });
 
     const events: unknown[] = [];
-    for await (const event of provider.stream({
+    for await (const event of provider.stream!({
       messages: [{ role: 'user', content: 'Inspect note.txt' }],
       availableTools: []
     })) {
@@ -504,7 +504,7 @@ describe('createOpenAIProvider', () => {
       }) as unknown as OpenAI
     });
 
-    await expect(collectProviderStream(provider.stream({
+    await expect(collectProviderStream(provider.stream!({
       messages: [{ role: 'user', content: 'Inspect note.txt' }],
       availableTools: []
     }))).rejects.toThrow('OpenAI response stream failed: failed');
@@ -525,7 +525,7 @@ describe('createOpenAIProvider', () => {
     });
 
     await expect(async () => {
-      for await (const _event of provider.stream({
+      for await (const _event of provider.stream!({
         messages: [{ role: 'user', content: 'Inspect note.txt' }],
         availableTools: []
       })) {
@@ -557,7 +557,7 @@ describe('createOpenAIProvider', () => {
     });
 
     await expect(async () => {
-      for await (const _event of provider.stream({
+      for await (const _event of provider.stream!({
         messages: [{ role: 'user', content: 'Inspect note.txt' }],
         availableTools: []
       })) {
@@ -609,7 +609,7 @@ describe('createOpenAIProvider', () => {
     });
 
     const events: unknown[] = [];
-    for await (const event of provider.stream({
+    for await (const event of provider.stream!({
       messages: [{ role: 'user', content: 'Inspect note.txt' }],
       availableTools: []
     })) {
@@ -650,7 +650,7 @@ describe('createOpenAIProvider', () => {
     });
 
     const events: unknown[] = [];
-    for await (const event of provider.stream({
+    for await (const event of provider.stream!({
       messages: [{ role: 'user', content: 'Inspect note.txt' }],
       availableTools: []
     })) {
@@ -738,7 +738,7 @@ describe('createOpenAIProvider', () => {
       messages: [{ role: 'user' as const, content: 'Inspect note.txt' }],
       availableTools: []
     };
-    const collected = await collectProviderStream(provider.stream(request));
+    const collected = await collectProviderStream(provider.stream!(request));
     const generated = await provider.generate(request);
 
     expect(collected).toEqual(generated);

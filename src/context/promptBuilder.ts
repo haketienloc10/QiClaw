@@ -5,6 +5,9 @@ export interface BuildPromptWithContextInput {
   memoryText?: string;
   skillsText?: string;
   historySummary?: string;
+  includeMemory?: boolean;
+  includeSkills?: boolean;
+  includeHistorySummary?: boolean;
   history: Message[];
 }
 
@@ -14,11 +17,15 @@ export interface PromptWithContext {
 }
 
 export function buildPromptWithContext(input: BuildPromptWithContextInput): PromptWithContext {
-  const parts = [input.baseSystemPrompt, input.skillsText, input.historySummary].filter(isPresent);
+  const parts = [
+    input.baseSystemPrompt,
+    input.includeSkills === false ? undefined : input.skillsText,
+    input.includeHistorySummary === false ? undefined : input.historySummary
+  ].filter(isPresent);
   const systemPrompt = parts.join('\n\n');
-  const memoryMessage = isPresent(input.memoryText)
-    ? [{ role: 'user', content: input.memoryText } satisfies Message]
-    : [];
+  const memoryMessage = input.includeMemory === false || !isPresent(input.memoryText)
+    ? []
+    : [{ role: 'user', content: input.memoryText } satisfies Message];
 
   return {
     systemPrompt,

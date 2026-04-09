@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, statSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, extname, join, parse } from 'node:path';
 
 import type { TelemetryEvent, TelemetryObserver } from './observer.js';
@@ -29,6 +29,7 @@ export function createFileJsonLineWriter(filePath: string, options: FileJsonLine
   return {
     appendLine(line: string) {
       const targetPath = resolveRotatedJsonLinePath(filePath, line, now(), maxBytes);
+      mkdirSync(dirname(targetPath), { recursive: true });
       appendFileSync(targetPath, line, 'utf8');
     }
   };

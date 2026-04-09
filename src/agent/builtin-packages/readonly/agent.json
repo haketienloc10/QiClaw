@@ -1,0 +1,16 @@
+{
+  "extends": "default",
+  "policy": {
+    "allowedCapabilityClasses": ["read", "search", "exec_readonly"],
+    "maxToolRounds": 6,
+    "requiresToolEvidence": true,
+    "requiresSubstantiveFinalAnswer": true,
+    "forbidSuccessAfterToolErrors": true,
+    "mutationMode": "none",
+    "includeMemory": true,
+    "includeSkills": true,
+    "includeHistorySummary": true,
+    "diagnosticsParticipationLevel": "normal",
+    "redactionSensitivity": "standard"
+  }
+}

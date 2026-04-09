@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -8,9 +9,10 @@ import { loadAgentPackageFromDirectory } from '../../src/agent/packageLoader.js'
 
 import { copyFixtureTree, writePackageFixture, writeRawFile } from './packageTestUtils.js';
 
+const fixtureRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'agent-packages');
+
 describe('packageLoader', () => {
   const tempDirs: string[] = [];
-  const fixtureRoot = '/home/locdt/QiClaw/.worktrees/agent-packages/tests/fixtures/agent-packages';
 
   afterEach(async () => {
     await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));

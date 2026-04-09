@@ -107,8 +107,7 @@ describe('packagePreview', () => {
         'AGENT.md': '/workspace/.qiclaw/agents/reviewer/AGENT.md',
         'SOUL.md': '/builtin/readonly/SOUL.md',
         'STYLE.md': '/workspace/.qiclaw/agents/reviewer/STYLE.md',
-        'TOOLS.md': '/builtin/readonly/TOOLS.md',
-        'CHECKLIST.md': undefined
+        'TOOLS.md': '/builtin/readonly/TOOLS.md'
       },
       resolvedFiles: [
         '/workspace/.qiclaw/agents/reviewer/agent.json',
@@ -160,6 +159,8 @@ describe('packagePreview', () => {
     expect(preview.renderedPromptText).toContain('- Allowed capability classes: read, write, search, exec_readonly, execute');
     expect(preview.renderedPromptText).toContain('- Max tool rounds: 10');
     expect(preview.renderedPromptText).toContain('- Mutation mode: workspace-write');
+    expect(preview.renderedPromptText).not.toContain('CHECKLIST.md');
+    expect(preview.renderedPromptText).not.toContain('Completion mode:');
   });
 
   it('resolves the readonly builtin package from disk and keeps the extends bridge through default', () => {

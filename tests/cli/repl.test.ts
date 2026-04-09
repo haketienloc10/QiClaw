@@ -3623,9 +3623,11 @@ describe('buildCli', () => {
     expect(stdoutWrites.join('')).toContain('Source tier: project\n');
     expect(stdoutWrites.join('')).toContain('Inheritance chain: readonly -> default\n');
     expect(stdoutWrites.join('')).toContain(`AGENT.md: ${join(tempDir, '.qiclaw', 'agents', 'readonly', 'AGENT.md')}\n`);
+    expect(stdoutWrites.join('')).not.toContain('CHECKLIST.md:');
     expect(stdoutWrites.join('')).toContain('Rendered system prompt:\n');
     expect(stdoutWrites.join('')).toContain('AGENT.md\nProject readonly override\n');
     expect(stdoutWrites.join('')).toContain('Runtime constraints summary\n');
+    expect(stdoutWrites.join('')).not.toContain('Completion mode:');
   });
 
   it('returns exit code 1 and prints an error when --agent-spec-preview is missing a value', async () => {

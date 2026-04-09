@@ -1,7 +1,7 @@
 import type { AgentPackagePreview, AgentPromptSlotFileName, ResolvedAgentPackage } from './spec.js';
 import { renderAgentSystemPrompt } from './specPrompt.js';
 
-const promptSlotOrder: AgentPromptSlotFileName[] = ['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'CHECKLIST.md'];
+const promptSlotOrder: AgentPromptSlotFileName[] = ['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md'];
 
 export function createAgentPackagePreview(agentPackage: ResolvedAgentPackage): AgentPackagePreview {
   return {

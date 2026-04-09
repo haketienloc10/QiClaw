@@ -1099,7 +1099,7 @@ function formatInteractiveInfoLine(text: string): string {
 
 async function formatAgentSpecPreview(agentSpecName: string, cwd: string): Promise<string> {
   const preview = createAgentPackagePreview(await resolveAgentPackagePreview(agentSpecName, cwd));
-  const sectionFileLines = ['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'CHECKLIST.md']
+  const sectionFileLines = ['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md']
     .map((slot) => `- ${slot}: ${preview.sectionFiles[slot as keyof typeof preview.sectionFiles] ?? '(not provided)'}`)
     .join('\n');
   const effectivePolicyText = JSON.stringify(preview.effectiveRuntimePolicy, null, 2);

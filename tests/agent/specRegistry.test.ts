@@ -4,11 +4,11 @@ import { join, resolve } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AgentPackageManifest, AgentPromptSlotFileName } from '../../src/agent/spec.js';
+import type { AgentPackageManifest, AgentPromptFileName } from '../../src/agent/spec.js';
 
 interface BuiltinFixtureInput {
   manifest: AgentPackageManifest;
-  promptFiles?: Partial<Record<AgentPromptSlotFileName, string>>;
+  promptFiles?: Partial<Record<AgentPromptFileName, string>>;
 }
 
 const tempDirs: string[] = [];
@@ -86,7 +86,7 @@ describe('specRegistry builtin parity', () => {
 
     expect(spec.identity).toMatchObject({
       purpose: 'Handle a single bounded task inside the QiClaw CLI runtime.',
-      behavioralFraming: "You're a personal assistant, not a generic chatbot."
+      behavioralFraming: 'Be genuinely helpful, resourceful, calm, and grounded while staying concise when possible.'
     });
     expect(spec.policies.toolUsePolicy).toBe(
       'Use tools when the task depends on observed project state instead of relying on unsupported assumptions.'

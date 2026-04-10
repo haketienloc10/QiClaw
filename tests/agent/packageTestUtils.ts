@@ -1,11 +1,11 @@
 import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
-import type { AgentPackageManifest, AgentPromptSlotFileName } from '../../src/agent/spec.js';
+import type { AgentPackageManifest, AgentPromptFileName } from '../../src/agent/spec.js';
 
 export interface PackageFixtureInput {
   manifest?: AgentPackageManifest;
-  sections?: Partial<Record<AgentPromptSlotFileName, string>>;
+  sections?: Partial<Record<AgentPromptFileName, string>>;
 }
 
 export async function writePackageFixture(directoryPath: string, fixture: PackageFixtureInput): Promise<void> {

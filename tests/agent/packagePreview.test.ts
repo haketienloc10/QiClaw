@@ -114,13 +114,28 @@ describe('packagePreview', () => {
       preset: 'reviewer',
       sourceTier: 'project',
       extendsChain: ['reviewer', 'readonly'],
-      sectionFiles: {
-        'AGENT.md': '/workspace/.qiclaw/agents/reviewer/AGENT.md',
-        'SOUL.md': '/builtin/readonly/SOUL.md',
-        'STYLE.md': '/workspace/.qiclaw/agents/reviewer/STYLE.md',
-        'TOOLS.md': '/builtin/readonly/TOOLS.md',
-        'USER.md': '/workspace/.qiclaw/agents/reviewer/USER.md'
-      },
+      promptFiles: [
+        {
+          fileName: 'AGENT.md',
+          filePath: '/workspace/.qiclaw/agents/reviewer/AGENT.md'
+        },
+        {
+          fileName: 'STYLE.md',
+          filePath: '/workspace/.qiclaw/agents/reviewer/STYLE.md'
+        },
+        {
+          fileName: 'USER.md',
+          filePath: '/workspace/.qiclaw/agents/reviewer/USER.md'
+        },
+        {
+          fileName: 'SOUL.md',
+          filePath: '/builtin/readonly/SOUL.md'
+        },
+        {
+          fileName: 'TOOLS.md',
+          filePath: '/builtin/readonly/TOOLS.md'
+        }
+      ],
       resolvedFiles: [
         '/workspace/.qiclaw/agents/reviewer/agent.json',
         '/workspace/.qiclaw/agents/reviewer/AGENT.md',

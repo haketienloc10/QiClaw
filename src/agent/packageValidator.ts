@@ -108,6 +108,7 @@ export function validateManifestShape(preset: string, manifest: LoadedAgentPacka
   const policy = manifest.policy;
   const completion = manifest.completion;
   const diagnostics = manifest.diagnostics;
+  const promptFiles = manifest.promptFiles;
 
   if (manifest.extends !== undefined) {
     if (typeof manifest.extends !== 'string') {
@@ -142,6 +143,21 @@ export function validateManifestShape(preset: string, manifest: LoadedAgentPacka
     }
 
     errors.push(...validateDiagnosticsShape(preset, diagnostics as NonNullable<AgentPackageManifest['diagnostics']>));
+  }
+
+  if (promptFiles !== undefined) {
+    if (!Array.isArray(promptFiles)) {
+      errors.push(`Agent package "${preset}" must set promptFiles to an array when provided.`);
+      return errors;
+    }
+
+    for (const promptFile of promptFiles) {
+      if (typeof promptFile !== 'string') {
+        errors.push(`Agent package "${preset}" must set each promptFiles entry to a string.`);
+      } else if (promptFile.trim().length === 0) {
+        errors.push(`Agent package "${preset}" must set each promptFiles entry to a non-empty string.`);
+      }
+    }
   }
 
   return errors;

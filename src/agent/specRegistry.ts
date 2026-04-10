@@ -7,8 +7,7 @@ import {
   validateLoadedAgentPackage,
   validateResolvedAgentPackage
 } from './packageValidator.js';
-import { agentPromptSlotFileNames } from './spec.js';
-import type { AgentPromptSlotFileName, AgentSpec, LoadedAgentPackage, ResolvedAgentPackage } from './spec.js';
+import type { AgentSpec, LoadedAgentPackage, ResolvedAgentPackage } from './spec.js';
 const builtinPackagesDirectory = dirname(getBuiltinAgentPackageDirectory('default'));
 const builtinAgentSpecNames = readdirSync(builtinPackagesDirectory, { withFileTypes: true })
   .filter((entry) => entry.isDirectory())
@@ -84,16 +83,10 @@ function resolveBuiltinAgentPackageWithStack(name: string, stack: string[]): Res
       ...(parentPackage?.effectiveDiagnostics ?? {}),
       ...(loaded.manifest?.diagnostics ?? {})
     },
-    effectivePromptFiles: {
-      ...(parentPackage?.effectivePromptFiles ?? {}),
-      ...loaded.promptFiles
-    },
+    effectivePromptFiles: mergeBuiltinPromptFiles(parentPackage, loaded),
     resolvedFiles: [
       loaded.manifestPath,
-      ...agentPromptSlotFileNames.flatMap((slotFileName) => {
-        const promptFile = loaded.promptFiles[slotFileName];
-        return promptFile ? [promptFile.filePath] : [];
-      }),
+      ...listBuiltinPromptFilesInOrder(loaded).map((promptFile) => promptFile.filePath),
       ...(parentPackage?.resolvedFiles ?? [])
     ]
   };
@@ -111,19 +104,12 @@ function loadBuiltinPackage(name: BuiltinAgentSpecName): LoadedAgentPackage {
   const manifestPath = join(directoryPath, 'agent.json');
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as LoadedAgentPackage['manifest'];
   const promptFiles = Object.fromEntries(
-    agentPromptSlotFileNames.flatMap((slotFileName) => {
-      const filePath = join(directoryPath, slotFileName);
-
-      try {
-        return [[slotFileName, { filePath, content: normalizeLineEndings(readFileSync(filePath, 'utf8')) }]];
-      } catch (error) {
-        if (isMissingFileError(error)) {
-          return [];
-        }
-
-        throw error;
-      }
-    })
+    readdirSync(directoryPath, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name !== 'agent.json')
+      .map((entry) => {
+        const filePath = join(directoryPath, entry.name);
+        return [entry.name, { filePath, content: normalizeLineEndings(readFileSync(filePath, 'utf8')) }];
+      })
   ) as LoadedAgentPackage['promptFiles'];
 
   return {
@@ -134,6 +120,37 @@ function loadBuiltinPackage(name: BuiltinAgentSpecName): LoadedAgentPackage {
     manifest,
     promptFiles
   };
+}
+
+function mergeBuiltinPromptFiles(
+  parentPackage: ResolvedAgentPackage | undefined,
+  loaded: LoadedAgentPackage
+): ResolvedAgentPackage['effectivePromptFiles'] {
+  const mergedPromptFiles: ResolvedAgentPackage['effectivePromptFiles'] = {
+    ...(parentPackage?.effectivePromptFiles ?? {})
+  };
+
+  for (const [fileName, promptFile] of Object.entries(loaded.promptFiles)) {
+    if (promptFile) {
+      mergedPromptFiles[fileName] = promptFile;
+    }
+  }
+
+  return mergedPromptFiles;
+}
+
+function listBuiltinPromptFilesInOrder(loaded: LoadedAgentPackage): Array<NonNullable<LoadedAgentPackage['promptFiles'][string]>> {
+  const manifestOrderedFileNames = loaded.manifest?.promptFiles ?? [];
+  const orderedPromptFiles = manifestOrderedFileNames.flatMap((fileName) => {
+    const promptFile = loaded.promptFiles[fileName];
+    return promptFile ? [promptFile] : [];
+  });
+  const remainingPromptFiles = Object.entries(loaded.promptFiles)
+    .filter(([fileName]) => !manifestOrderedFileNames.includes(fileName))
+    .map(([, promptFile]) => promptFile)
+    .filter((promptFile): promptFile is NonNullable<typeof promptFile> => promptFile !== undefined);
+
+  return [...orderedPromptFiles, ...remainingPromptFiles];
 }
 
 function deriveAgentSpecFromResolvedPackage(resolvedPackage: ResolvedAgentPackage): AgentSpec {
@@ -190,7 +207,7 @@ function deriveAgentSpecFromResolvedPackage(resolvedPackage: ResolvedAgentPackag
   };
 }
 
-function requirePromptFileContent(resolvedPackage: ResolvedAgentPackage, slotFileName: AgentPromptSlotFileName): string {
+function requirePromptFileContent(resolvedPackage: ResolvedAgentPackage, slotFileName: string): string {
   const promptFile = resolvedPackage.effectivePromptFiles[slotFileName];
 
   if (!promptFile) {
@@ -216,10 +233,6 @@ function readOptionalLineValue(lines: string[], prefix: string): string | undefi
 
 function normalizeLineEndings(value: string): string {
   return value.replaceAll('\r\n', '\n');
-}
-
-function isMissingFileError(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT';
 }
 
 function compileResolvedAgentPackage(name: string, spec: AgentSpec): ResolvedAgentPackage {
@@ -257,7 +270,7 @@ function compileResolvedAgentPackage(name: string, spec: AgentSpec): ResolvedAge
   };
 }
 
-function buildPromptFiles(spec: AgentSpec): Partial<Record<AgentPromptSlotFileName, { filePath: string; content: string }>> {
+function buildPromptFiles(spec: AgentSpec): ResolvedAgentPackage['effectivePromptFiles'] {
   return {
     'AGENT.md': {
       filePath: 'builtin://AGENT.md',

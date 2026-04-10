@@ -1,7 +1,6 @@
 export type AgentCapabilityClass = 'read' | 'write';
 export type AgentPackageSourceTier = 'project' | 'user' | 'builtin';
-export const agentPromptSlotFileNames = ['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'USER.md'] as const;
-export type AgentPromptSlotFileName = (typeof agentPromptSlotFileNames)[number];
+export type AgentPromptFileName = string;
 export type AgentMutationMode = 'none' | 'workspace-write';
 export type AgentDiagnosticsParticipationLevel = 'none' | 'normal' | 'trace-oriented' | 'audit-oriented';
 export type AgentRedactionSensitivity = 'standard' | 'standard-to-high' | 'high';
@@ -88,6 +87,7 @@ export interface AgentPackageManifest {
   policy?: AgentRuntimePolicy;
   completion?: AgentCompletionMetadata;
   diagnostics?: AgentPackageDiagnosticsManifest;
+  promptFiles?: AgentPromptFileName[];
 }
 
 export interface AgentPromptFile {
@@ -101,7 +101,7 @@ export interface LoadedAgentPackage {
   directoryPath: string;
   manifestPath: string;
   manifest?: AgentPackageManifest;
-  promptFiles: Partial<Record<AgentPromptSlotFileName, AgentPromptFile>>;
+  promptFiles: Partial<Record<AgentPromptFileName, AgentPromptFile>>;
 }
 
 export interface ResolvedAgentPackage {
@@ -112,15 +112,20 @@ export interface ResolvedAgentPackage {
   effectivePolicy: AgentRuntimePolicy;
   effectiveCompletion?: AgentPackageManifest['completion'];
   effectiveDiagnostics?: AgentPackageManifest['diagnostics'];
-  effectivePromptFiles: Partial<Record<AgentPromptSlotFileName, AgentPromptFile>>;
+  effectivePromptFiles: Partial<Record<AgentPromptFileName, AgentPromptFile>>;
   resolvedFiles: string[];
+}
+
+export interface AgentPackagePreviewPromptFile {
+  fileName: AgentPromptFileName;
+  filePath?: string;
 }
 
 export interface AgentPackagePreview {
   preset: string;
   sourceTier: AgentPackageSourceTier;
   extendsChain: string[];
-  sectionFiles: Partial<Record<AgentPromptSlotFileName, string>>;
+  promptFiles: AgentPackagePreviewPromptFile[];
   resolvedFiles: string[];
   effectiveRuntimePolicy: AgentRuntimePolicy;
   renderedPromptText: string;

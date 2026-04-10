@@ -4,7 +4,6 @@ import pc from 'picocolors';
 import { createAgentPackagePreview } from '../agent/packagePreview.js';
 import { resolveAgentPackage as resolveAgentPackageForPreview } from '../agent/packageResolver.js';
 import { createAgentRuntime, type AgentRuntime } from '../agent/runtime.js';
-import { agentPromptSlotFileNames } from '../agent/spec.js';
 import type { ResolvedAgentPackage } from '../agent/spec.js';
 import {
   createRunAgentTurnExecution,
@@ -1106,8 +1105,8 @@ function formatInteractiveInfoLine(text: string): string {
 
 async function formatAgentSpecPreview(agentSpecName: string, cwd: string): Promise<string> {
   const preview = createAgentPackagePreview(await resolveAgentPackagePreview(agentSpecName, cwd));
-  const sectionFileLines = agentPromptSlotFileNames
-    .map((slot) => `- ${slot}: ${preview.sectionFiles[slot] ?? '(not provided)'}`)
+  const sectionFileLines = preview.promptFiles
+    .map((promptFile) => `- ${promptFile.fileName}: ${promptFile.filePath ?? '(not provided)'}`)
     .join('\n');
   const effectivePolicyText = JSON.stringify(preview.effectiveRuntimePolicy, null, 2);
 

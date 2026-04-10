@@ -18,7 +18,7 @@ describe('packageResolver', () => {
     await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
-  it('prefers project packages over user and builtin packages, then merges inheritance by slot and policy', async () => {
+  it('prefers project packages over user and builtin packages, then merges inheritance by prompt file name and policy', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'agent-package-resolver-'));
     tempDirs.push(tempDir);
 

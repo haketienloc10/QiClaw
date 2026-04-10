@@ -1091,6 +1091,148 @@ describe('agent loop', () => {
     ]);
   });
 
+  it('keeps round-one streamed assistant text in history while finalAnswer reflects only the last assistant message', async () => {
+    let round = 0;
+    const executedToolCalls: string[] = [];
+    const provider: ModelProvider = {
+      name: 'openai',
+      model: 'gpt-test',
+      async *stream() {
+        round += 1;
+
+        yield { type: 'start' as const, provider: 'openai', model: 'gpt-test' };
+
+        if (round === 1) {
+          yield { type: 'text_delta' as const, text: 'Checking ' };
+          yield { type: 'text_delta' as const, text: 'note' };
+          yield {
+            type: 'tool_call' as const,
+            id: 'call-read-stream-history',
+            name: 'file',
+            input: { action: 'read', path: 'note.txt' }
+          };
+          yield {
+            type: 'finish' as const,
+            finish: { stopReason: 'tool_use' },
+            usage: { inputTokens: 10, outputTokens: 3, totalTokens: 13 }
+          };
+          return;
+        }
+
+        yield { type: 'text_delta' as const, text: 'Done ' };
+        yield { type: 'text_delta' as const, text: 'reading note' };
+        yield {
+          type: 'finish' as const,
+          finish: { stopReason: 'end_turn' },
+          usage: { inputTokens: 14, outputTokens: 4, totalTokens: 18 }
+        };
+      },
+      async generate() {
+        throw new Error('runAgentTurnStream should use provider.stream in this test');
+      }
+    };
+
+    const events: Array<{ type: string; [key: string]: unknown }> = [];
+    for await (const event of runAgentTurnStream({
+      provider,
+      availableTools: [
+        {
+          name: 'file',
+          description: 'Read test file',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              action: { type: 'string' },
+              path: { type: 'string' }
+            },
+            required: ['action', 'path'],
+            additionalProperties: false
+          },
+          async execute(input: { action: 'read'; path: string }) {
+            executedToolCalls.push(String(input.path));
+            return { content: `read:${String(input.path)}` };
+          }
+        }
+      ],
+      baseSystemPrompt: 'system',
+      userInput: 'read the note',
+      cwd: process.cwd(),
+      maxToolRounds: 2
+    })) {
+      events.push(event as { type: string; [key: string]: unknown });
+    }
+
+    expect(executedToolCalls).toEqual(['note.txt']);
+    expect(events).toEqual([
+      { type: 'turn_started' },
+      { type: 'provider_started', provider: 'openai', model: 'gpt-test' },
+      { type: 'assistant_text_delta', text: 'Checking ' },
+      { type: 'assistant_text_delta', text: 'note' },
+      {
+        type: 'tool_call_started',
+        id: 'call-read-stream-history',
+        name: 'file',
+        input: { action: 'read', path: 'note.txt' }
+      },
+      {
+        type: 'assistant_message_completed',
+        text: 'Checking note',
+        toolCalls: [
+          {
+            id: 'call-read-stream-history',
+            name: 'file',
+            input: { action: 'read', path: 'note.txt' }
+          }
+        ]
+      },
+      {
+        type: 'tool_call_completed',
+        id: 'call-read-stream-history',
+        name: 'file',
+        resultPreview: '{"content":"read:note.txt"}',
+        isError: false
+      },
+      { type: 'provider_started', provider: 'openai', model: 'gpt-test' },
+      { type: 'assistant_text_delta', text: 'Done ' },
+      { type: 'assistant_text_delta', text: 'reading note' },
+      { type: 'assistant_message_completed', text: 'Done reading note', toolCalls: undefined },
+      {
+        type: 'turn_completed',
+        finalAnswer: 'Done reading note',
+        stopReason: 'completed',
+        history: [
+          { role: 'user', content: 'read the note' },
+          {
+            role: 'assistant',
+            content: 'Checking note',
+            toolCalls: [
+              {
+                id: 'call-read-stream-history',
+                name: 'file',
+                input: { action: 'read', path: 'note.txt' }
+              }
+            ]
+          },
+          {
+            role: 'tool',
+            name: 'file',
+            toolCallId: 'call-read-stream-history',
+            content: 'read:note.txt',
+            isError: false
+          },
+          { role: 'assistant', content: 'Done reading note', toolCalls: undefined }
+        ],
+        toolRoundsUsed: 1,
+        doneCriteria: expect.objectContaining({
+          goal: 'read the note',
+          checklist: ['read the note'],
+          requiresToolEvidence: true
+        }),
+        turnCompleted: true
+      }
+    ]);
+  });
+
   it('does not emit duplicate tool_call_started events for repeated streamed tool call ids', async () => {
     let round = 0;
     const executedToolCalls: string[] = [];
@@ -1690,9 +1832,10 @@ describe('agent loop', () => {
         redactionSensitivity: 'standard'
       }
     });
-    expect(runtime.systemPrompt).toContain('Purpose: Handle a single bounded task inside the QiClaw CLI runtime.');
+    expect(runtime.systemPrompt).toContain('# AGENTS.md - Your Workspace');
     expect(runtime.systemPrompt).toContain('- Allowed capability classes: read, write');
     expect(runtime.systemPrompt).toContain('Runtime constraints summary');
+    expect(runtime.systemPrompt).not.toContain('Purpose: Handle a single bounded task inside the QiClaw CLI runtime.');
     expect(runtime.maxToolRounds).toBe(10);
     expect(runtime.resolvedPackage?.effectivePolicy).toEqual(defaultResolvedPackage.effectivePolicy);
   });

@@ -617,7 +617,8 @@ describe('createOpenAIProvider', () => {
     }
 
     expect(events[0]).toEqual({ type: 'start', provider: 'openai', model: 'gpt-4.1-mini' });
-    expect((events[1] as { type: string }).type).toBe('finish');
+    expect(events[1]).toEqual({ type: 'text_delta', text: 'Hello world' });
+    expect((events[2] as { type: string }).type).toBe('finish');
   });
 
   it('falls back to tool_call from completed response when no early tool_call event exists', async () => {
@@ -680,6 +681,137 @@ describe('createOpenAIProvider', () => {
           providerStopDetails: undefined,
           toolCallSummaries: [{ id: 'call_1', name: 'read_file' }],
           responseContentBlocksByType: { function_call: 1 },
+          responsePreviewRedacted: expect.any(String)
+        }
+      }
+    ]);
+  });
+
+  it('emits completed response text before finish when realtime stream had no text_delta events', async () => {
+    const provider = createOpenAIProvider({
+      model: 'gpt-4.1-mini',
+      apiKey: 'test-key',
+      createClient: () => ({
+        responses: {
+          create: vi.fn().mockResolvedValue((async function* () {
+            yield { type: 'response.created', response: { id: 'resp_123', model: 'gpt-4.1-mini' } };
+            yield {
+              type: 'response.completed',
+              response: {
+                id: 'resp_123',
+                model: 'gpt-4.1-mini',
+                status: 'completed',
+                output: [
+                  {
+                    type: 'message',
+                    role: 'assistant',
+                    content: [{ type: 'output_text', text: 'Hello from completed' }]
+                  }
+                ]
+              }
+            };
+          })())
+        }
+      }) as unknown as OpenAI
+    });
+
+    const events: unknown[] = [];
+    for await (const event of provider.stream!({
+      messages: [{ role: 'user', content: 'Inspect note.txt' }],
+      availableTools: []
+    })) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([
+      { type: 'start', provider: 'openai', model: 'gpt-4.1-mini' },
+      { type: 'text_delta', text: 'Hello from completed' },
+      {
+        type: 'finish',
+        finish: { stopReason: undefined },
+        usage: {
+          inputTokens: undefined,
+          outputTokens: undefined,
+          totalTokens: undefined,
+          cacheReadInputTokens: undefined
+        },
+        responseMetrics: {
+          contentBlockCount: 1,
+          toolCallCount: 0,
+          hasTextOutput: true,
+          contentBlocksByType: { message: 1, output_text: 1 }
+        },
+        debug: {
+          providerUsageRawRedacted: undefined,
+          providerStopDetails: undefined,
+          toolCallSummaries: [],
+          responseContentBlocksByType: { message: 1, output_text: 1 },
+          responsePreviewRedacted: expect.any(String)
+        }
+      }
+    ]);
+  });
+
+  it('does not duplicate completed response text when realtime text_delta already streamed', async () => {
+    const provider = createOpenAIProvider({
+      model: 'gpt-4.1-mini',
+      apiKey: 'test-key',
+      createClient: () => ({
+        responses: {
+          create: vi.fn().mockResolvedValue((async function* () {
+            yield { type: 'response.created', response: { id: 'resp_123', model: 'gpt-4.1-mini' } };
+            yield { type: 'response.output_text.delta', delta: 'Hello world' };
+            yield {
+              type: 'response.completed',
+              response: {
+                id: 'resp_123',
+                model: 'gpt-4.1-mini',
+                status: 'completed',
+                output: [
+                  {
+                    type: 'message',
+                    role: 'assistant',
+                    content: [{ type: 'output_text', text: 'Hello world' }]
+                  }
+                ]
+              }
+            };
+          })())
+        }
+      }) as unknown as OpenAI
+    });
+
+    const events: unknown[] = [];
+    for await (const event of provider.stream!({
+      messages: [{ role: 'user', content: 'Inspect note.txt' }],
+      availableTools: []
+    })) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([
+      { type: 'start', provider: 'openai', model: 'gpt-4.1-mini' },
+      { type: 'text_delta', text: 'Hello world' },
+      {
+        type: 'finish',
+        finish: { stopReason: undefined },
+        usage: {
+          inputTokens: undefined,
+          outputTokens: undefined,
+          totalTokens: undefined,
+          cacheReadInputTokens: undefined
+        },
+        responseMetrics: {
+          contentBlockCount: 1,
+          toolCallCount: 0,
+          hasTextOutput: true,
+          contentBlocksByType: { message: 1, output_text: 1 }
+        },
+        debug: {
+          providerUsageRawRedacted: undefined,
+          providerStopDetails: undefined,
+          toolCallSummaries: [],
+          responseContentBlocksByType: { message: 1, output_text: 1 },
           responsePreviewRedacted: expect.any(String)
         }
       }
@@ -894,6 +1026,42 @@ describe('collectProviderStream', () => {
         hasTextOutput: false,
         contentBlocksByType: { function_call: 2 }
       }
+    });
+  });
+
+  it('flattens same-response text and tool ordering without losing text bytes', async () => {
+    const stream = (async function* (): AsyncIterable<NormalizedEvent> {
+      yield { type: 'start', provider: 'openai', model: 'gpt-4.1' } as const;
+      yield { type: 'text_delta', text: 'A' } as const;
+      yield {
+        type: 'tool_call',
+        id: 't1',
+        name: 'read_file',
+        input: { path: 'note-a.txt' }
+      } as const;
+      yield { type: 'text_delta', text: 'B' } as const;
+      yield {
+        type: 'tool_call',
+        id: 't2',
+        name: 'read_file',
+        input: { path: 'note-b.txt' }
+      } as const;
+      yield { type: 'finish', finish: { stopReason: 'tool_use' } } as const;
+    })();
+
+    await expect(collectProviderStream(stream)).resolves.toMatchObject({
+      message: {
+        role: 'assistant',
+        content: 'AB',
+        toolCalls: [
+          { id: 't1', name: 'read_file', input: { path: 'note-a.txt' } },
+          { id: 't2', name: 'read_file', input: { path: 'note-b.txt' } }
+        ]
+      },
+      toolCalls: [
+        { id: 't1', name: 'read_file', input: { path: 'note-a.txt' } },
+        { id: 't2', name: 'read_file', input: { path: 'note-b.txt' } }
+      ]
     });
   });
 });

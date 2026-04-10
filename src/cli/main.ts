@@ -845,6 +845,9 @@ function createAssistantBlockWriter(stdout: CliStdout, mode: CliDisplayMode): As
       ensureTurnPrelude();
       ensureRespondingStatus();
       activeActivityLineCount = 0;
+      if (mode === 'interactive') {
+        resetActivityTracking();
+      }
       hasStreamedAssistantTextInTurn = true;
 
       if (mode === 'interactive') {

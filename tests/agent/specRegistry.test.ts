@@ -88,7 +88,7 @@ describe('specRegistry builtin parity', () => {
     expect(resolved.preset).toBe('default');
     expect(resolved.extendsChain).toEqual(['default']);
     expect(resolved.effectivePromptOrder).toEqual(['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'USER.md']);
-    expect(resolved.effectivePromptFiles['AGENT.md']?.content).toContain('Handle a single bounded task inside the QiClaw CLI runtime.');
+    expect(resolved.effectivePromptFiles['AGENT.md']?.content).toContain('# AGENTS.md - Your Workspace');
     expect(resolved.effectivePromptFiles['USER.md']?.content).toContain('# USER.md - About Your Human');
     expect(resolved.effectivePolicy.allowedCapabilityClasses).toEqual(['read', 'write']);
     expect(resolved.effectivePolicy.maxToolRounds).toBe(10);

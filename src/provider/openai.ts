@@ -240,6 +240,7 @@ export function createOpenAIProvider(options: OpenAIProviderOptions): ModelProvi
       })) as AsyncIterable<ResponseStreamEvent>;
 
       let sawStart = false;
+      let sawRealtimeTextDelta = false;
       let completedResponse: Response | undefined;
       const emittedToolCalls = new Map<string, { name: string; input: Record<string, unknown> }>();
 
@@ -257,6 +258,7 @@ export function createOpenAIProvider(options: OpenAIProviderOptions): ModelProvi
             break;
           case 'response.output_text.delta':
             if (event.delta) {
+              sawRealtimeTextDelta = true;
               yield { type: 'text_delta', text: event.delta };
             }
             break;
@@ -309,6 +311,9 @@ export function createOpenAIProvider(options: OpenAIProviderOptions): ModelProvi
         }
 
         if (event.type === 'text_delta') {
+          if (!sawRealtimeTextDelta) {
+            yield event;
+          }
           continue;
         }
 

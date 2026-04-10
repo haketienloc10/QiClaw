@@ -51,7 +51,7 @@ describe('createAgentRuntime', () => {
 
     expect(resolveBuiltinAgentPackage).toHaveBeenCalledWith('readonly');
     expect(runtime.resolvedPackage).toBe(mockedDefaultResolvedPackage);
-    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch']);
+    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch', 'summary_tool']);
     expect(runtime.maxToolRounds).toBe(2);
   });
 
@@ -70,7 +70,7 @@ describe('createAgentRuntime', () => {
 
     expect(runtime.cwd).toBe('/tmp/runtime-readonly');
     expect(runtime.resolvedPackage).toBe(resolvedPackage);
-    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch']);
+    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch', 'summary_tool']);
     expect(runtime.maxToolRounds).toBe(6);
   });
 });

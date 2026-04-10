@@ -1,10 +1,11 @@
 import { fileTool } from './file.js';
 import { gitTool } from './git.js';
 import { shellTool } from './shell.js';
+import { summaryTool } from './summary.js';
 import type { Tool } from './tool.js';
 import { webFetchTool } from './webFetch.js';
 
-const builtinTools = [fileTool, shellTool, gitTool, webFetchTool] as const;
+const builtinTools = [fileTool, shellTool, gitTool, webFetchTool, summaryTool] as const;
 
 const toolsByName = new Map<string, Tool>(builtinTools.map((tool) => [tool.name, tool]));
 

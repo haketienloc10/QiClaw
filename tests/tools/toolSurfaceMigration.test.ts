@@ -18,13 +18,14 @@ afterEach(() => {
 });
 
 describe('tool surface migration', () => {
-  it('registers exactly the four migrated built-in tools', () => {
-    expect(getBuiltinToolNames()).toEqual(['file', 'shell', 'git', 'web_fetch']);
-    expect(getBuiltinTools().map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch']);
+  it('registers exactly the five migrated built-in tools', () => {
+    expect(getBuiltinToolNames()).toEqual(['file', 'shell', 'git', 'web_fetch', 'summary_tool']);
+    expect(getBuiltinTools().map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch', 'summary_tool']);
     expect(hasTool('file')).toBe(true);
     expect(hasTool('shell')).toBe(true);
     expect(hasTool('git')).toBe(true);
     expect(hasTool('web_fetch')).toBe(true);
+    expect(hasTool('summary_tool')).toBe(true);
     expect(getTool('file')?.description).toMatch(/read|write|search|list/i);
   });
 
@@ -36,7 +37,7 @@ describe('tool surface migration', () => {
       cwd: '/tmp/runtime-compose'
     });
 
-    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch']);
+    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch', 'summary_tool']);
     expect(runtime.resolvedPackage?.effectivePolicy.allowedCapabilityClasses).toEqual(['read', 'write']);
   });
 
@@ -49,7 +50,7 @@ describe('tool surface migration', () => {
       agentSpecName: 'readonly'
     });
 
-    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch']);
+    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch', 'summary_tool']);
     expect(runtime.resolvedPackage?.effectivePolicy.allowedCapabilityClasses).toEqual(['read']);
   });
 

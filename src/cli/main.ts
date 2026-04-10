@@ -512,20 +512,26 @@ function formatTurnEventToolPreviewLine(resultPreview: string, mode: CliDisplayM
 }
 
 function formatTurnEventToolLabel(toolName: string, input: Record<string, unknown>): string | undefined {
-  if (toolName === 'shell_readonly' || toolName === 'shell_exec') {
-    return `${toolName === 'shell_readonly' ? 'shell:read' : 'shell:exec'} ${formatTurnEventCommandLabel(input)}`;
+  if (toolName === 'shell') {
+    return `shell ${formatTurnEventCommandLabel(input)}`;
   }
 
-  if (toolName === 'read_file') {
-    return `read ${formatTurnEventPathLabel(input, 'file')}`;
-  }
+  if (toolName === 'file') {
+    const action = typeof input.action === 'string' ? input.action.trim() : '';
 
-  if (toolName === 'edit_file') {
-    return `edit ${formatTurnEventPathLabel(input, 'file')}`;
-  }
+    if (action === 'search') {
+      return `file search ${formatTurnEventSearchLabel(input)}`;
+    }
 
-  if (toolName === 'search') {
-    return `search ${formatTurnEventSearchLabel(input)}`;
+    if (action === 'list') {
+      return `file list ${formatTurnEventPathLabel(input, '.')}`;
+    }
+
+    if (action === 'read' || action === 'write') {
+      return `file ${action} ${formatTurnEventPathLabel(input, 'file')}`;
+    }
+
+    return action.length > 0 ? `file ${action}` : 'file';
   }
 
   return undefined;

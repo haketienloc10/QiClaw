@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { execa } from 'execa';
+
 import { createAgentPackagePreview } from '../../src/agent/packagePreview.js';
 import { resolveBuiltinAgentPackage } from '../../src/agent/specRegistry.js';
 import type { ResolvedAgentPackage } from '../../src/agent/spec.js';
@@ -165,11 +167,11 @@ describe('packagePreview', () => {
 
     expect(resolved.resolvedFiles.some((filePath) => filePath.includes('/src/agent/builtin-packages/default/agent.json'))).toBe(true);
     expect(resolved.resolvedFiles.some((filePath) => filePath.includes('/src/agent/builtin-packages/default/AGENT.md'))).toBe(true);
-    expect(preview.effectiveRuntimePolicy.allowedCapabilityClasses).toEqual(['read', 'write', 'search', 'exec_readonly', 'execute']);
+    expect(preview.effectiveRuntimePolicy.allowedCapabilityClasses).toEqual(['read', 'write']);
     expect(preview.effectiveRuntimePolicy.maxToolRounds).toBe(10);
     expect(preview.effectiveRuntimePolicy.mutationMode).toBe('workspace-write');
     expect(preview.renderedPromptText).toContain('Runtime constraints summary');
-    expect(preview.renderedPromptText).toContain('- Allowed capability classes: read, write, search, exec_readonly, execute');
+    expect(preview.renderedPromptText).toContain('- Allowed capability classes: read, write');
     expect(preview.renderedPromptText).toContain('- Max tool rounds: 10');
     expect(preview.renderedPromptText).toContain('- Mutation mode: workspace-write');
     expect(preview.renderedPromptText).not.toContain('CHECKLIST.md');
@@ -187,6 +189,8 @@ describe('packagePreview', () => {
   });
 
   it('resolves builtin package assets from dist output when loading the built registry module', async () => {
+    await execa('npm', ['run', 'build'], { cwd: workspaceRoot });
+
     const builtRegistryModuleUrl = pathToFileURL(resolve(workspaceRoot, 'dist', 'agent', 'specRegistry.js')).href;
     const { resolveBuiltinAgentPackage: resolveBuiltBuiltinAgentPackage } = await import(builtRegistryModuleUrl);
 
@@ -197,5 +201,5 @@ describe('packagePreview', () => {
     expect(resolved.resolvedFiles.some((filePath: string) => filePath.includes('/dist/agent/builtin-packages/default/AGENT.md'))).toBe(true);
     expect(resolved.effectivePromptFiles['AGENT.md']?.filePath).toContain('/dist/agent/builtin-packages/readonly/AGENT.md');
     expect(resolved.effectivePromptFiles['TOOLS.md']?.filePath).toContain('/dist/agent/builtin-packages/readonly/TOOLS.md');
-  });
+  }, 15000);
 });

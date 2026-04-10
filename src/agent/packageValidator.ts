@@ -9,7 +9,7 @@ import type {
   ResolvedAgentPackage
 } from './spec.js';
 
-const validCapabilityClasses = new Set<AgentCapabilityClass>(['read', 'write', 'search', 'exec_readonly', 'execute']);
+const validCapabilityClasses = new Set<AgentCapabilityClass>(['read', 'write']);
 const validMutationModes = new Set<AgentMutationMode>(['none', 'workspace-write']);
 const validDiagnosticsParticipationLevels = new Set<AgentDiagnosticsParticipationLevel>([
   'none',
@@ -85,10 +85,10 @@ export function validateResolvedAgentPackage(agentPackage: ResolvedAgentPackage)
 
   if (
     agentPackage.effectivePolicy.mutationMode === 'none' &&
-    allowedCapabilityClasses.some((capabilityClass) => capabilityClass === 'write' || capabilityClass === 'execute')
+    allowedCapabilityClasses.some((capabilityClass) => capabilityClass === 'write')
   ) {
     errors.push(
-      `Agent package "${agentPackage.preset}" cannot allow write or execute capabilities when mutationMode is "none".`
+      `Agent package "${agentPackage.preset}" cannot allow write capabilities when mutationMode is "none".`
     );
   }
 

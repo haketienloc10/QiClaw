@@ -1,7 +1,7 @@
 {
   "extends": "default",
   "policy": {
-    "allowedCapabilityClasses": ["read", "search", "exec_readonly"],
+    "allowedCapabilityClasses": ["read"],
     "maxToolRounds": 6,
     "requiresToolEvidence": true,
     "requiresSubstantiveFinalAnswer": true,
@@ -16,7 +16,7 @@
   "completion": {
     "completionMode": "Single-turn read-only inspection with strict evidence-aware verification.",
     "doneCriteriaShape": "Return a substantive final answer grounded in direct project inspection evidence.",
-    "evidenceRequirement": "Use successful read/search tool results for inspection-style claims.",
+    "evidenceRequirement": "Use successful tool results for inspection-style claims.",
     "stopVsDoneDistinction": "A provider stop is insufficient unless the answer is substantive and consistent with the observed tool results."
   },
   "diagnostics": {

@@ -496,7 +496,12 @@ export async function* runAgentTurnStream(
 
         const toolStartedAt = Date.now();
         const toolResult = truncateToolResultMessage(
-          await dispatchAllowedToolCall(toolCall, input.availableTools, input.cwd),
+          await dispatchAllowedToolCall(
+            toolCall,
+            input.availableTools,
+            input.cwd,
+            input.resolvedPackage?.effectivePolicy.mutationMode
+          ),
           MAX_TOOL_RESULT_CONTENT_CHARS
         );
         history.push(toolResult);
@@ -1000,7 +1005,8 @@ function createTurnId(): string {
 async function dispatchAllowedToolCall(
   toolCall: ToolCallRequest,
   availableTools: Tool[],
-  cwd: string
+  cwd: string,
+  mutationMode?: 'none' | 'readonly' | 'workspace-write'
 ): Promise<ToolResultMessage> {
   const allowedTool = availableTools.find((tool) => tool.name === toolCall.name);
 
@@ -1016,7 +1022,7 @@ async function dispatchAllowedToolCall(
 
   try {
     validateToolInput(allowedTool, toolCall.input);
-    const result = await allowedTool.execute(toolCall.input, { cwd });
+    const result = await allowedTool.execute(toolCall.input, { cwd, mutationMode });
     return toToolResultMessage(toolCall, result);
   } catch (error) {
     return toToolErrorMessage(toolCall, error);

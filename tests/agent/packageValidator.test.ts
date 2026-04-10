@@ -213,7 +213,7 @@ describe('packageValidator', () => {
       })
     ).toEqual([
       'Agent package "reviewer" must set maxToolRounds to at least 1.',
-      'Agent package "reviewer" cannot allow write or execute capabilities when mutationMode is "none".'
+      'Agent package "reviewer" cannot allow write capabilities when mutationMode is "none".'
     ]);
   });
 });

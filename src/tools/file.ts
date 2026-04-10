@@ -1,16 +1,40 @@
+import { readFile, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { basename, relative, resolve } from 'node:path';
 
-import { shellTool } from './shell.js';
-import type { Tool, ToolContext, ToolResult } from './tool.js';
+import { readdir } from 'node:fs/promises';
 
-interface SearchInput {
+import { resolveWorkspacePath, type Tool, type ToolContext, type ToolResult } from './tool.js';
+import { shellTool } from './shell.js';
+
+type FileReadInput = {
+  action: 'read';
+  path: string;
+  startLine?: number;
+  endLine?: number;
+};
+
+type FileWriteInput = {
+  action: 'write';
+  path: string;
+  content: string;
+};
+
+type FileSearchInput = {
+  action: 'search';
   pattern?: string;
   query?: string;
   maxMatches?: number;
   maxResults?: number;
   includeContext?: boolean;
-}
+};
+
+type FileListInput = {
+  action: 'list';
+  path?: string;
+};
+
+type FileInput = FileReadInput | FileWriteInput | FileSearchInput | FileListInput;
 
 interface SearchLine {
   lineNumber: number;
@@ -42,49 +66,228 @@ interface SearchResultData {
   files: SearchFileData[];
 }
 
+const MAX_READ_SIZE = 32 * 1024;
 const DEFAULT_MAX_MATCHES = 15;
 const CONTEXT_LINES = 2;
 const MAX_CONTENT_CHARS = 18_000;
 const IGNORED_SEGMENTS = new Set(['node_modules', '.git', 'dist', '.claude', '.worktrees']);
+const SEARCH_GLOB_EXCLUDES = ['!node_modules/**', '!.git/**', '!dist/**', '!.claude/**', '!.worktrees/**'] as const;
+const GREP_EXCLUDE_DIRS = ['node_modules', '.git', 'dist', '.claude', '.worktrees'] as const;
 
-export const searchTool: Tool<SearchInput> = {
-  name: 'search',
-  description: 'Search the workspace for matching text and return structured snippets with context.',
+function truncateContent(content: string): string {
+  if (content.length <= MAX_READ_SIZE) {
+    return content;
+  }
+
+  return `${content.slice(0, MAX_READ_SIZE)}\n... [file truncated]`;
+}
+
+function readLineRange(content: string, startLine?: number, endLine?: number): string {
+  if (startLine === undefined && endLine === undefined) {
+    return content;
+  }
+
+  const lines = content.split(/\r?\n/);
+  const start = Math.max(1, startLine ?? 1);
+  const end = Math.max(start, endLine ?? lines.length);
+  const selected = lines.slice(start - 1, end);
+
+  return selected.map((line, index) => `${start + index}: ${line}`).join('\n');
+}
+
+function assertMutationAllowed(context: ToolContext, action: 'write'): void {
+  if (context.mutationMode === 'none' || context.mutationMode === 'readonly') {
+    throw new Error(`File action "${action}" is not allowed when mutation mode is ${context.mutationMode}.`);
+  }
+}
+
+function requireString(value: unknown, fieldName: string): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`File action field "${fieldName}" is required and must be a non-empty string.`);
+  }
+  return value;
+}
+
+function requireOptionalNumber(value: unknown, fieldName: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    throw new Error(`File action field "${fieldName}" must be a number when provided.`);
+  }
+  return value;
+}
+
+function normalizeFileInput(input: FileInput): FileInput {
+  if (input.action === 'read') {
+    return {
+      action: 'read',
+      path: requireString((input as { path?: unknown }).path, 'path'),
+      startLine: requireOptionalNumber((input as { startLine?: unknown }).startLine, 'startLine'),
+      endLine: requireOptionalNumber((input as { endLine?: unknown }).endLine, 'endLine')
+    };
+  }
+
+  if (input.action === 'write') {
+    return {
+      action: 'write',
+      path: requireString((input as { path?: unknown }).path, 'path'),
+      content: requireString((input as { content?: unknown }).content, 'content')
+    };
+  }
+
+  if (input.action === 'search') {
+    return {
+      action: 'search',
+      pattern: typeof input.pattern === 'string' ? input.pattern : undefined,
+      query: typeof input.query === 'string' ? input.query : undefined,
+      maxMatches: requireOptionalNumber((input as { maxMatches?: unknown }).maxMatches, 'maxMatches'),
+      maxResults: requireOptionalNumber((input as { maxResults?: unknown }).maxResults, 'maxResults'),
+      includeContext: typeof input.includeContext === 'boolean' ? input.includeContext : undefined
+    };
+  }
+
+  if (input.action === 'list') {
+    return {
+      action: 'list',
+      path: input.path === undefined ? undefined : requireString((input as { path?: unknown }).path, 'path')
+    };
+  }
+
+  throw new Error(`Invalid file action: ${(input as { action?: string }).action ?? 'unknown'}`);
+}
+
+function isNoMatchSearchError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message;
+  return /Command failed:[\s\S]*\b(rg|grep)\b/i.test(message) && /Exit code:\s*1\b/i.test(message);
+}
+
+function isCommandMissingError(error: unknown, command: 'rg' | 'grep'): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return /enoent/i.test(error.message) && new RegExp(`\\b${command}\\b`, 'i').test(error.message);
+}
+
+async function executeRead(input: FileReadInput, context: ToolContext): Promise<ToolResult> {
+  const targetPath = resolveWorkspacePath(context.cwd, input.path);
+  const content = await readFile(targetPath, 'utf8');
+
+  return {
+    content: truncateContent(readLineRange(content, input.startLine, input.endLine))
+  };
+}
+
+async function executeWrite(input: FileWriteInput, context: ToolContext): Promise<ToolResult> {
+  assertMutationAllowed(context, 'write');
+  const targetPath = resolveWorkspacePath(context.cwd, input.path);
+  await writeFile(targetPath, input.content, 'utf8');
+
+  return {
+    content: `Wrote ${input.path}`
+  };
+}
+
+async function executeList(input: FileListInput, context: ToolContext): Promise<ToolResult> {
+  const targetPath = resolveWorkspacePath(context.cwd, input.path ?? '.');
+  const entries = await readdir(targetPath, { withFileTypes: true });
+  const data = entries
+    .map((entry) => ({
+      name: entry.name,
+      type: entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : 'other'
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+
+  return {
+    content: data.map((entry) => `${entry.type}\t${entry.name}`).join('\n'),
+    data: {
+      path: input.path ?? '.',
+      entries: data
+    }
+  };
+}
+
+async function executeSearch(input: FileSearchInput, context: ToolContext): Promise<ToolResult> {
+  const pattern = input.pattern ?? input.query ?? '';
+  const maxMatches = input.maxMatches ?? input.maxResults ?? DEFAULT_MAX_MATCHES;
+
+  if (pattern.trim().length === 0) {
+    return buildStructuredSearchResult(pattern, '', context, maxMatches);
+  }
+
+  const rgArgs = ['--json', '--context', String(CONTEXT_LINES), ...SEARCH_GLOB_EXCLUDES.flatMap((glob) => ['--glob', glob]), '--', pattern, '.'];
+
+  try {
+    const rgResult = await shellTool.execute({ command: 'rg', args: rgArgs }, context);
+    return buildStructuredSearchResult(pattern, String(rgResult.content ?? ''), context, maxMatches);
+  } catch (error) {
+    if (isNoMatchSearchError(error)) {
+      return buildStructuredSearchResult(pattern, '', context, maxMatches);
+    }
+
+    if (!isCommandMissingError(error, 'rg')) {
+      throw error;
+    }
+
+    const grepArgs = ['-R', '-n', ...GREP_EXCLUDE_DIRS.map((dir) => `--exclude-dir=${dir}`), '--', pattern, '.'];
+
+    try {
+      const grepResult = await shellTool.execute({ command: 'grep', args: grepArgs }, context);
+      return buildStructuredSearchResult(pattern, String(grepResult.content ?? ''), context, maxMatches);
+    } catch (grepError) {
+      if (isNoMatchSearchError(grepError)) {
+        return buildStructuredSearchResult(pattern, '', context, maxMatches);
+      }
+      throw grepError;
+    }
+  }
+}
+
+export const fileTool: Tool<FileInput> = {
+  name: 'file',
+  description: 'Read, write, search, or list workspace files using an action-based interface.',
   inputSchema: {
     type: 'object',
     properties: {
-      pattern: { type: 'string', description: 'Text or regex to search for.' },
-      maxMatches: { type: 'number', description: 'Maximum number of matches to return.' },
-      query: { type: 'string', description: 'Alias for pattern.' },
-      maxResults: { type: 'number', description: 'Alias for maxMatches.' },
-      includeContext: { type: 'boolean', description: 'Reserved compatibility flag.' }
+      action: { type: 'string' },
+      path: { type: 'string' },
+      startLine: { type: 'number' },
+      endLine: { type: 'number' },
+      content: { type: 'string' },
+      pattern: { type: 'string' },
+      query: { type: 'string' },
+      maxMatches: { type: 'number' },
+      maxResults: { type: 'number' },
+      includeContext: { type: 'boolean' }
     },
-    required: [],
+    required: ['action'],
     additionalProperties: false
   },
   async execute(input, context) {
-    const pattern = input.pattern ?? input.query ?? '';
-    const maxMatches = input.maxMatches ?? input.maxResults ?? DEFAULT_MAX_MATCHES;
+    const normalizedInput = normalizeFileInput(input);
 
-    if (pattern.trim().length === 0) {
-      return { content: 'Error: Missing "pattern" parameter' };
+    if (normalizedInput.action === 'read') {
+      return executeRead(normalizedInput, context);
     }
 
-    const rgArgs = ['--json', '--context', String(CONTEXT_LINES), '--glob', '!node_modules/**', '--glob', '!.git/**', '--glob', '!dist/**', '--glob', '!.claude/**', pattern, '.'];
-
-    try {
-      const rgResult = await shellTool.execute({ command: 'rg', args: rgArgs }, context);
-      return buildStructuredSearchResult(pattern, String(rgResult.content ?? ''), context, maxMatches);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!/ENOENT/i.test(message) || !/\brg\b/i.test(message)) {
-        throw error;
-      }
-
-      const grepArgs = ['-R', '-n', pattern, '.'];
-      const grepResult = await shellTool.execute({ command: 'grep', args: grepArgs }, context);
-      return buildStructuredSearchResult(pattern, String(grepResult.content ?? ''), context, maxMatches);
+    if (normalizedInput.action === 'write') {
+      return executeWrite(normalizedInput, context);
     }
+
+    if (normalizedInput.action === 'search') {
+      return executeSearch(normalizedInput, context);
+    }
+
+    if (normalizedInput.action === 'list') {
+      return executeList(normalizedInput, context);
+    }
+
+    throw new Error(`Unsupported file action: ${(normalizedInput as { action?: string }).action ?? 'unknown'}`);
   }
 };
 

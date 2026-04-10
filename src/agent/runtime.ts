@@ -27,11 +27,8 @@ export interface CreateAgentRuntimeOptions extends ResolvedProviderConfig {
 }
 
 const builtinToolNamesByCapabilityClass: Record<AgentCapabilityClass, string[]> = {
-  read: ['read_file'],
-  write: ['edit_file'],
-  search: ['search'],
-  exec_readonly: ['shell_readonly'],
-  execute: ['shell_exec']
+  read: ['file', 'shell', 'git', 'web_fetch'],
+  write: ['file', 'shell', 'git']
 };
 
 export function createAgentRuntime(options: CreateAgentRuntimeOptions): AgentRuntime {
@@ -62,9 +59,8 @@ export function createAgentRuntime(options: CreateAgentRuntimeOptions): AgentRun
 }
 
 function filterToolsForSpec(tools: Tool[], resolvedPackage: ResolvedAgentPackage): Tool[] {
-  const allowedToolNames = new Set(
-    (resolvedPackage.effectivePolicy.allowedCapabilityClasses ?? []).flatMap((capabilityClass) => builtinToolNamesByCapabilityClass[capabilityClass] ?? [])
-  );
+  const allowedCapabilityClasses = resolvedPackage.effectivePolicy.allowedCapabilityClasses ?? [];
+  const allowedToolNames = new Set(allowedCapabilityClasses.flatMap((capabilityClass) => builtinToolNamesByCapabilityClass[capabilityClass] ?? []));
 
   return tools.filter((tool) => allowedToolNames.has(tool.name));
 }

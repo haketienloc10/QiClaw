@@ -1,4 +1,4 @@
-Allowed capability classes: read, search, exec_readonly
-Tool-use policy: Use read and search tools to gather project evidence before making inspection claims.
+Allowed capability classes: read
+Tool-use policy: Use the file, shell, git, and web_fetch tools to gather project evidence before making inspection claims.
 Mutation policy: Do not mutate the project surface.
-Capability exclusions: Do not edit project files.; Do not invoke execution tools for mutation-oriented tasks.
+Capability exclusions: Do not use file write actions.; Do not use shell or git for mutation-oriented tasks.

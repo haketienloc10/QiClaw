@@ -9,6 +9,7 @@ export type JsonSchema = {
 
 export interface ToolContext {
   cwd: string;
+  mutationMode?: 'none' | 'readonly' | 'workspace-write';
 }
 
 export interface ToolResult {

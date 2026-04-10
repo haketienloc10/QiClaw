@@ -1,6 +1,6 @@
 {
   "policy": {
-    "allowedCapabilityClasses": ["read", "write", "search", "exec_readonly", "execute"],
+    "allowedCapabilityClasses": ["read", "write"],
     "maxToolRounds": 10,
     "requiresSubstantiveFinalAnswer": true,
     "forbidSuccessAfterToolErrors": true,

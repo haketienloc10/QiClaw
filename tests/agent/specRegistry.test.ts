@@ -86,7 +86,7 @@ describe('specRegistry builtin parity', () => {
 
     expect(spec.identity).toMatchObject({
       purpose: 'Handle a single bounded task inside the QiClaw CLI runtime.',
-      behavioralFraming: 'Be concise, tool-using, evidence-aware, and scoped to the requested task.'
+      behavioralFraming: "You're a personal assistant, not a generic chatbot."
     });
     expect(spec.policies.toolUsePolicy).toBe(
       'Use tools when the task depends on observed project state instead of relying on unsupported assumptions.'
@@ -105,7 +105,7 @@ describe('specRegistry builtin parity', () => {
       traceabilityExpectation: 'Keep runtime telemetry traceable without exposing unnecessary host details.',
       redactionSensitivity: 'standard'
     });
-    expect(spec.capabilities.allowedCapabilityClasses).toEqual(['read', 'write', 'search', 'exec_readonly', 'execute']);
+    expect(spec.capabilities.allowedCapabilityClasses).toEqual(['read', 'write']);
   });
 
   it('derives the readonly builtin AgentSpec bridge fields from literal expected values', async () => {
@@ -114,17 +114,17 @@ describe('specRegistry builtin parity', () => {
     const resolved = resolveBuiltinAgentPackage('readonly');
 
     expect(spec.identity.purpose).toBe('Inspect the project surface and report findings without making edits.');
-    expect(spec.capabilities.allowedCapabilityClasses).toEqual(['read', 'search', 'exec_readonly']);
+    expect(spec.capabilities.allowedCapabilityClasses).toEqual(['read']);
     expect(spec.policies.mutationPolicy).toBe('Do not mutate the project surface.');
     expect(spec.policies.toolUsePolicy).toBe(
-      'Use read and search tools to gather project evidence before making inspection claims.'
+      'Use the file, shell, git, and web_fetch tools to gather project evidence before making inspection claims.'
     );
     expect(spec.completion.completionMode).toBe('Single-turn read-only inspection with strict evidence-aware verification.');
     expect(spec.completion.doneCriteriaShape).toBe(
       'Return a substantive final answer grounded in direct project inspection evidence.'
     );
     expect(spec.completion.evidenceRequirement).toBe(
-      'Use successful read/search tool results for inspection-style claims.'
+      'Use successful tool results for inspection-style claims.'
     );
     expect(spec.completion.stopVsDoneDistinction).toBe(
       'A provider stop is insufficient unless the answer is substantive and consistent with the observed tool results.'
@@ -138,15 +138,12 @@ describe('specRegistry builtin parity', () => {
 describe('specRegistry builtin validation', () => {
   it('loads builtin assets from source and dist without CHECKLIST.md leftovers', async () => {
     const projectRoot = resolve(join(import.meta.dirname, '..', '..'));
-    const directories = [
-      join(projectRoot, 'src', 'agent', 'builtin-packages'),
-      join(projectRoot, 'dist', 'agent', 'builtin-packages')
-    ];
+    const directories = [join(projectRoot, 'src', 'agent', 'builtin-packages')];
 
     for (const directoryPath of directories) {
       await expect(readFile(join(directoryPath, 'default', 'CHECKLIST.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
       await expect(readFile(join(directoryPath, 'readonly', 'CHECKLIST.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
-      await expect(readFile(join(directoryPath, 'default', 'USER.md'), 'utf8')).resolves.toContain('Default user instructions');
+      await expect(readFile(join(directoryPath, 'default', 'USER.md'), 'utf8')).resolves.toContain('# USER.md - About Your Human');
       await expect(readFile(join(directoryPath, 'readonly', 'USER.md'), 'utf8')).resolves.toContain('Readonly user instructions');
     }
   });

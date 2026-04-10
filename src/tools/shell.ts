@@ -50,7 +50,30 @@ const READONLY_GIT_SUBCOMMAND_ALLOWLIST = new Set([
   'status',
   'symbolic-ref'
 ]);
-const READONLY_GIT_BRANCH_DENYLIST = new Set(['-d', '-D', '-m', '-M', '--delete', '--move']);
+const READONLY_GIT_BRANCH_FLAG_ALLOWLIST = new Set([
+  '-a',
+  '-r',
+  '--all',
+  '--remotes',
+  '--show-current',
+  '--list',
+  '--contains',
+  '--no-contains',
+  '--merged',
+  '--no-merged',
+  '--points-at',
+  '--sort',
+  '--format',
+  '--column',
+  '--omit-empty',
+  '--ignore-case',
+  '--color',
+  '--no-color'
+]);
+const READONLY_GIT_REMOTE_FLAG_ALLOWLIST = new Set(['-v', '--verbose']);
+const READONLY_GIT_REMOTE_ACTION_ALLOWLIST = new Set(['show']);
+const READONLY_GIT_GLOBAL_FLAG_DENYLIST = new Set(['-c', '--config-env', '--exec-path', '--git-dir', '--work-tree', '--namespace']);
+const READONLY_GIT_DIFF_FLAG_DENYLIST = new Set(['--output']);
 const READONLY_FIND_DENYLIST = new Set(['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprint0', '-fprintf', '-fls']);
 const READONLY_SED_DENYLIST = new Set(['-i', '--in-place']);
 const READONLY_LESS_DENYLIST = new Set(['-K', '-k', '--lesskey-src', '--lesskey']);
@@ -61,7 +84,6 @@ type ShellInput = {
   args?: string[];
 };
 
-type ShellMode = 'readonly' | 'exec';
 
 function formatShellFailure(command: string, args: string[], error: ExecFileException & { stdout?: string; stderr?: string }): Error {
   const commandLine = [command, ...args].join(' ');
@@ -81,15 +103,114 @@ function throwReadonlyCommandNotAllowed(command: string, args: string[]): never 
   throw new Error(`Readonly shell command is not allowed: ${commandLine || command}`);
 }
 
-function validateReadonlyGitArgs(args: string[]): void {
-  const subcommand = args[0];
+function isGitBranchReadonlyFlag(arg: string): boolean {
+  if (READONLY_GIT_BRANCH_FLAG_ALLOWLIST.has(arg)) {
+    return true;
+  }
 
-  if (!subcommand || !READONLY_GIT_SUBCOMMAND_ALLOWLIST.has(subcommand)) {
+  return Array.from(READONLY_GIT_BRANCH_FLAG_ALLOWLIST).some((flag) => arg.startsWith(`${flag}=`));
+}
+
+function validateReadonlyGitBranchArgs(args: string[]): void {
+  const branchArgs = args.slice(1);
+
+  if (branchArgs.length === 0) {
+    return;
+  }
+
+  for (const arg of branchArgs) {
+    if (!arg.startsWith('-')) {
+      throwReadonlyCommandNotAllowed('git', args);
+    }
+
+    if (!isGitBranchReadonlyFlag(arg)) {
+      throwReadonlyCommandNotAllowed('git', args);
+    }
+  }
+}
+
+function validateReadonlyGitRemoteArgs(args: string[]): void {
+  const remoteArgs = args.slice(1);
+
+  if (remoteArgs.length === 0) {
+    return;
+  }
+
+  const firstNonFlagArg = remoteArgs.find((arg) => !arg.startsWith('-'));
+  if (!firstNonFlagArg) {
+    if (remoteArgs.every((arg) => READONLY_GIT_REMOTE_FLAG_ALLOWLIST.has(arg))) {
+      return;
+    }
     throwReadonlyCommandNotAllowed('git', args);
   }
 
-  if (subcommand === 'branch' && args.some((arg) => READONLY_GIT_BRANCH_DENYLIST.has(arg))) {
+  if (!READONLY_GIT_REMOTE_ACTION_ALLOWLIST.has(firstNonFlagArg)) {
     throwReadonlyCommandNotAllowed('git', args);
+  }
+
+  for (const arg of remoteArgs) {
+    if (arg === firstNonFlagArg) {
+      continue;
+    }
+    if (arg.startsWith('-') && !READONLY_GIT_REMOTE_FLAG_ALLOWLIST.has(arg)) {
+      throwReadonlyCommandNotAllowed('git', args);
+    }
+  }
+}
+
+function findReadonlyGitSubcommandIndex(args: string[]): number {
+  const subcommandIndex = args.findIndex((arg, index) => {
+    if (index > 0 && args[index - 1] === '--') {
+      return false;
+    }
+
+    return !arg.startsWith('-');
+  });
+
+  if (subcommandIndex === -1) {
+    throwReadonlyCommandNotAllowed('git', args);
+  }
+
+  return subcommandIndex;
+}
+
+function validateReadonlyGitDiffArgs(args: string[], diffArgs: string[]): void {
+  for (let index = 0; index < diffArgs.length; index += 1) {
+    const arg = diffArgs[index];
+
+    if (READONLY_GIT_DIFF_FLAG_DENYLIST.has(arg) || Array.from(READONLY_GIT_DIFF_FLAG_DENYLIST).some((flag) => arg.startsWith(`${flag}=`))) {
+      throwReadonlyCommandNotAllowed('git', args);
+    }
+  }
+}
+
+function validateReadonlyGitArgs(args: string[]): void {
+  const subcommandIndex = findReadonlyGitSubcommandIndex(args);
+  const subcommand = args[subcommandIndex];
+
+  if (!READONLY_GIT_SUBCOMMAND_ALLOWLIST.has(subcommand)) {
+    throwReadonlyCommandNotAllowed('git', args);
+  }
+
+  const leadingArgs = args.slice(0, subcommandIndex);
+  if (leadingArgs.some((arg) => READONLY_GIT_GLOBAL_FLAG_DENYLIST.has(arg))) {
+    throwReadonlyCommandNotAllowed('git', args);
+  }
+
+  const subcommandArgs = args.slice(subcommandIndex);
+
+  if (subcommand === 'branch') {
+    validateReadonlyGitBranchArgs(subcommandArgs);
+    return;
+  }
+
+  if (subcommand === 'remote') {
+    validateReadonlyGitRemoteArgs(subcommandArgs);
+    return;
+  }
+
+  if (subcommand === 'diff') {
+    validateReadonlyGitDiffArgs(args, subcommandArgs.slice(1));
   }
 }
 
@@ -117,9 +238,27 @@ function validateReadonlyMoreArgs(args: string[]): void {
   }
 }
 
+function validateReadonlyEnvArgs(args: string[]): void {
+  const commandIndex = args.findIndex((arg) => !arg.includes('=') || arg.startsWith('='));
+
+  if (commandIndex === -1) {
+    return;
+  }
+
+  const nestedCommand = args[commandIndex];
+  const nestedArgs = args.slice(commandIndex + 1);
+
+  validateReadonlyInvocation(nestedCommand, nestedArgs);
+}
+
 function validateReadonlyInvocation(command: string, args: string[]): void {
   if (args.some((arg) => SHELL_CONTROL_OPERATOR_TOKENS.has(arg))) {
     throwReadonlyCommandNotAllowed(command, args);
+  }
+
+  if (command === 'env') {
+    validateReadonlyEnvArgs(args);
+    return;
   }
 
   if (command === 'git') {
@@ -148,7 +287,7 @@ function validateReadonlyInvocation(command: string, args: string[]): void {
   }
 
   if (command === 'awk') {
-    return;
+    throwReadonlyCommandNotAllowed(command, args);
   }
 
   if (READONLY_SIMPLE_COMMAND_ALLOWLIST.has(command)) {
@@ -184,42 +323,28 @@ async function executeShell(input: ShellInput, cwd: string): Promise<ToolResult>
   }
 }
 
-function createShellTool(name: 'shell_readonly' | 'shell_exec', description: string, mode: ShellMode): Tool<ShellInput> {
-  return {
-    name,
-    description,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        command: { type: 'string' },
-        args: {
-          type: 'array',
-          items: { type: 'string' }
-        }
-      },
-      required: ['command'],
-      additionalProperties: false
-    },
-    async execute(input, context) {
-      const args = input.args ?? [];
-
-      if (mode === 'readonly') {
-        validateReadonlyInvocation(input.command, args);
+export const shellTool: Tool<ShellInput> = {
+  name: 'shell',
+  description: 'Run a single program with optional arguments inside the current working directory.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      command: { type: 'string' },
+      args: {
+        type: 'array',
+        items: { type: 'string' }
       }
+    },
+    required: ['command'],
+    additionalProperties: false
+  },
+  async execute(input, context) {
+    const args = input.args ?? [];
 
-      return executeShell({ ...input, args }, context.cwd);
+    if (context.mutationMode === 'none' || context.mutationMode === 'readonly') {
+      validateReadonlyInvocation(input.command, args);
     }
-  };
-}
 
-export const shellReadonlyTool = createShellTool(
-  'shell_readonly',
-  'Run a single read-only program with optional arguments inside the current working directory.',
-  'readonly'
-);
-
-export const shellExecTool = createShellTool(
-  'shell_exec',
-  'Run a single program with optional arguments inside the current working directory.',
-  'exec'
-);
+    return executeShell({ ...input, args }, context.cwd);
+  }
+};

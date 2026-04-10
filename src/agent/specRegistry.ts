@@ -138,7 +138,8 @@ function loadBuiltinPackage(name: BuiltinAgentSpecName): LoadedAgentPackage {
 
 function deriveAgentSpecFromResolvedPackage(resolvedPackage: ResolvedAgentPackage): AgentSpec {
   const agentPrompt = requirePromptFileContent(resolvedPackage, 'AGENT.md').split('\n');
-  const soulPrompt = requirePromptFileContent(resolvedPackage, 'SOUL.md').split('\n');
+  const soulPromptContent = requirePromptFileContent(resolvedPackage, 'SOUL.md');
+  const soulPrompt = soulPromptContent.split('\n');
   const stylePrompt = requirePromptFileContent(resolvedPackage, 'STYLE.md').split('\n');
   const toolsPrompt = requirePromptFileContent(resolvedPackage, 'TOOLS.md').split('\n');
   const mutationMode = resolvedPackage.effectivePolicy.mutationMode;
@@ -146,7 +147,7 @@ function deriveAgentSpecFromResolvedPackage(resolvedPackage: ResolvedAgentPackag
   return {
     identity: {
       purpose: readLineValue(agentPrompt, 'Purpose: '),
-      behavioralFraming: readLineValue(soulPrompt, 'Behavioral framing: '),
+      behavioralFraming: readOptionalLineValue(soulPrompt, 'Behavioral framing: ') ?? soulPromptContent.trim().split('\n')[0] ?? '',
       scopeBoundary: readLineValue(agentPrompt, 'Scope boundary: ')
     },
     capabilities: {

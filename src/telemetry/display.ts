@@ -238,20 +238,12 @@ function formatToolActivityLabel(
 }
 
 function formatToolActionLabel(data: ToolCallStartedTelemetryData): string | undefined {
-  if (data.toolName === 'shell_readonly' || data.toolName === 'shell_exec') {
-    return `${formatShellToolKind(data.toolName)} ${formatShellCommandLabel(data.inputRawRedacted)}`;
+  if (data.toolName === 'shell') {
+    return `shell ${formatShellCommandLabel(data.inputRawRedacted)}`;
   }
 
-  if (data.toolName === 'read_file') {
-    return `read ${formatPathToolLabel(data.inputRawRedacted, 'file')}`;
-  }
-
-  if (data.toolName === 'edit_file') {
-    return `edit ${formatPathToolLabel(data.inputRawRedacted, 'file')}`;
-  }
-
-  if (data.toolName === 'search') {
-    return formatSearchToolActionLabel(data.inputRawRedacted);
+  if (data.toolName === 'file') {
+    return formatFileToolActionLabel(data.inputRawRedacted);
   }
 
   return undefined;
@@ -283,10 +275,6 @@ function formatToolCompletionStatus(
   return data.isError ? 'fail' : 'done';
 }
 
-function formatShellToolKind(toolName: 'shell_readonly' | 'shell_exec'): string {
-  return toolName === 'shell_readonly' ? 'shell:read' : 'shell:exec';
-}
-
 function formatShellCommandLabel(input: unknown): string {
   if (!input || typeof input !== 'object') {
     return 'command';
@@ -315,14 +303,29 @@ function formatPathToolLabel(input: unknown, fallbackNoun: string): string {
   return path.length > 0 ? path : fallbackNoun;
 }
 
-function formatSearchToolActionLabel(input: unknown): string {
-  const query = formatSearchQueryValue(input);
-
-  if (!query) {
-    return 'search';
+function formatFileToolActionLabel(input: unknown): string {
+  if (!input || typeof input !== 'object') {
+    return 'file';
   }
 
-  return `search ${query}`;
+  const action = typeof (input as { action?: unknown }).action === 'string'
+    ? (input as { action: string }).action.trim()
+    : '';
+
+  if (action === 'search') {
+    const query = formatSearchQueryValue(input);
+    return query ? `file search ${query}` : 'file search';
+  }
+
+  if (action === 'list') {
+    return `file list ${formatPathToolLabel(input, '.')}`;
+  }
+
+  if (action === 'read' || action === 'write') {
+    return `file ${action} ${formatPathToolLabel(input, 'file')}`;
+  }
+
+  return action.length > 0 ? `file ${action}` : 'file';
 }
 
 function formatSearchQueryValue(input: unknown): string | undefined {

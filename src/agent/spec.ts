@@ -1,4 +1,4 @@
-export type AgentCapabilityClass = 'read' | 'write' | 'search' | 'exec_readonly' | 'execute';
+export type AgentCapabilityClass = 'read' | 'write';
 export type AgentPackageSourceTier = 'project' | 'user' | 'builtin';
 export const agentPromptSlotFileNames = ['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'USER.md'] as const;
 export type AgentPromptSlotFileName = (typeof agentPromptSlotFileNames)[number];

@@ -1,6 +1,6 @@
 {
   "policy": {
-    "allowedCapabilityClasses": ["read", "search", "exec_readonly"],
+    "allowedCapabilityClasses": ["read"],
     "maxToolRounds": 6,
     "mutationMode": "none",
     "includeSkills": true

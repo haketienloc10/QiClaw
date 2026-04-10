@@ -18,7 +18,7 @@ describe('packageLoader', () => {
     await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
-  it('loads agent.json and normalizes prompt section line endings without trimming authored markdown', async () => {
+  it('loads agent.json and all markdown prompt files by filename while ignoring non-markdown files', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'agent-package-loader-'));
     tempDirs.push(tempDir);
 
@@ -26,6 +26,7 @@ describe('packageLoader', () => {
     await writePackageFixture(packageDir, {
       manifest: {
         extends: 'readonly',
+        promptFiles: ['CUSTOM.md', 'AGENT.md'],
         policy: {
           allowedCapabilityClasses: ['read', 'search'],
           maxToolRounds: 4,
@@ -34,9 +35,11 @@ describe('packageLoader', () => {
       },
       sections: {
         'AGENT.md': '\r\nYou are the reviewer.\r\nStay focused.\r\n',
-        'STYLE.md': 'Use short bullets.\n'
+        'STYLE.md': 'Use short bullets.\n',
+        'CUSTOM.md': 'Custom prompt body.\n'
       }
     });
+    await writeRawFile(join(packageDir, 'notes.txt'), 'Ignore me.\n');
 
     await expect(loadAgentPackageFromDirectory(packageDir, { preset: 'reviewer', sourceTier: 'project' })).resolves.toEqual({
       preset: 'reviewer',
@@ -45,6 +48,7 @@ describe('packageLoader', () => {
       manifestPath: join(packageDir, 'agent.json'),
       manifest: {
         extends: 'readonly',
+        promptFiles: ['CUSTOM.md', 'AGENT.md'],
         policy: {
           allowedCapabilityClasses: ['read', 'search'],
           maxToolRounds: 4,
@@ -59,6 +63,10 @@ describe('packageLoader', () => {
         'STYLE.md': {
           filePath: join(packageDir, 'STYLE.md'),
           content: 'Use short bullets.\n'
+        },
+        'CUSTOM.md': {
+          filePath: join(packageDir, 'CUSTOM.md'),
+          content: 'Custom prompt body.\n'
         }
       }
     });

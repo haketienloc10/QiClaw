@@ -3,8 +3,8 @@ import type { ModelProvider, ResolvedProviderConfig } from '../provider/model.js
 import { createNoopObserver, type TelemetryObserver } from '../telemetry/observer.js';
 import { getBuiltinTools, type Tool } from '../tools/registry.js';
 
-import { getBuiltinAgentSpec, resolveAgentPackage } from './specRegistry.js';
-import type { AgentCapabilityClass, AgentSpec, ResolvedAgentPackage } from './spec.js';
+import { resolveBuiltinAgentPackage } from './specRegistry.js';
+import type { AgentCapabilityClass, ResolvedAgentPackage } from './spec.js';
 import { renderAgentSystemPrompt } from './specPrompt.js';
 
 export interface AgentRuntime {
@@ -12,17 +12,15 @@ export interface AgentRuntime {
   availableTools: Tool[];
   cwd: string;
   observer: TelemetryObserver;
-  agentSpec?: AgentSpec;
-  resolvedPackage?: ResolvedAgentPackage;
+  resolvedPackage: ResolvedAgentPackage;
   systemPrompt: string;
   maxToolRounds: number;
 }
 
 export interface CreateAgentRuntimeOptions extends ResolvedProviderConfig {
+  agentSpecName?: string;
   cwd: string;
   observer?: TelemetryObserver;
-  agentSpec?: AgentSpec;
-  agentSpecName?: string;
   resolvedPackage?: ResolvedAgentPackage;
 }
 
@@ -32,14 +30,8 @@ const builtinToolNamesByCapabilityClass: Record<AgentCapabilityClass, string[]> 
 };
 
 export function createAgentRuntime(options: CreateAgentRuntimeOptions): AgentRuntime {
-  const resolvedPackage = options.resolvedPackage ?? resolveAgentPackage({
-    agentSpec: options.agentSpec,
-    agentSpecName: options.agentSpecName
-  });
+  const resolvedPackage = options.resolvedPackage ?? resolveBuiltinAgentPackage(options.agentSpecName ?? 'default');
   const availableTools = filterToolsForSpec(getBuiltinTools(), resolvedPackage);
-  const agentSpec = options.resolvedPackage
-    ? undefined
-    : options.agentSpec ?? getBuiltinAgentSpec(options.agentSpecName ?? resolvedPackage.preset);
 
   return {
     provider: createProvider({
@@ -51,7 +43,6 @@ export function createAgentRuntime(options: CreateAgentRuntimeOptions): AgentRun
     availableTools,
     cwd: options.cwd,
     observer: options.observer ?? createNoopObserver(),
-    agentSpec,
     resolvedPackage,
     systemPrompt: renderAgentSystemPrompt(resolvedPackage),
     maxToolRounds: resolvedPackage.effectivePolicy.maxToolRounds ?? 1

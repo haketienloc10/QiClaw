@@ -1,5 +1,6 @@
 {
   "extends": "readonly",
+  "promptFiles": ["AGENT.md", "STYLE.md", "TOOLS.md", "USER.md"],
   "policy": {
     "allowedCapabilityClasses": ["read"],
     "maxToolRounds": 4,

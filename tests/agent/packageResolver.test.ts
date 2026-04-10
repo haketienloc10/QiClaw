@@ -6,8 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { resolveAgentPackage } from '../../src/agent/packageResolver.js';
+import { validateResolvedAgentPackage } from '../../src/agent/packageValidator.js';
 
-import { copyFixtureTree } from './packageTestUtils.js';
+import { copyFixtureTree, writePackageFixture } from './packageTestUtils.js';
 
 const fixtureRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'agent-packages');
 
@@ -62,6 +63,7 @@ describe('packageResolver', () => {
     });
 
     const resolved = await resolveAgentPackage('reviewer', { cwd, homeDirectory, builtinPackagesDirectory });
+    expect(resolved.effectivePromptOrder).toEqual(['AGENT.md', 'SOUL.md', 'TOOLS.md', 'USER.md', 'STYLE.md']);
     expect(resolved.resolvedFiles).toEqual([
       join(cwd, '.qiclaw', 'agents', 'reviewer', 'agent.json'),
       join(cwd, '.qiclaw', 'agents', 'reviewer', 'AGENT.md'),
@@ -95,6 +97,139 @@ describe('packageResolver', () => {
       filePath: join(homeDirectory, '.qiclaw', 'agents', 'reviewer', 'USER.md'),
       content: 'Base reviewer user instructions\n'
     });
+  });
+
+  it('uses manifest promptFiles order by appending child entries after parent entries', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'agent-package-resolver-'));
+    tempDirs.push(tempDir);
+
+    const cwd = join(tempDir, 'workspace');
+    const builtinPackagesDirectory = join(tempDir, 'builtin-packages');
+    await mkdir(cwd, { recursive: true });
+
+    await writePackageFixture(join(builtinPackagesDirectory, 'base'), {
+      manifest: {
+        promptFiles: ['SOUL.md', 'AGENT.md']
+      },
+      sections: {
+        'AGENT.md': 'Base agent\n',
+        'SOUL.md': 'Base soul\n',
+        'USER.md': 'Base user\n'
+      }
+    });
+    await writePackageFixture(join(cwd, '.qiclaw', 'agents', 'child'), {
+      manifest: {
+        extends: 'base',
+        promptFiles: ['STYLE.md', 'AGENT.md']
+      },
+      sections: {
+        'AGENT.md': 'Child agent\n',
+        'STYLE.md': 'Child style\n'
+      }
+    });
+
+    const resolved = await resolveAgentPackage('child', { cwd, homeDirectory: join(tempDir, 'home'), builtinPackagesDirectory });
+
+    expect(resolved.effectivePromptOrder).toEqual(['SOUL.md', 'AGENT.md', 'STYLE.md']);
+    expect(resolved.effectivePromptFiles).toMatchObject({
+      'SOUL.md': {
+        filePath: join(builtinPackagesDirectory, 'base', 'SOUL.md'),
+        content: 'Base soul\n'
+      },
+      'AGENT.md': {
+        filePath: join(cwd, '.qiclaw', 'agents', 'child', 'AGENT.md'),
+        content: 'Child agent\n'
+      },
+      'STYLE.md': {
+        filePath: join(cwd, '.qiclaw', 'agents', 'child', 'STYLE.md'),
+        content: 'Child style\n'
+      }
+    });
+  });
+
+  it('fails when a base package manifest does not declare any prompt files', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'agent-package-resolver-'));
+    tempDirs.push(tempDir);
+
+    const cwd = join(tempDir, 'workspace');
+    await mkdir(cwd, { recursive: true });
+
+    await writePackageFixture(join(cwd, '.qiclaw', 'agents', 'reviewer'), {
+      manifest: {
+        policy: {
+          allowedCapabilityClasses: ['read'],
+          maxToolRounds: 2,
+          mutationMode: 'none'
+        }
+      },
+      sections: {
+        'AGENT.md': 'Base agent\n',
+        'USER.md': 'Base user\n'
+      }
+    });
+
+    await expect(resolveAgentPackage('reviewer', { cwd, homeDirectory: join(tempDir, 'home'), builtinPackagesDirectory: join(tempDir, 'builtin-packages') })).rejects.toThrow(
+      'Base package "reviewer" must declare at least one prompt file in agent.json.'
+    );
+  });
+
+  it('fails when a manifest references a prompt file that does not exist', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'agent-package-resolver-'));
+    tempDirs.push(tempDir);
+
+    const cwd = join(tempDir, 'workspace');
+    await mkdir(cwd, { recursive: true });
+
+    await writePackageFixture(join(cwd, '.qiclaw', 'agents', 'reviewer'), {
+      manifest: {
+        promptFiles: ['AGENT.md', 'MISSING.md'],
+        policy: {
+          allowedCapabilityClasses: ['read'],
+          maxToolRounds: 2,
+          mutationMode: 'none'
+        }
+      },
+      sections: {
+        'AGENT.md': 'Base agent\n',
+        'USER.md': 'Base user\n'
+      }
+    });
+
+    await expect(resolveAgentPackage('reviewer', { cwd, homeDirectory: join(tempDir, 'home'), builtinPackagesDirectory: join(tempDir, 'builtin-packages') })).rejects.toThrow(
+      'Agent package "reviewer" references missing prompt file "MISSING.md" in agent.json.'
+    );
+  });
+
+  it('fails resolved validation when effective prompt order is empty or references a missing effective prompt file', () => {
+    expect(
+      validateResolvedAgentPackage({
+        preset: 'reviewer',
+        sourceTier: 'project',
+        extendsChain: ['reviewer'],
+        packageChain: [],
+        effectivePolicy: {},
+        effectiveCompletion: undefined,
+        effectiveDiagnostics: undefined,
+        effectivePromptOrder: [],
+        effectivePromptFiles: {},
+        resolvedFiles: []
+      })
+    ).toContain('Agent package "reviewer" must resolve at least one prompt file.');
+
+    expect(
+      validateResolvedAgentPackage({
+        preset: 'reviewer',
+        sourceTier: 'project',
+        extendsChain: ['reviewer'],
+        packageChain: [],
+        effectivePolicy: {},
+        effectiveCompletion: undefined,
+        effectiveDiagnostics: undefined,
+        effectivePromptOrder: ['AGENT.md'],
+        effectivePromptFiles: {},
+        resolvedFiles: []
+      })
+    ).toContain('Agent package "reviewer" resolved prompt order references missing prompt file "AGENT.md".');
   });
 
   it('fails when an extends target cannot be resolved from any source tier', async () => {

@@ -7,47 +7,37 @@ import {
   validateLoadedAgentPackage,
   validateResolvedAgentPackage
 } from './packageValidator.js';
-import type { AgentSpec, LoadedAgentPackage, ResolvedAgentPackage } from './spec.js';
+import type { AgentPromptFileName, LoadedAgentPackage, ResolvedAgentPackage } from './spec.js';
+
 const builtinPackagesDirectory = dirname(getBuiltinAgentPackageDirectory('default'));
-const builtinAgentSpecNames = readdirSync(builtinPackagesDirectory, { withFileTypes: true })
+const builtinAgentPackageNames = readdirSync(builtinPackagesDirectory, { withFileTypes: true })
   .filter((entry) => entry.isDirectory())
   .map((entry) => entry.name)
-  .sort() as BuiltinAgentSpecName[];
+  .sort() as BuiltinAgentPackageName[];
+const defaultPromptOrder: AgentPromptFileName[] = ['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'USER.md'];
 
-export type BuiltinAgentSpecName = 'default' | 'readonly';
-
-export function getBuiltinAgentSpec(name: string): AgentSpec {
-  return deriveAgentSpecFromResolvedPackage(resolveBuiltinAgentPackage(name));
-}
+export type BuiltinAgentPackageName = 'default' | 'readonly';
 
 export function resolveBuiltinAgentPackage(name: string): ResolvedAgentPackage {
   return resolveBuiltinAgentPackageWithStack(name, []);
 }
 
-export function resolveAgentPackage(options?: { agentSpec?: AgentSpec; agentSpecName?: string }): ResolvedAgentPackage {
-  if (options?.agentSpec) {
-    return compileResolvedAgentPackage(options.agentSpecName ?? 'inline', options.agentSpec);
-  }
-
-  return resolveBuiltinAgentPackage(options?.agentSpecName ?? getDefaultAgentSpecName());
-}
-
-export function getDefaultAgentSpecName(): BuiltinAgentSpecName {
+export function getDefaultAgentSpecName(): BuiltinAgentPackageName {
   return 'default';
 }
 
-export function listBuiltinAgentSpecNames(): BuiltinAgentSpecName[] {
-  return [...builtinAgentSpecNames];
+export function listBuiltinAgentSpecNames(): BuiltinAgentPackageName[] {
+  return [...builtinAgentPackageNames];
 }
 
-function assertBuiltinAgentSpecName(name: string): asserts name is BuiltinAgentSpecName {
-  if (!builtinAgentSpecNames.includes(name as BuiltinAgentSpecName)) {
+function assertBuiltinAgentPackageName(name: string): asserts name is BuiltinAgentPackageName {
+  if (!builtinAgentPackageNames.includes(name as BuiltinAgentPackageName)) {
     throw new Error(`Unknown agent spec: ${name}`);
   }
 }
 
 function resolveBuiltinAgentPackageWithStack(name: string, stack: string[]): ResolvedAgentPackage {
-  assertBuiltinAgentSpecName(name);
+  assertBuiltinAgentPackageName(name);
 
   if (stack.includes(name)) {
     throw new Error(validateAgentPackageExtendsCycle(stack, name).join('\n'));
@@ -63,6 +53,11 @@ function resolveBuiltinAgentPackageWithStack(name: string, stack: string[]): Res
   const parentPackage = loaded.manifest?.extends
     ? resolveBuiltinAgentPackageWithStack(loaded.manifest.extends, [...stack, name])
     : undefined;
+  const effectivePromptFiles = {
+    ...(parentPackage?.effectivePromptFiles ?? {}),
+    ...loaded.promptFiles
+  };
+  const effectivePromptOrder = resolvePromptOrder(loaded, parentPackage, effectivePromptFiles);
   const packageChain = [loaded, ...(parentPackage?.packageChain ?? [])];
   const resolvedPackage: ResolvedAgentPackage = {
     preset: name,
@@ -83,10 +78,14 @@ function resolveBuiltinAgentPackageWithStack(name: string, stack: string[]): Res
       ...(parentPackage?.effectiveDiagnostics ?? {}),
       ...(loaded.manifest?.diagnostics ?? {})
     },
-    effectivePromptFiles: mergeBuiltinPromptFiles(parentPackage, loaded),
+    effectivePromptOrder,
+    effectivePromptFiles,
     resolvedFiles: [
       loaded.manifestPath,
-      ...listBuiltinPromptFilesInOrder(loaded).map((promptFile) => promptFile.filePath),
+      ...orderedPromptFileNames(loaded).flatMap((fileName) => {
+        const promptFile = loaded.promptFiles[fileName];
+        return promptFile ? [promptFile.filePath] : [];
+      }),
       ...(parentPackage?.resolvedFiles ?? [])
     ]
   };
@@ -99,13 +98,13 @@ function resolveBuiltinAgentPackageWithStack(name: string, stack: string[]): Res
   return resolvedPackage;
 }
 
-function loadBuiltinPackage(name: BuiltinAgentSpecName): LoadedAgentPackage {
+function loadBuiltinPackage(name: BuiltinAgentPackageName): LoadedAgentPackage {
   const directoryPath = getBuiltinAgentPackageDirectory(name);
   const manifestPath = join(directoryPath, 'agent.json');
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as LoadedAgentPackage['manifest'];
   const promptFiles = Object.fromEntries(
     readdirSync(directoryPath, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && entry.name !== 'agent.json')
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
       .map((entry) => {
         const filePath = join(directoryPath, entry.name);
         return [entry.name, { filePath, content: normalizeLineEndings(readFileSync(filePath, 'utf8')) }];
@@ -122,194 +121,43 @@ function loadBuiltinPackage(name: BuiltinAgentSpecName): LoadedAgentPackage {
   };
 }
 
-function mergeBuiltinPromptFiles(
+function resolvePromptOrder(
+  loaded: LoadedAgentPackage,
   parentPackage: ResolvedAgentPackage | undefined,
-  loaded: LoadedAgentPackage
-): ResolvedAgentPackage['effectivePromptFiles'] {
-  const mergedPromptFiles: ResolvedAgentPackage['effectivePromptFiles'] = {
-    ...(parentPackage?.effectivePromptFiles ?? {})
-  };
+  effectivePromptFiles: ResolvedAgentPackage['effectivePromptFiles']
+): AgentPromptFileName[] {
+  const inheritedManifestOrder = parentPackage?.effectivePromptOrder ?? [];
+  const manifestPromptOrder = loaded.manifest?.promptFiles?.length
+    ? loaded.manifest.promptFiles
+    : inheritedManifestOrder.length > 0
+      ? []
+      : defaultPromptOrder;
 
-  for (const [fileName, promptFile] of Object.entries(loaded.promptFiles)) {
-    if (promptFile) {
-      mergedPromptFiles[fileName] = promptFile;
+  return dedupePromptFileNames([...inheritedManifestOrder, ...manifestPromptOrder]).filter(
+    (fileName) => effectivePromptFiles[fileName]
+  );
+}
+
+function orderedPromptFileNames(agentPackage: LoadedAgentPackage): AgentPromptFileName[] {
+  return dedupePromptFileNames([...(agentPackage.manifest?.promptFiles ?? []), ...Object.keys(agentPackage.promptFiles)]);
+}
+
+function dedupePromptFileNames(fileNames: AgentPromptFileName[]): AgentPromptFileName[] {
+  const seen = new Set<AgentPromptFileName>();
+  const result: AgentPromptFileName[] = [];
+
+  for (const fileName of fileNames) {
+    if (seen.has(fileName)) {
+      continue;
     }
+
+    seen.add(fileName);
+    result.push(fileName);
   }
 
-  return mergedPromptFiles;
-}
-
-function listBuiltinPromptFilesInOrder(loaded: LoadedAgentPackage): Array<NonNullable<LoadedAgentPackage['promptFiles'][string]>> {
-  const manifestOrderedFileNames = loaded.manifest?.promptFiles ?? [];
-  const orderedPromptFiles = manifestOrderedFileNames.flatMap((fileName) => {
-    const promptFile = loaded.promptFiles[fileName];
-    return promptFile ? [promptFile] : [];
-  });
-  const remainingPromptFiles = Object.entries(loaded.promptFiles)
-    .filter(([fileName]) => !manifestOrderedFileNames.includes(fileName))
-    .map(([, promptFile]) => promptFile)
-    .filter((promptFile): promptFile is NonNullable<typeof promptFile> => promptFile !== undefined);
-
-  return [...orderedPromptFiles, ...remainingPromptFiles];
-}
-
-function deriveAgentSpecFromResolvedPackage(resolvedPackage: ResolvedAgentPackage): AgentSpec {
-  const agentPrompt = requirePromptFileContent(resolvedPackage, 'AGENT.md').split('\n');
-  const soulPromptContent = requirePromptFileContent(resolvedPackage, 'SOUL.md');
-  const soulPrompt = soulPromptContent.split('\n');
-  const stylePrompt = requirePromptFileContent(resolvedPackage, 'STYLE.md').split('\n');
-  const toolsPrompt = requirePromptFileContent(resolvedPackage, 'TOOLS.md').split('\n');
-  const mutationMode = resolvedPackage.effectivePolicy.mutationMode;
-
-  return {
-    identity: {
-      purpose: readLineValue(agentPrompt, 'Purpose: '),
-      behavioralFraming: readOptionalLineValue(soulPrompt, 'Behavioral framing: ') ?? soulPromptContent.trim().split('\n')[0] ?? '',
-      scopeBoundary: readLineValue(agentPrompt, 'Scope boundary: ')
-    },
-    capabilities: {
-      allowedCapabilityClasses: [...(resolvedPackage.effectivePolicy.allowedCapabilityClasses ?? [])],
-      operatingSurface: readLineValue(stylePrompt, 'Operating surface: '),
-      capabilityExclusions: readOptionalLineValue(toolsPrompt, 'Capability exclusions: ')?.split('; ') ?? []
-    },
-    policies: {
-      safetyStance: readLineValue(soulPrompt, 'Safety stance: '),
-      toolUsePolicy: readLineValue(toolsPrompt, 'Tool-use policy: '),
-      escalationPolicy: readLineValue(soulPrompt, 'Escalation policy: '),
-      mutationPolicy:
-        mutationMode === 'none'
-          ? 'Do not mutate the project surface.'
-          : 'Mutate the project surface only when the task requires it and keep changes tightly scoped.'
-    },
-    completion: {
-      completionMode: resolvedPackage.effectiveCompletion?.completionMode ?? '',
-      doneCriteriaShape: resolvedPackage.effectiveCompletion?.doneCriteriaShape ?? '',
-      evidenceRequirement: resolvedPackage.effectiveCompletion?.evidenceRequirement ?? '',
-      stopVsDoneDistinction: resolvedPackage.effectiveCompletion?.stopVsDoneDistinction ?? '',
-      maxToolRounds: resolvedPackage.effectivePolicy.maxToolRounds ?? 1,
-      requiresToolEvidence: resolvedPackage.effectivePolicy.requiresToolEvidence,
-      requiresSubstantiveFinalAnswer: resolvedPackage.effectivePolicy.requiresSubstantiveFinalAnswer,
-      forbidSuccessAfterToolErrors: resolvedPackage.effectivePolicy.forbidSuccessAfterToolErrors
-    },
-    contextProfile: {
-      includeMemory: resolvedPackage.effectivePolicy.includeMemory,
-      includeSkills: resolvedPackage.effectivePolicy.includeSkills,
-      includeHistorySummary: resolvedPackage.effectivePolicy.includeHistorySummary,
-      priorityHints: readOptionalLineValue(stylePrompt, 'Priority hints: ')?.split('; ')
-    },
-    diagnosticsProfile: resolvedPackage.effectivePolicy.diagnosticsParticipationLevel
-      ? {
-          diagnosticsParticipationLevel: resolvedPackage.effectivePolicy.diagnosticsParticipationLevel,
-          traceabilityExpectation: resolvedPackage.effectiveDiagnostics?.traceabilityExpectation,
-          redactionSensitivity: resolvedPackage.effectivePolicy.redactionSensitivity
-        }
-      : undefined
-  };
-}
-
-function requirePromptFileContent(resolvedPackage: ResolvedAgentPackage, slotFileName: string): string {
-  const promptFile = resolvedPackage.effectivePromptFiles[slotFileName];
-
-  if (!promptFile) {
-    throw new Error(`Builtin agent package "${resolvedPackage.preset}" is missing ${slotFileName}.`);
-  }
-
-  return promptFile.content;
-}
-
-function readLineValue(lines: string[], prefix: string): string {
-  const value = readOptionalLineValue(lines, prefix);
-
-  if (value === undefined) {
-    throw new Error(`Missing prompt line with prefix: ${prefix}`);
-  }
-
-  return value;
-}
-
-function readOptionalLineValue(lines: string[], prefix: string): string | undefined {
-  return lines.find((line) => line.startsWith(prefix))?.slice(prefix.length);
+  return result;
 }
 
 function normalizeLineEndings(value: string): string {
   return value.replaceAll('\r\n', '\n');
-}
-
-function compileResolvedAgentPackage(name: string, spec: AgentSpec): ResolvedAgentPackage {
-  return {
-    preset: name,
-    sourceTier: 'builtin',
-    extendsChain: [name],
-    packageChain: [],
-    effectivePolicy: {
-      allowedCapabilityClasses: spec.capabilities.allowedCapabilityClasses,
-      maxToolRounds: spec.completion.maxToolRounds,
-      requiresToolEvidence: spec.completion.requiresToolEvidence,
-      requiresSubstantiveFinalAnswer: spec.completion.requiresSubstantiveFinalAnswer,
-      forbidSuccessAfterToolErrors: spec.completion.forbidSuccessAfterToolErrors,
-      mutationMode: spec.policies.mutationPolicy === 'Do not mutate the project surface.' ? 'none' : 'workspace-write',
-      includeMemory: spec.contextProfile?.includeMemory,
-      includeSkills: spec.contextProfile?.includeSkills,
-      includeHistorySummary: spec.contextProfile?.includeHistorySummary,
-      diagnosticsParticipationLevel: spec.diagnosticsProfile?.diagnosticsParticipationLevel,
-      redactionSensitivity: spec.diagnosticsProfile?.redactionSensitivity
-    },
-    effectiveCompletion: {
-      completionMode: spec.completion.completionMode,
-      doneCriteriaShape: spec.completion.doneCriteriaShape,
-      evidenceRequirement: spec.completion.evidenceRequirement,
-      stopVsDoneDistinction: spec.completion.stopVsDoneDistinction
-    },
-    effectiveDiagnostics: spec.diagnosticsProfile?.traceabilityExpectation
-      ? {
-          traceabilityExpectation: spec.diagnosticsProfile.traceabilityExpectation
-        }
-      : undefined,
-    effectivePromptFiles: buildPromptFiles(spec),
-    resolvedFiles: []
-  };
-}
-
-function buildPromptFiles(spec: AgentSpec): ResolvedAgentPackage['effectivePromptFiles'] {
-  return {
-    'AGENT.md': {
-      filePath: 'builtin://AGENT.md',
-      content: [
-        `Purpose: ${spec.identity.purpose}`,
-        `Scope boundary: ${spec.identity.scopeBoundary}`
-      ].join('\n')
-    },
-    'SOUL.md': {
-      filePath: 'builtin://SOUL.md',
-      content: [
-        `Behavioral framing: ${spec.identity.behavioralFraming}`,
-        `Safety stance: ${spec.policies.safetyStance}`,
-        `Escalation policy: ${spec.policies.escalationPolicy}`
-      ].join('\n')
-    },
-    'STYLE.md': {
-      filePath: 'builtin://STYLE.md',
-      content: [
-        `Operating surface: ${spec.capabilities.operatingSurface}`,
-        spec.contextProfile?.priorityHints?.length
-          ? `Priority hints: ${spec.contextProfile.priorityHints.join('; ')}`
-          : ''
-      ].filter((line) => line.length > 0).join('\n')
-    },
-    'TOOLS.md': {
-      filePath: 'builtin://TOOLS.md',
-      content: [
-        `Allowed capability classes: ${spec.capabilities.allowedCapabilityClasses.join(', ')}`,
-        `Tool-use policy: ${spec.policies.toolUsePolicy}`,
-        `Mutation policy: ${spec.policies.mutationPolicy}`,
-        spec.capabilities.capabilityExclusions.length > 0
-          ? `Capability exclusions: ${spec.capabilities.capabilityExclusions.join('; ')}`
-          : ''
-      ].filter((line) => line.length > 0).join('\n')
-    },
-    'USER.md': {
-      filePath: 'builtin://USER.md',
-      content: ''
-    }
-  };
 }

@@ -15,8 +15,9 @@ function createLoadedPackage(overrides: Partial<LoadedAgentPackage> = {}): Loade
     directoryPath: '/tmp/reviewer',
     manifestPath: '/tmp/reviewer/agent.json',
     manifest: {
+      promptFiles: ['AGENT.md', 'USER.md'],
       policy: {
-        allowedCapabilityClasses: ['read', 'search'],
+        allowedCapabilityClasses: ['read'],
         maxToolRounds: 3,
         mutationMode: 'none'
       }
@@ -42,11 +43,44 @@ describe('packageValidator', () => {
     ]);
   });
 
-  it('reports when a base package is missing AGENT.md and USER.md', () => {
-    expect(validateLoadedAgentPackage(createLoadedPackage({ promptFiles: {} }))).toEqual([
-      'Base package "reviewer" must provide AGENT.md.',
-      'Base package "reviewer" must provide USER.md.'
-    ]);
+  it('reports when a base package is missing manifest promptFiles', () => {
+    expect(
+      validateLoadedAgentPackage(
+        createLoadedPackage({
+          manifest: {
+            policy: {
+              allowedCapabilityClasses: ['read'],
+              maxToolRounds: 3,
+              mutationMode: 'none'
+            }
+          },
+          promptFiles: {}
+        })
+      )
+    ).toEqual(['Base package "reviewer" must declare at least one prompt file in agent.json.']);
+  });
+
+  it('allows base packages to use arbitrary manifest-declared prompt files', () => {
+    expect(
+      validateLoadedAgentPackage(
+        createLoadedPackage({
+          manifest: {
+            promptFiles: ['ROLE.md'],
+            policy: {
+              allowedCapabilityClasses: ['read'],
+              maxToolRounds: 3,
+              mutationMode: 'none'
+            }
+          },
+          promptFiles: {
+            'ROLE.md': {
+              filePath: '/tmp/reviewer/ROLE.md',
+              content: 'Role instructions.'
+            }
+          }
+        })
+      )
+    ).toEqual([]);
   });
 
   it('reports invalid capability classes declared in the manifest', () => {
@@ -54,6 +88,7 @@ describe('packageValidator', () => {
       validateLoadedAgentPackage(
         createLoadedPackage({
           manifest: {
+            promptFiles: ['AGENT.md', 'USER.md'],
             policy: {
               allowedCapabilityClasses: ['read', 'dance'] as never,
               maxToolRounds: 3,
@@ -208,7 +243,15 @@ describe('packageValidator', () => {
           maxToolRounds: 0,
           mutationMode: 'none'
         },
-        effectivePromptFiles: {},
+        effectiveCompletion: undefined,
+        effectiveDiagnostics: undefined,
+        effectivePromptOrder: ['AGENT.md'],
+        effectivePromptFiles: {
+          'AGENT.md': {
+            filePath: '/tmp/reviewer/AGENT.md',
+            content: 'You are a reviewer.'
+          }
+        },
         resolvedFiles: []
       })
     ).toEqual([

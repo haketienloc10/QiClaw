@@ -31,7 +31,7 @@ describe('createCompactCliTelemetryObserver', () => {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'shell_readonly',
+      toolName: 'shell',
       toolCallId: 'call-1',
       inputPreview: '{"command":"git","args":["status"]}',
       inputRawRedacted: { command: 'git', args: ['status'] }
@@ -40,7 +40,7 @@ describe('createCompactCliTelemetryObserver', () => {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'shell_readonly',
+      toolName: 'shell',
       toolCallId: 'call-1',
       isError: false,
       resultPreview: 'ok',
@@ -50,13 +50,13 @@ describe('createCompactCliTelemetryObserver', () => {
       resultSizeBucket: 'small'
     }));
 
-    expect(lines).toEqual(['· shell:read git status']);
+    expect(lines).toEqual(['· shell git status']);
     expect(replaced).toEqual(new Map([
-      ['call-1', '· shell:read git status | done (5ms)']
+      ['call-1', '· shell git status | done (5ms)']
     ]));
   });
 
-  it('replaces completion lines for read_file, edit_file, and search using the original compact labels', () => {
+  it('replaces completion lines for file actions using the original compact labels', () => {
     const lines: string[] = [];
     const replaced = new Map<string, string>();
     const observer = createCompactCliTelemetryObserver({
@@ -75,16 +75,16 @@ describe('createCompactCliTelemetryObserver', () => {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'read_file',
+      toolName: 'file',
       toolCallId: 'call-1',
-      inputPreview: '{"path":"src/cli/main.ts"}',
-      inputRawRedacted: { path: 'src/cli/main.ts' }
+      inputPreview: '{"action":"read","path":"src/cli/main.ts"}',
+      inputRawRedacted: { action: 'read', path: 'src/cli/main.ts' }
     }));
     observer.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'read_file',
+      toolName: 'file',
       toolCallId: 'call-1',
       isError: false,
       resultPreview: 'ok',
@@ -97,10 +97,11 @@ describe('createCompactCliTelemetryObserver', () => {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'edit_file',
+      toolName: 'file',
       toolCallId: 'call-2',
-      inputPreview: '{"path":"src/telemetry/display.ts"}',
+      inputPreview: '{"action":"write","path":"src/telemetry/display.ts"}',
       inputRawRedacted: {
+        action: 'write',
         path: 'src/telemetry/display.ts',
         oldText: 'secret old text',
         newText: 'secret new text'
@@ -110,7 +111,7 @@ describe('createCompactCliTelemetryObserver', () => {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'edit_file',
+      toolName: 'file',
       toolCallId: 'call-2',
       isError: true,
       resultPreview: 'error',
@@ -123,16 +124,16 @@ describe('createCompactCliTelemetryObserver', () => {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'search',
+      toolName: 'file',
       toolCallId: 'call-3',
-      inputPreview: '{"pattern":"promptLabel"}',
-      inputRawRedacted: { pattern: 'promptLabel' }
+      inputPreview: '{"action":"search","query":"promptLabel"}',
+      inputRawRedacted: { action: 'search', query: 'promptLabel' }
     }));
     observer.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'search',
+      toolName: 'file',
       toolCallId: 'call-3',
       isError: false,
       resultPreview: 'ok',
@@ -143,20 +144,20 @@ describe('createCompactCliTelemetryObserver', () => {
     }));
 
     expect(lines).toEqual([
-      '· read src/cli/main.ts',
-      '· edit src/telemetry/display.ts',
-      '· search promptLabel'
+      '· file read src/cli/main.ts',
+      '· file write src/telemetry/display.ts',
+      '· file search promptLabel'
     ]);
     expect(replaced).toEqual(new Map([
-      ['call-1', '· read src/cli/main.ts | done (7ms)'],
-      ['call-2', '· edit src/telemetry/display.ts | fail (8ms)'],
-      ['call-3', '· search promptLabel | done (9ms)']
+      ['call-1', '· file read src/cli/main.ts | done (7ms)'],
+      ['call-2', '· file write src/telemetry/display.ts | fail (8ms)'],
+      ['call-3', '· file search promptLabel | done (9ms)']
     ]));
     expect(lines.join('\n')).not.toContain('secret old text');
     expect(lines.join('\n')).not.toContain('secret new text');
   });
 
-  it('renders compact summaries for read_file, edit_file, and search without leaking payloads', () => {
+  it('renders compact summaries for file actions without leaking payloads', () => {
     const lines: string[] = [];
     const observer = createCompactCliTelemetryObserver({
       writeActivityLine(text) {
@@ -171,19 +172,20 @@ describe('createCompactCliTelemetryObserver', () => {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'read_file',
+      toolName: 'file',
       toolCallId: 'call-1',
-      inputPreview: '{"path":"src/cli/main.ts"}',
-      inputRawRedacted: { path: 'src/cli/main.ts' }
+      inputPreview: '{"action":"read","path":"src/cli/main.ts"}',
+      inputRawRedacted: { action: 'read', path: 'src/cli/main.ts' }
     }));
     observer.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'edit_file',
+      toolName: 'file',
       toolCallId: 'call-2',
-      inputPreview: '{"path":"src/telemetry/display.ts"}',
+      inputPreview: '{"action":"write","path":"src/telemetry/display.ts"}',
       inputRawRedacted: {
+        action: 'write',
         path: 'src/telemetry/display.ts',
         oldText: 'secret old text',
         newText: 'secret new text'
@@ -193,16 +195,16 @@ describe('createCompactCliTelemetryObserver', () => {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'search',
+      toolName: 'file',
       toolCallId: 'call-3',
-      inputPreview: '{"pattern":"promptLabel"}',
-      inputRawRedacted: { pattern: 'promptLabel' }
+      inputPreview: '{"action":"search","query":"promptLabel"}',
+      inputRawRedacted: { action: 'search', query: 'promptLabel' }
     }));
 
     expect(lines).toEqual([
-      '· read src/cli/main.ts',
-      '· edit src/telemetry/display.ts',
-      '· search promptLabel'
+      '· file read src/cli/main.ts',
+      '· file write src/telemetry/display.ts',
+      '· file search promptLabel'
     ]);
     expect(lines.join('\n')).not.toContain('secret old text');
     expect(lines.join('\n')).not.toContain('secret new text');
@@ -232,15 +234,15 @@ describe('createCompactCliTelemetryObserver', () => {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'read_file',
+      toolName: 'file',
       toolCallId: 'call-1',
-      inputPreview: '{"path":"src/cli/main.ts"}',
-      inputRawRedacted: { path: 'src/cli/main.ts' }
+      inputPreview: '{"action":"read","path":"src/cli/main.ts"}',
+      inputRawRedacted: { action: 'read', path: 'src/cli/main.ts' }
     }));
 
     const initialActivityLine = activityLines[0];
     expect(initialActivityLine).toContain('✦');
-    expect(initialActivityLine).toContain('read src/cli/main.ts');
+    expect(initialActivityLine).toContain('file read src/cli/main.ts');
     expect(redraws.get('call-1')).toBeUndefined();
 
     const redrawIntervalMs = INTERACTIVE_PULSE_REDRAW_MS;
@@ -269,15 +271,15 @@ describe('createCompactCliTelemetryObserver', () => {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'read_file',
+      toolName: 'file',
       toolCallId: 'call-fallback',
-      inputPreview: '{"path":"src/cli/main.ts"}',
-      inputRawRedacted: { path: 'src/cli/main.ts' }
+      inputPreview: '{"action":"read","path":"src/cli/main.ts"}',
+      inputRawRedacted: { action: 'read', path: 'src/cli/main.ts' }
     }));
 
     expect(activityLines).toHaveLength(1);
     expect(activityLines[0]).toContain('✦');
-    expect(activityLines[0]).toContain('read src/cli/main.ts');
+    expect(activityLines[0]).toContain('file read src/cli/main.ts');
     expect(vi.getTimerCount()).toBe(0);
 
     vi.advanceTimersByTime(INTERACTIVE_PULSE_SETTLE_MS);
@@ -311,10 +313,10 @@ describe('createCompactCliTelemetryObserver', () => {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'read_file',
+      toolName: 'file',
       toolCallId: 'call-completed',
-      inputPreview: '{"path":"src/cli/main.ts"}',
-      inputRawRedacted: { path: 'src/cli/main.ts' }
+      inputPreview: '{"action":"read","path":"src/cli/main.ts"}',
+      inputRawRedacted: { action: 'read', path: 'src/cli/main.ts' }
     }));
 
     const originalToolLine = activityLines[0]!;
@@ -331,7 +333,7 @@ describe('createCompactCliTelemetryObserver', () => {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'read_file',
+      toolName: 'file',
       toolCallId: 'call-completed',
       isError: false,
       resultPreview: 'ok',
@@ -387,19 +389,19 @@ describe('createCompactCliTelemetryObserver', () => {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'read_file',
+      toolName: 'file',
       toolCallId: 'call-1',
-      inputPreview: '{"path":"src/cli/main.ts"}',
-      inputRawRedacted: { path: 'src/cli/main.ts' }
+      inputPreview: '{"action":"read","path":"src/cli/main.ts"}',
+      inputRawRedacted: { action: 'read', path: 'src/cli/main.ts' }
     }));
     observer.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'search',
+      toolName: 'file',
       toolCallId: 'call-2',
-      inputPreview: '{"pattern":"promptLabel"}',
-      inputRawRedacted: { pattern: 'promptLabel' }
+      inputPreview: '{"action":"search","query":"promptLabel"}',
+      inputRawRedacted: { action: 'search', query: 'promptLabel' }
     }));
 
     const firstToolLine = activityLines[0]!;
@@ -409,7 +411,7 @@ describe('createCompactCliTelemetryObserver', () => {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'read_file',
+      toolName: 'file',
       toolCallId: 'call-1',
       isError: false,
       resultPreview: 'ok',
@@ -451,10 +453,10 @@ describe('createCompactCliTelemetryObserver', () => {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'read_file',
+      toolName: 'file',
       toolCallId: 'call-turn-completed',
-      inputPreview: '{"path":"src/cli/main.ts"}',
-      inputRawRedacted: { path: 'src/cli/main.ts' }
+      inputPreview: '{"action":"read","path":"src/cli/main.ts"}',
+      inputRawRedacted: { action: 'read', path: 'src/cli/main.ts' }
     }));
 
     vi.advanceTimersByTime(INTERACTIVE_PULSE_REDRAW_MS);
@@ -504,10 +506,10 @@ describe('createCompactCliTelemetryObserver', () => {
       turnId: 'turn-1',
       providerRound: 1,
       toolRound: 1,
-      toolName: 'read_file',
+      toolName: 'file',
       toolCallId: 'call-turn-stopped',
-      inputPreview: '{"path":"src/cli/main.ts"}',
-      inputRawRedacted: { path: 'src/cli/main.ts' }
+      inputPreview: '{"action":"read","path":"src/cli/main.ts"}',
+      inputRawRedacted: { action: 'read', path: 'src/cli/main.ts' }
     }));
 
     vi.advanceTimersByTime(INTERACTIVE_PULSE_REDRAW_MS);

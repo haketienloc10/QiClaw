@@ -1,10 +1,9 @@
 import type { ResolvedAgentPackage } from './spec.js';
 
 export function renderAgentSystemPrompt(resolvedPackage: ResolvedAgentPackage): string {
-  const sections = Object.entries(resolvedPackage.effectivePromptFiles)
-    .flatMap(([fileName, promptFile]) => {
-      return promptFile ? [[fileName, promptFile.content].join('\n')] : [];
-    })
+  const sections = resolvedPackage.effectivePromptOrder
+    .map((fileName) => resolvedPackage.effectivePromptFiles[fileName]?.content)
+    .filter((content): content is string => typeof content === 'string')
     .concat(renderRuntimeConstraintsSummary(resolvedPackage));
 
   return sections.join('\n\n');

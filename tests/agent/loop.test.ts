@@ -8,7 +8,7 @@ import { dispatchToolCall } from '../../src/agent/dispatcher.js';
 import { collectCompletedTurn, runAgentTurn, runAgentTurnStream } from '../../src/agent/loop.js';
 import { createAgentRuntime } from '../../src/agent/runtime.js';
 import { resolveBuiltinAgentPackage } from '../../src/agent/specRegistry.js';
-import type { AgentSpec, ResolvedAgentPackage } from '../../src/agent/spec.js';
+import type { ResolvedAgentPackage } from '../../src/agent/spec.js';
 import { createInMemoryMetricsObserver } from '../../src/telemetry/metrics.js';
 import {
   buildAnthropicMessagesRequest,
@@ -34,12 +34,10 @@ import {
   type ToolCallRequest
 } from '../../src/provider/model.js';
 import { createTelemetryEvent, type TelemetryEvent } from '../../src/telemetry/observer.js';
-import { editFileTool } from '../../src/tools/editFile.js';
+import { fileTool } from '../../src/tools/file.js';
 import { getBuiltinToolNames, getBuiltinTools, getTool, hasTool, type Tool, type ToolContext } from '../../src/tools/registry.js';
-import { readFileTool } from '../../src/tools/readFile.js';
-import { searchTool } from '../../src/tools/search.js';
 import * as shellToolModule from '../../src/tools/shell.js';
-import { shellExecTool, shellReadonlyTool } from '../../src/tools/shell.js';
+import { shellTool } from '../../src/tools/shell.js';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -63,6 +61,7 @@ function createBridgeResolvedPackage(options: {
     effectivePolicy: options.policy,
     effectiveCompletion: options.completion,
     effectiveDiagnostics: options.diagnostics,
+    effectivePromptOrder: ['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'USER.md'],
     effectivePromptFiles: {
       'AGENT.md': {
         filePath: '/virtual/AGENT.md',
@@ -150,15 +149,14 @@ describe('telemetry typing', () => {
 
 describe('tool registry', () => {
   it('registers the built-in tool names in a stable order', () => {
-    expect(getBuiltinToolNames()).toEqual(['read_file', 'edit_file', 'search', 'shell_readonly', 'shell_exec']);
+    expect(getBuiltinToolNames()).toEqual(['file', 'shell', 'git', 'web_fetch']);
   });
 
   it('supports tool lookup by name', () => {
-    expect(hasTool('read_file')).toBe(true);
-    expect(hasTool('edit_file')).toBe(true);
-    expect(hasTool('search')).toBe(true);
-    expect(hasTool('shell_readonly')).toBe(true);
-    expect(hasTool('shell_exec')).toBe(true);
+    expect(hasTool('file')).toBe(true);
+    expect(hasTool('shell')).toBe(true);
+    expect(hasTool('git')).toBe(true);
+    expect(hasTool('web_fetch')).toBe(true);
     expect(hasTool('missing_tool')).toBe(false);
 
     expect(getTool('missing_tool')).toBeUndefined();
@@ -230,8 +228,8 @@ describe('provider normalization, provider, and dispatcher', () => {
         toolCalls: [
           {
             id: 'call-read-1',
-            name: 'read_file',
-            input: { path: 'note.txt' }
+            name: 'file',
+            input: { action: 'read', path: 'note.txt' }
           }
         ]
       })
@@ -242,16 +240,16 @@ describe('provider normalization, provider, and dispatcher', () => {
         toolCalls: [
           {
             id: 'call-read-1',
-            name: 'read_file',
-            input: { path: 'note.txt' }
+            name: 'file',
+            input: { action: 'read', path: 'note.txt' }
           }
         ]
       },
       toolCalls: [
         {
           id: 'call-read-1',
-          name: 'read_file',
-          input: { path: 'note.txt' }
+          name: 'file',
+          input: { action: 'read', path: 'note.txt' }
         }
       ]
     } satisfies ProviderResponse);
@@ -263,8 +261,8 @@ describe('provider normalization, provider, and dispatcher', () => {
         toolCalls: [
           {
             id: 'call-read-1',
-            name: 'read_file',
-            input: { path: 'note.txt' }
+            name: 'file',
+            input: { action: 'read', path: 'note.txt' }
           }
         ]
       })
@@ -275,16 +273,16 @@ describe('provider normalization, provider, and dispatcher', () => {
         toolCalls: [
           {
             id: 'call-read-1',
-            name: 'read_file',
-            input: { path: 'note.txt' }
+            name: 'file',
+            input: { action: 'read', path: 'note.txt' }
           }
         ]
       },
       toolCalls: [
         {
           id: 'call-read-1',
-          name: 'read_file',
-          input: { path: 'note.txt' }
+          name: 'file',
+          input: { action: 'read', path: 'note.txt' }
         }
       ]
     } satisfies ProviderResponse);
@@ -333,7 +331,7 @@ describe('provider normalization, provider, and dispatcher', () => {
         { role: 'assistant', content: 'I will inspect it.' },
         {
           role: 'tool',
-          name: 'read_file',
+          name: 'file',
           toolCallId: 'toolu_123',
           content: 'note contents',
           isError: false
@@ -358,7 +356,7 @@ describe('provider normalization, provider, and dispatcher', () => {
         ]
       }
     ]);
-    expect(request.tools?.map((tool) => tool.name)).toEqual(['read_file', 'edit_file', 'search', 'shell_readonly', 'shell_exec']);
+    expect(request.tools?.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch']);
   });
 
   it('rejects Anthropic tool messages without a toolCallId', () => {
@@ -368,33 +366,33 @@ describe('provider normalization, provider, and dispatcher', () => {
         { role: 'user', content: 'Inspect note.txt' },
         {
           role: 'tool',
-          name: 'read_file',
+          name: 'file',
           content: 'note contents',
           isError: false
         }
       ],
       availableTools: getBuiltinTools()
-    })).toThrow(/Tool message for read_file is missing toolCallId\./);
+    })).toThrow(/Tool message for file is missing toolCallId\./);
   });
 
   it('extracts Anthropic text content and tool calls from mixed content blocks', () => {
     const text = readAnthropicTextContent([
       { type: 'text', text: 'I will inspect the file.' },
-      { type: 'tool_use', id: 'toolu_1', name: 'read_file', input: { path: 'note.txt' } },
+      { type: 'tool_use', id: 'toolu_1', name: 'file', input: { action: 'read', path: 'note.txt' } },
       { type: 'text', text: ' Then I will summarize it.' }
     ]);
 
     const toolCalls = extractAnthropicToolCalls([
       { type: 'text', text: 'ignore me' },
-      { type: 'tool_use', id: 'toolu_1', name: 'read_file', input: { path: 'note.txt' } }
+      { type: 'tool_use', id: 'toolu_1', name: 'file', input: { action: 'read', path: 'note.txt' } }
     ]);
 
     expect(text).toBe('I will inspect the file. Then I will summarize it.');
     expect(toolCalls).toEqual([
       {
         id: 'toolu_1',
-        name: 'read_file',
-        input: { path: 'note.txt' }
+        name: 'file',
+        input: { action: 'read', path: 'note.txt' }
       }
     ]);
   });
@@ -411,14 +409,14 @@ describe('provider normalization, provider, and dispatcher', () => {
           toolCalls: [
             {
               id: 'toolu_123',
-              name: 'read_file',
-              input: { path: 'note.txt' }
+              name: 'file',
+              input: { action: 'read', path: 'note.txt' }
             }
           ]
         } as any,
         {
           role: 'tool',
-          name: 'read_file',
+          name: 'file',
           toolCallId: 'toolu_123',
           content: 'note contents',
           isError: false
@@ -433,7 +431,7 @@ describe('provider normalization, provider, and dispatcher', () => {
         role: 'assistant',
         content: [
           { type: 'text', text: 'I will inspect it.' },
-          { type: 'tool_use', id: 'toolu_123', name: 'read_file', input: { path: 'note.txt' } }
+          { type: 'tool_use', id: 'toolu_123', name: 'file', input: { action: 'read', path: 'note.txt' } }
         ]
       },
       {
@@ -459,7 +457,7 @@ describe('provider normalization, provider, and dispatcher', () => {
         { role: 'assistant', content: 'I will inspect it.' },
         {
           role: 'tool',
-          name: 'read_file',
+          name: 'file',
           toolCallId: 'call_123',
           content: 'note contents',
           isError: true
@@ -491,10 +489,10 @@ describe('provider normalization, provider, and dispatcher', () => {
         output: 'note contents'
       }
     ]);
-    expect(request.tools).toHaveLength(5);
+    expect(request.tools).toHaveLength(4);
     expect(request.tools?.[0]).toMatchObject({
       type: 'function',
-      name: 'read_file',
+      name: 'file',
       strict: false
     });
   });
@@ -503,13 +501,13 @@ describe('provider normalization, provider, and dispatcher', () => {
     const request = buildOpenAIResponsesRequest({
       model: 'gpt-4.1',
       messages: [{ role: 'user', content: 'Run ls' }],
-      availableTools: [shellExecTool]
+      availableTools: [shellTool]
     });
 
     expect(request.tools).toEqual([
       {
         type: 'function',
-        name: 'shell_exec',
+        name: 'shell',
         description: 'Run a single program with optional arguments inside the current working directory.',
         parameters: {
           type: 'object',
@@ -540,14 +538,14 @@ describe('provider normalization, provider, and dispatcher', () => {
           toolCalls: [
             {
               id: 'call_123',
-              name: 'read_file',
-              input: { path: 'note.txt' }
+              name: 'file',
+              input: { action: 'read', path: 'note.txt' }
             }
           ]
         } as any,
         {
           role: 'tool',
-          name: 'read_file',
+          name: 'file',
           toolCallId: 'call_123',
           content: 'note contents',
           isError: false
@@ -575,8 +573,8 @@ describe('provider normalization, provider, and dispatcher', () => {
       {
         type: 'function_call',
         call_id: 'call_123',
-        name: 'read_file',
-        arguments: '{"path":"note.txt"}'
+        name: 'file',
+        arguments: '{"action":"read","path":"note.txt"}'
       },
       {
         type: 'function_call_output',
@@ -593,13 +591,13 @@ describe('provider normalization, provider, and dispatcher', () => {
         { role: 'user', content: 'Inspect note.txt' },
         {
           role: 'tool',
-          name: 'read_file',
+          name: 'file',
           content: 'note contents',
           isError: false
         }
       ],
       availableTools: getBuiltinTools()
-    })).toThrow(/Tool message for read_file is missing toolCallId\./);
+    })).toThrow(/Tool message for file is missing toolCallId\./);
   });
 
   it('extracts OpenAI text content and tool calls from responses output items', () => {
@@ -618,14 +616,14 @@ describe('provider normalization, provider, and dispatcher', () => {
       {
         type: 'function_call',
         call_id: 'call_1',
-        name: 'read_file',
-        arguments: '{"path":"note.txt"}'
+        name: 'file',
+        arguments: '{"action":"read","path":"note.txt"}'
       },
       {
         type: 'function_call',
         call_id: 'call_2',
-        name: 'search',
-        arguments: '{"pattern":"needle"}'
+        name: 'file',
+        arguments: '{"action":"search","pattern":"needle"}'
       }
     ]);
 
@@ -633,13 +631,13 @@ describe('provider normalization, provider, and dispatcher', () => {
     expect(toolCalls).toEqual([
       {
         id: 'call_1',
-        name: 'read_file',
-        input: { path: 'note.txt' }
+        name: 'file',
+        input: { action: 'read', path: 'note.txt' }
       },
       {
         id: 'call_2',
-        name: 'search',
-        input: { pattern: 'needle' }
+        name: 'file',
+        input: { action: 'search', pattern: 'needle' }
       }
     ]);
   });
@@ -649,10 +647,10 @@ describe('provider normalization, provider, and dispatcher', () => {
       {
         type: 'function_call',
         call_id: 'call_1',
-        name: 'read_file',
-        arguments: '{"path":"note.txt"'
+        name: 'file',
+        arguments: '{"action":"read","path":"note.txt"'
       }
-    ])).toThrow(/OpenAI function_call arguments for read_file must be valid JSON\./);
+    ])).toThrow(/OpenAI function_call arguments for file must be valid JSON\./);
   });
 
   it('rejects OpenAI function_call.arguments JSON that does not parse to an object', () => {
@@ -660,10 +658,10 @@ describe('provider normalization, provider, and dispatcher', () => {
       {
         type: 'function_call',
         call_id: 'call_1',
-        name: 'read_file',
+        name: 'file',
         arguments: '[]'
       }
-    ])).toThrow(/OpenAI function_call arguments for read_file must parse to a non-null object\./);
+    ])).toThrow(/OpenAI function_call arguments for file must parse to a non-null object\./);
   });
 
   it('creates the requested provider implementation from the provider factory', () => {
@@ -692,13 +690,13 @@ describe('provider normalization, provider, and dispatcher', () => {
 
     const toolCall: ToolCallRequest = {
       id: 'call-read-1',
-      name: 'read_file',
-      input: { path: 'note.txt' }
+      name: 'file',
+      input: { action: 'read', path: 'note.txt' }
     };
 
     await expect(dispatchToolCall(toolCall, { cwd: workspace })).resolves.toEqual({
       role: 'tool',
-      name: 'read_file',
+      name: 'file',
       toolCallId: 'call-read-1',
       content: 'hello dispatcher',
       isError: false
@@ -712,14 +710,14 @@ describe('provider normalization, provider, and dispatcher', () => {
       dispatchToolCall(
         {
           id: 'call-read-invalid',
-          name: 'read_file',
-          input: { path: 'note.txt', extra: true }
+          name: 'file',
+          input: { action: 'read', path: 'note.txt', extra: true }
         },
         { cwd: workspace }
       )
     ).resolves.toEqual({
       role: 'tool',
-      name: 'read_file',
+      name: 'file',
       toolCallId: 'call-read-invalid',
       content: expect.stringMatching(/unexpected property/i),
       isError: true
@@ -730,7 +728,7 @@ describe('provider normalization, provider, and dispatcher', () => {
     const workspace = await mkdtemp(join(tmpdir(), 'dispatcher-structured-result-'));
     const toolCall: ToolCallRequest = {
       id: 'call-shell-structured',
-      name: 'shell_exec',
+      name: 'shell',
       input: {
         command: process.execPath,
         args: ['-e', 'process.stdout.write("out"); process.stderr.write("err");']
@@ -739,7 +737,7 @@ describe('provider normalization, provider, and dispatcher', () => {
 
     await expect(dispatchToolCall(toolCall, { cwd: workspace })).resolves.toEqual({
       role: 'tool',
-      name: 'shell_exec',
+      name: 'shell',
       toolCallId: 'call-shell-structured',
       content: JSON.stringify({
         content: 'outerr',
@@ -783,14 +781,14 @@ describe('provider normalization, provider, and dispatcher', () => {
       dispatchToolCall(
         {
           id: 'call-read-missing-file',
-          name: 'read_file',
-          input: { path: 'missing.txt' }
+          name: 'file',
+          input: { action: 'read', path: 'missing.txt' }
         },
         { cwd: workspace }
       )
     ).resolves.toEqual({
       role: 'tool',
-      name: 'read_file',
+      name: 'file',
       toolCallId: 'call-read-missing-file',
       content: expect.stringMatching(/missing\.txt/i),
       isError: true
@@ -908,8 +906,8 @@ describe('agent loop', () => {
         toolCalls: [
           {
             id: 'call-read-parity-1',
-            name: 'read_file',
-            input: { path: 'note.txt' }
+            name: 'file',
+            input: { action: 'read', path: 'note.txt' }
           }
         ]
       }),
@@ -970,8 +968,8 @@ describe('agent loop', () => {
           yield {
             type: 'tool_call' as const,
             id: 'call-read-stream-1',
-            name: 'read_file',
-            input: { path: 'note.txt' }
+            name: 'file',
+            input: { action: 'read', path: 'note.txt' }
           };
           yield {
             type: 'finish' as const,
@@ -998,17 +996,18 @@ describe('agent loop', () => {
       provider,
       availableTools: [
         {
-          name: 'read_file',
+          name: 'file',
           description: 'Read test file',
           inputSchema: {
             type: 'object',
             properties: {
+              action: { type: 'string' },
               path: { type: 'string' }
             },
-            required: ['path'],
+            required: ['action', 'path'],
             additionalProperties: false
           },
-          async execute(input: { path: string }) {
+          async execute(input: { action: 'read'; path: string }) {
             executedToolCalls.push(String(input.path));
             return { content: `read:${String(input.path)}` };
           }
@@ -1030,8 +1029,8 @@ describe('agent loop', () => {
       {
         type: 'tool_call_started',
         id: 'call-read-stream-1',
-        name: 'read_file',
-        input: { path: 'note.txt' }
+        name: 'file',
+        input: { action: 'read', path: 'note.txt' }
       },
       {
         type: 'assistant_message_completed',
@@ -1039,15 +1038,15 @@ describe('agent loop', () => {
         toolCalls: [
           {
             id: 'call-read-stream-1',
-            name: 'read_file',
-            input: { path: 'note.txt' }
+            name: 'file',
+            input: { action: 'read', path: 'note.txt' }
           }
         ]
       },
       {
         type: 'tool_call_completed',
         id: 'call-read-stream-1',
-        name: 'read_file',
+        name: 'file',
         resultPreview: '{"content":"read:note.txt"}',
         isError: false
       },
@@ -1066,14 +1065,14 @@ describe('agent loop', () => {
             toolCalls: [
               {
                 id: 'call-read-stream-1',
-                name: 'read_file',
-                input: { path: 'note.txt' }
+                name: 'file',
+                input: { action: 'read', path: 'note.txt' }
               }
             ]
           },
           {
             role: 'tool',
-            name: 'read_file',
+            name: 'file',
             toolCallId: 'call-read-stream-1',
             content: 'read:note.txt',
             isError: false
@@ -1107,14 +1106,14 @@ describe('agent loop', () => {
           yield {
             type: 'tool_call' as const,
             id: 'call-read-stream-duplicate',
-            name: 'read_file',
-            input: { path: 'note.txt' }
+            name: 'file',
+            input: { action: 'read', path: 'note.txt' }
           };
           yield {
             type: 'tool_call' as const,
             id: 'call-read-stream-duplicate',
-            name: 'read_file',
-            input: { path: 'note.txt' }
+            name: 'file',
+            input: { action: 'read', path: 'note.txt' }
           };
           yield {
             type: 'finish' as const,
@@ -1141,17 +1140,18 @@ describe('agent loop', () => {
       provider,
       availableTools: [
         {
-          name: 'read_file',
+          name: 'file',
           description: 'Read test file',
           inputSchema: {
             type: 'object',
             properties: {
+              action: { type: 'string' },
               path: { type: 'string' }
             },
-            required: ['path'],
+            required: ['action', 'path'],
             additionalProperties: false
           },
-          async execute(input: { path: string }) {
+          async execute(input: { action: 'read'; path: string }) {
             executedToolCalls.push(String(input.path));
             return { content: `read:${String(input.path)}` };
           }
@@ -1170,8 +1170,8 @@ describe('agent loop', () => {
       {
         type: 'tool_call_started',
         id: 'call-read-stream-duplicate',
-        name: 'read_file',
-        input: { path: 'note.txt' }
+        name: 'file',
+        input: { action: 'read', path: 'note.txt' }
       }
     ]);
     expect(events).toContainEqual({
@@ -1180,8 +1180,8 @@ describe('agent loop', () => {
       toolCalls: [
         {
           id: 'call-read-stream-duplicate',
-          name: 'read_file',
-          input: { path: 'note.txt' }
+          name: 'file',
+          input: { action: 'read', path: 'note.txt' }
         }
       ]
     });
@@ -1198,8 +1198,8 @@ describe('agent loop', () => {
         toolCalls: [
           {
             id: 'call-read-1',
-            name: 'read_file',
-            input: { path: 'note.txt' }
+            name: 'file',
+            input: { action: 'read', path: 'note.txt' }
           }
         ]
       },
@@ -1227,7 +1227,7 @@ describe('agent loop', () => {
       { role: 'assistant', content: 'I will read the file first.' },
       {
         role: 'tool',
-        name: 'read_file',
+        name: 'file',
         toolCallId: 'call-read-1',
         content: 'agent note',
         isError: false
@@ -1237,7 +1237,7 @@ describe('agent loop', () => {
     expect(calls).toEqual([
       {
         messages: ['system:You are helpful.', 'user:Read note.txt and summarize it.'],
-        availableToolNames: ['read_file', 'edit_file', 'search', 'shell_readonly', 'shell_exec']
+        availableToolNames: ['file', 'shell', 'git', 'web_fetch']
       },
       {
         messages: [
@@ -1246,7 +1246,7 @@ describe('agent loop', () => {
           'assistant:I will read the file first.',
           'tool:agent note'
         ],
-        availableToolNames: ['read_file', 'edit_file', 'search', 'shell_readonly', 'shell_exec']
+        availableToolNames: ['file', 'shell', 'git', 'web_fetch']
       }
     ]);
   });
@@ -1332,7 +1332,7 @@ describe('agent loop', () => {
     expect(result.history.map((entry) => entry.role)).toEqual(['user', 'assistant', 'tool', 'assistant']);
   });
 
-  it('includes prompt assembly context only when each runtime context gate allows it', async () => {
+  it('includes prompt assembly context only when resolvedPackage context gates allow it', async () => {
     const seenRequests: string[][] = [];
     const provider = createScriptedProvider(
       [
@@ -1343,6 +1343,18 @@ describe('agent loop', () => {
       ],
       seenRequests
     );
+    const resolvedPackage = createBridgeResolvedPackage({
+      policy: {
+        allowedCapabilityClasses: ['read'],
+        maxToolRounds: 1,
+        includeMemory: false,
+        includeSkills: false,
+        includeHistorySummary: false,
+        requiresToolEvidence: false,
+        requiresSubstantiveFinalAnswer: false,
+        forbidSuccessAfterToolErrors: false
+      }
+    });
 
     const result = await runAgentTurn({
       provider,
@@ -1351,40 +1363,11 @@ describe('agent loop', () => {
       userInput: 'Answer briefly.',
       cwd: '/tmp/runtime',
       maxToolRounds: 1,
+      resolvedPackage,
       memoryText: 'Memory: user prefers concise answers',
       skillsText: 'Skills: concise_response',
       historySummary: 'Summary: prior attempt failed',
-      history: [{ role: 'assistant', content: 'Earlier answer.' }],
-      agentSpec: {
-        identity: {
-          purpose: 'Legacy prompt-only purpose',
-          behavioralFraming: 'Legacy prompt-only framing',
-          scopeBoundary: 'Legacy prompt-only boundary'
-        },
-        capabilities: {
-          allowedCapabilityClasses: ['read', 'write', 'search', 'exec_readonly', 'execute'],
-          operatingSurface: 'Legacy prompt-only operating surface',
-          capabilityExclusions: []
-        },
-        policies: {
-          safetyStance: 'Legacy prompt-only safety stance',
-          toolUsePolicy: 'Legacy prompt-only tool use policy',
-          escalationPolicy: 'Legacy prompt-only escalation policy',
-          mutationPolicy: 'Allow workspace edits.'
-        },
-        completion: {
-          completionMode: 'legacy-prompt-only-mode',
-          doneCriteriaShape: 'legacy-prompt-only-shape',
-          evidenceRequirement: 'legacy-prompt-only-evidence',
-          stopVsDoneDistinction: 'legacy-prompt-only-stop-vs-done',
-          maxToolRounds: 10
-        },
-        contextProfile: {
-          includeMemory: false,
-          includeSkills: false,
-          includeHistorySummary: false
-        }
-      }
+      history: [{ role: 'assistant', content: 'Earlier answer.' }]
     });
 
     expect(result.history).toEqual([
@@ -1401,7 +1384,7 @@ describe('agent loop', () => {
     ]);
   });
 
-  it('applies AgentSpec completion booleans to verification while keeping bridge prose as compatibility metadata', async () => {
+  it('applies resolvedPackage completion booleans to verification', async () => {
     const calls: string[][] = [];
     const provider = createScriptedProvider([
       {
@@ -1409,6 +1392,21 @@ describe('agent loop', () => {
         toolCalls: []
       }
     ], calls);
+    const resolvedPackage = createBridgeResolvedPackage({
+      policy: {
+        allowedCapabilityClasses: ['read'],
+        maxToolRounds: 10,
+        requiresToolEvidence: false,
+        requiresSubstantiveFinalAnswer: true,
+        forbidSuccessAfterToolErrors: true
+      },
+      completion: {
+        completionMode: 'Single-turn task completion with evidence-aware verification.',
+        doneCriteriaShape: 'Return a non-empty final answer and provide tool evidence when the task requires inspection.',
+        evidenceRequirement: 'Use direct project evidence for inspection-style claims.',
+        stopVsDoneDistinction: 'A provider stop is not enough unless the final answer satisfies verification criteria.'
+      }
+    });
 
     const result = await runAgentTurn({
       provider,
@@ -1417,34 +1415,7 @@ describe('agent loop', () => {
       userInput: 'Answer briefly.',
       cwd: '/tmp/runtime',
       maxToolRounds: 10,
-      agentSpec: {
-        identity: {
-          purpose: 'Legacy completion purpose',
-          behavioralFraming: 'Legacy completion framing',
-          scopeBoundary: 'Legacy completion boundary'
-        },
-        capabilities: {
-          allowedCapabilityClasses: ['read', 'write', 'search', 'exec_readonly', 'execute'],
-          operatingSurface: 'Legacy completion operating surface',
-          capabilityExclusions: []
-        },
-        policies: {
-          safetyStance: 'Legacy completion safety stance',
-          toolUsePolicy: 'Legacy completion tool use policy',
-          escalationPolicy: 'Legacy completion escalation policy',
-          mutationPolicy: 'Allow workspace edits.'
-        },
-        completion: {
-          completionMode: 'Single-turn task completion with evidence-aware verification.',
-          doneCriteriaShape: 'Return a non-empty final answer and provide tool evidence when the task requires inspection.',
-          evidenceRequirement: 'Use direct project evidence for inspection-style claims.',
-          stopVsDoneDistinction: 'A provider stop is not enough unless the final answer satisfies verification criteria.',
-          maxToolRounds: 10,
-          requiresToolEvidence: false,
-          requiresSubstantiveFinalAnswer: true,
-          forbidSuccessAfterToolErrors: true
-        }
-      }
+      resolvedPackage
     });
 
     expect(result.doneCriteria).toMatchObject({
@@ -1514,8 +1485,8 @@ describe('agent loop', () => {
         toolCalls: [
           {
             id: 'call-read-1',
-            name: 'read_file',
-            input: { path: 'note.txt' }
+            name: 'file',
+            input: { action: 'read', path: 'note.txt' }
           }
         ]
       },
@@ -1524,8 +1495,8 @@ describe('agent loop', () => {
         toolCalls: [
           {
             id: 'call-read-2',
-            name: 'read_file',
-            input: { path: 'note.txt' }
+            name: 'file',
+            input: { action: 'read', path: 'note.txt' }
           }
         ]
       }
@@ -1590,8 +1561,8 @@ describe('agent loop', () => {
         toolCalls: [
           {
             id: 'call-read-1',
-            name: 'read_file',
-            input: { path: 'note.txt' }
+            name: 'file',
+            input: { action: 'read', path: 'note.txt' }
           }
         ]
       },
@@ -1603,7 +1574,7 @@ describe('agent loop', () => {
 
     const result = await runAgentTurn({
       provider,
-      availableTools: [searchTool],
+      availableTools: [],
       baseSystemPrompt: 'You are helpful.',
       userInput: 'Read note.txt and explain it.',
       cwd: workspace,
@@ -1615,9 +1586,9 @@ describe('agent loop', () => {
       { role: 'assistant', content: 'I will read the file.' },
       {
         role: 'tool',
-        name: 'read_file',
+        name: 'file',
         toolCallId: 'call-read-1',
-        content: 'Tool not allowed for this turn: read_file',
+        content: 'Tool not allowed for this turn: file',
         isError: true
       },
       { role: 'assistant', content: 'I was not allowed to use that tool.' }
@@ -1626,15 +1597,15 @@ describe('agent loop', () => {
     expect(result.verification.toolMessagesCount).toBe(0);
   });
 
-  it('executes the exact tool instance provided in availableTools', async () => {
+  it('writes the exact tool instance provided in availableTools', async () => {
     const provider = createScriptedProvider([
       {
         message: { role: 'assistant', content: 'I will use the custom read tool.' },
         toolCalls: [
           {
             id: 'call-read-1',
-            name: 'read_file',
-            input: { path: 'note.txt' }
+            name: 'file',
+            input: { action: 'read', path: 'note.txt' }
           }
         ]
       },
@@ -1644,15 +1615,16 @@ describe('agent loop', () => {
       }
     ]);
 
-    const customReadTool: Tool<{ path: string }> = {
-      name: 'read_file',
-      description: 'Custom test read tool',
+    const customReadTool: Tool<{ action: 'read'; path: string }> = {
+      name: 'file',
+      description: 'Custom test file tool',
       inputSchema: {
         type: 'object',
         properties: {
+          action: { type: 'string' },
           path: { type: 'string' }
         },
-        required: ['path'],
+        required: ['action', 'path'],
         additionalProperties: false
       },
       async execute(input) {
@@ -1676,7 +1648,7 @@ describe('agent loop', () => {
       { role: 'assistant', content: 'I will use the custom read tool.' },
       {
         role: 'tool',
-        name: 'read_file',
+        name: 'file',
         toolCallId: 'call-read-1',
         content: 'custom:note.txt',
         isError: false
@@ -1695,17 +1667,17 @@ describe('agent loop', () => {
     });
 
     expect(runtime.cwd).toBe('/tmp/runtime-compose');
-    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['read_file', 'edit_file', 'search', 'shell_readonly', 'shell_exec']);
+    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch']);
     expect(runtime.provider.name).toBe('anthropic');
     expect(runtime.provider.model).toBe('claude-sonnet-4-20250514');
     expect(runtime.observer.record).toBeTypeOf('function');
-    expect(runtime.agentSpec?.capabilities.allowedCapabilityClasses).toEqual(['read', 'write', 'search', 'exec_readonly', 'execute']);
+    expect(runtime.resolvedPackage.effectivePolicy.allowedCapabilityClasses).toEqual(['read', 'write']);
     expect(runtime.resolvedPackage).toMatchObject({
       preset: 'default',
       sourceTier: 'builtin',
       extendsChain: ['default'],
       effectivePolicy: {
-        allowedCapabilityClasses: ['read', 'write', 'search', 'exec_readonly', 'execute'],
+        allowedCapabilityClasses: ['read', 'write'],
         maxToolRounds: 10,
         requiresSubstantiveFinalAnswer: true,
         forbidSuccessAfterToolErrors: true,
@@ -1717,8 +1689,8 @@ describe('agent loop', () => {
         redactionSensitivity: 'standard'
       }
     });
-    expect(runtime.systemPrompt).toContain('AGENT.md');
-    expect(runtime.systemPrompt).toContain('- Allowed capability classes: read, write, search, exec_readonly, execute');
+    expect(runtime.systemPrompt).toContain('Purpose: Handle a single bounded task inside the QiClaw CLI runtime.');
+    expect(runtime.systemPrompt).toContain('- Allowed capability classes: read, write');
     expect(runtime.systemPrompt).toContain('Runtime constraints summary');
     expect(runtime.maxToolRounds).toBe(10);
     expect(runtime.resolvedPackage?.effectivePolicy).toEqual(defaultResolvedPackage.effectivePolicy);
@@ -1734,7 +1706,7 @@ describe('agent loop', () => {
     });
 
     expect(runtime.cwd).toBe('/tmp/runtime-openai');
-    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['read_file', 'edit_file', 'search', 'shell_readonly', 'shell_exec']);
+    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch']);
     expect(runtime.provider.name).toBe('openai');
     expect(runtime.provider.model).toBe('gpt-4.1');
     expect(runtime.observer.record).toBeTypeOf('function');
@@ -1744,7 +1716,7 @@ describe('agent loop', () => {
   it('accepts a direct resolvedPackage runtime override during the bridge phase', async () => {
     const resolvedPackage = createBridgeResolvedPackage({
       policy: {
-        allowedCapabilityClasses: ['read', 'search'],
+        allowedCapabilityClasses: ['read'],
         maxToolRounds: 3,
         mutationMode: 'none',
         includeMemory: false,
@@ -1764,10 +1736,9 @@ describe('agent loop', () => {
       resolvedPackage
     });
 
-    expect(runtime.agentSpec).toBeUndefined();
     expect(runtime.resolvedPackage).toBe(resolvedPackage);
-    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['read_file', 'search']);
-    expect(runtime.systemPrompt).toContain('AGENT.md');
+    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch']);
+    expect(runtime.systemPrompt).toContain('Purpose: Bridge agent purpose');
     expect(runtime.systemPrompt).toContain('Bridge agent purpose');
     expect(runtime.systemPrompt).toContain('- Include memory: no');
     expect(runtime.maxToolRounds).toBe(3);
@@ -1832,40 +1803,6 @@ describe('agent loop', () => {
         forbidSuccessAfterToolErrors: false
       }
     });
-    const legacyAgentSpec: AgentSpec = {
-      identity: {
-        purpose: 'Legacy bridge purpose',
-        behavioralFraming: 'Legacy framing',
-        scopeBoundary: 'Legacy boundary'
-      },
-      capabilities: {
-        allowedCapabilityClasses: ['read', 'write', 'search', 'exec_readonly', 'execute'],
-        operatingSurface: 'Legacy operating surface',
-        capabilityExclusions: []
-      },
-      policies: {
-        safetyStance: 'Legacy safety stance',
-        toolUsePolicy: 'Legacy tool use policy',
-        escalationPolicy: 'Legacy escalation policy',
-        mutationPolicy: 'Allow workspace edits.'
-      },
-      completion: {
-        completionMode: 'legacy-mode',
-        doneCriteriaShape: 'legacy-shape',
-        evidenceRequirement: 'legacy-evidence',
-        stopVsDoneDistinction: 'legacy-stop-vs-done',
-        maxToolRounds: 9,
-        requiresToolEvidence: true,
-        requiresSubstantiveFinalAnswer: true,
-        forbidSuccessAfterToolErrors: true
-      },
-      contextProfile: {
-        includeMemory: true,
-        includeSkills: true,
-        includeHistorySummary: true
-      }
-    };
-
     const result = await runAgentTurn({
       provider,
       availableTools: getBuiltinTools(),
@@ -1873,7 +1810,6 @@ describe('agent loop', () => {
       userInput: 'Answer briefly.',
       cwd: '/tmp/runtime-bridge-context',
       maxToolRounds: 2,
-      agentSpec: legacyAgentSpec,
       resolvedPackage,
       memoryText: 'Memory: should be hidden',
       skillsText: 'Skills: should be hidden',
@@ -1913,35 +1849,6 @@ describe('agent loop', () => {
         stopVsDoneDistinction: 'resolved-stop-vs-done'
       }
     });
-    const legacyAgentSpec: AgentSpec = {
-      identity: {
-        purpose: 'Legacy bridge purpose',
-        behavioralFraming: 'Legacy framing',
-        scopeBoundary: 'Legacy boundary'
-      },
-      capabilities: {
-        allowedCapabilityClasses: ['read', 'write', 'search', 'exec_readonly', 'execute'],
-        operatingSurface: 'Legacy operating surface',
-        capabilityExclusions: []
-      },
-      policies: {
-        safetyStance: 'Legacy safety stance',
-        toolUsePolicy: 'Legacy tool use policy',
-        escalationPolicy: 'Legacy escalation policy',
-        mutationPolicy: 'Allow workspace edits.'
-      },
-      completion: {
-        completionMode: 'legacy-mode',
-        doneCriteriaShape: 'legacy-shape',
-        evidenceRequirement: 'legacy-evidence',
-        stopVsDoneDistinction: 'legacy-stop-vs-done',
-        maxToolRounds: 9,
-        requiresToolEvidence: true,
-        requiresSubstantiveFinalAnswer: true,
-        forbidSuccessAfterToolErrors: true
-      }
-    };
-
     const result = await runAgentTurn({
       provider,
       availableTools: getBuiltinTools(),
@@ -1949,7 +1856,6 @@ describe('agent loop', () => {
       userInput: 'Answer briefly.',
       cwd: '/tmp/runtime-bridge-completion',
       maxToolRounds: 2,
-      agentSpec: legacyAgentSpec,
       resolvedPackage
     });
 
@@ -1979,11 +1885,11 @@ describe('agent loop', () => {
     });
 
     expect(runtime.cwd).toBe('/tmp/runtime-readonly');
-    expect(runtime.agentSpec?.capabilities.allowedCapabilityClasses).toEqual(['read', 'search', 'exec_readonly']);
-    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['read_file', 'search', 'shell_readonly']);
+    expect(runtime.resolvedPackage.effectivePolicy.allowedCapabilityClasses).toEqual(['read']);
+    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch']);
     expect(runtime.maxToolRounds).toBe(6);
-    expect(runtime.systemPrompt).toContain('AGENT');
-    expect(runtime.systemPrompt).toContain('- Allowed capability classes: read, search, exec_readonly');
+    expect(runtime.systemPrompt).toContain('Purpose: Inspect the project surface');
+    expect(runtime.systemPrompt).toContain('- Allowed capability classes: read');
     expect(runtime.systemPrompt).toContain('- Mutation mode: none');
     expect(runtime.systemPrompt).toContain('Runtime constraints summary');
     expect(runtime.resolvedPackage?.effectivePolicy).toEqual(readonlyResolvedPackage.effectivePolicy);
@@ -2001,8 +1907,8 @@ describe('agent loop', () => {
         toolCalls: [
           {
             id: 'call-read-telemetry',
-            name: 'read_file',
-            input: { path: 'note.txt' }
+            name: 'file',
+            input: { action: 'read', path: 'note.txt' }
           }
         ],
         finish: {
@@ -2033,14 +1939,14 @@ describe('agent loop', () => {
           toolCallSummaries: [
             {
               id: 'call-read-telemetry',
-              name: 'read_file'
+              name: 'file'
             }
           ],
           responseContentBlocksByType: {
             text: 1,
             tool_use: 1
           },
-          responsePreviewRedacted: '[{"type":"text","text":"I will read the file first."},{"type":"tool_use","name":"read_file"}]'
+          responsePreviewRedacted: '[{"type":"text","text":"I will read the file first."},{"type":"tool_use","name":"file"}]'
         }
       }),
       normalizeProviderResponse({
@@ -2129,7 +2035,7 @@ describe('agent loop', () => {
       data: {
         cwd: workspace,
         maxToolRounds: 3,
-        toolNames: ['read_file', 'edit_file', 'search', 'shell_readonly', 'shell_exec'],
+        toolNames: ['file', 'shell', 'git', 'web_fetch'],
         userInput: 'Read note.txt and summarize it.',
         providerRound: 0,
         toolRound: 0,
@@ -2168,7 +2074,7 @@ describe('agent loop', () => {
           { role: 'system', content: 'You are helpful.' },
           { role: 'user', content: 'Read note.txt and summarize it.' }
         ]).length,
-        toolNames: ['read_file', 'edit_file', 'search', 'shell_readonly', 'shell_exec'],
+        toolNames: ['file', 'shell', 'git', 'web_fetch'],
         messageSummaries: [
           {
             role: 'system',
@@ -2215,7 +2121,7 @@ describe('agent loop', () => {
         toolCallSummaries: [
           {
             id: 'call-read-telemetry',
-            name: 'read_file'
+            name: 'file'
           }
         ],
         providerUsageRawRedacted: {
@@ -2225,7 +2131,7 @@ describe('agent loop', () => {
         providerStopDetails: {
           stop_reason: 'tool_use'
         },
-        responsePreviewRedacted: '[{"type":"text","text":"I will read the file first."},{"type":"tool_use","name":"read_file"}]',
+        responsePreviewRedacted: '[{"type":"text","text":"I will read the file first."},{"type":"tool_use","name":"file"}]',
         durationMs: expect.any(Number),
         providerRound: 1,
         toolRound: 1,
@@ -2240,10 +2146,11 @@ describe('agent loop', () => {
       type: 'tool_call_started',
       stage: 'tool_execution',
       data: {
-        toolName: 'read_file',
+        toolName: 'file',
         toolCallId: 'call-read-telemetry',
-        inputPreview: '{"path":"note.txt"}',
+        inputPreview: '{"action":"read","path":"note.txt"}',
         inputRawRedacted: {
+          action: 'read',
           path: 'note.txt'
         },
         providerRound: 1,
@@ -2255,13 +2162,13 @@ describe('agent loop', () => {
       type: 'tool_call_completed',
       stage: 'tool_execution',
       data: {
-        toolName: 'read_file',
+        toolName: 'file',
         toolCallId: 'call-read-telemetry',
         isError: false,
         resultPreview: '{"content":"agent note"}',
         resultRawRedacted: {
           role: 'tool',
-          name: 'read_file',
+          name: 'file',
           toolCallId: 'call-read-telemetry',
           content: 'agent note',
           isError: false
@@ -2280,7 +2187,7 @@ describe('agent loop', () => {
       data: {
         toolCallsTotal: 1,
         toolCallsByName: {
-          read_file: 1
+          file: 1
         },
         batchSource: 'single_provider_response',
         batchIndexWithinTurn: 1,
@@ -2313,14 +2220,14 @@ describe('agent loop', () => {
           toolCalls: [
             {
               id: 'call-read-telemetry',
-              name: 'read_file',
-              input: { path: 'note.txt' }
+              name: 'file',
+              input: { action: 'read', path: 'note.txt' }
             }
           ]
         }).length,
         toolResultChars: JSON.stringify({
           role: 'tool',
-          name: 'read_file',
+          name: 'file',
           toolCallId: 'call-read-telemetry',
           content: 'agent note',
           isError: false
@@ -2328,7 +2235,7 @@ describe('agent loop', () => {
         promptGrowthSinceLastProviderCallChars: expect.any(Number),
         toolResultContributionSinceLastProviderCallChars: JSON.stringify({
           role: 'tool',
-          name: 'read_file',
+          name: 'file',
           toolCallId: 'call-read-telemetry',
           content: 'agent note',
           isError: false
@@ -2352,20 +2259,20 @@ describe('agent loop', () => {
             toolCalls: [
               {
                 id: 'call-read-telemetry',
-                name: 'read_file',
-                input: { path: 'note.txt' }
+                name: 'file',
+                input: { action: 'read', path: 'note.txt' }
               }
             ]
           },
           {
             role: 'tool',
-            name: 'read_file',
+            name: 'file',
             toolCallId: 'call-read-telemetry',
             content: 'agent note',
             isError: false
           }
         ]).length,
-        toolNames: ['read_file', 'edit_file', 'search', 'shell_readonly', 'shell_exec'],
+        toolNames: ['file', 'shell', 'git', 'web_fetch'],
         messageSummaries: [
           {
             role: 'system',
@@ -2387,8 +2294,8 @@ describe('agent loop', () => {
               toolCalls: [
                 {
                   id: 'call-read-telemetry',
-                  name: 'read_file',
-                  input: { path: 'note.txt' }
+                  name: 'file',
+                  input: { action: 'read', path: 'note.txt' }
                 }
               ]
             }).length,
@@ -2400,14 +2307,14 @@ describe('agent loop', () => {
             role: 'tool',
             rawChars: JSON.stringify({
               role: 'tool',
-              name: 'read_file',
+              name: 'file',
               toolCallId: 'call-read-telemetry',
               content: 'agent note',
               isError: false
             }).length,
             contentBlockCount: 1,
             messageSource: 'tool_result',
-            toolName: 'read_file',
+            toolName: 'file',
             toolCallId: 'call-read-telemetry',
             isError: false
           }
@@ -2415,7 +2322,7 @@ describe('agent loop', () => {
         totalContentBlockCount: 5,
         hasSystemPrompt: true,
         promptRawPreviewRedacted:
-          '{"messages":[{"content":"You are helpful.","role":"system"},{"content":"Read note.txt and summarize it.","role":"user"},{"content":"I will read the file first.","role":"assistant","toolCalls":[{"id":"call-read-telemetry","input":{"path":"note.txt"},"name":"read_file"}]},{"content":"agent note","isError":false,"name":"read_file","role":"tool","toolCallId":"call-read-telemetry"}]}',
+          '{"messages":[{"content":"You are helpful.","role":"system"},{"content":"Read note.txt and summarize it.","role":"user"},{"content":"I will read the file first.","role":"assistant","toolCalls":[{"id":"call-read-telemetry","input":{"action":"read","path":"note.txt"},"name":"file"}]},{"content":"agent note","isError":false,"name":"file","role":"tool","toolCallId":"call-read-telemetry"}]}',
         providerRound: 2,
         toolRound: 1,
         turnId: expect.any(String)
@@ -2505,7 +2412,7 @@ describe('agent loop', () => {
         toolRoundsUsed: 1,
         toolCallsTotal: 1,
         toolCallsByName: {
-          read_file: 1
+          file: 1
         },
         inputTokensTotal: 32,
         outputTokensTotal: 12,
@@ -2518,14 +2425,14 @@ describe('agent loop', () => {
             toolCalls: [
               {
                 id: 'call-read-telemetry',
-                name: 'read_file',
-                input: { path: 'note.txt' }
+                name: 'file',
+                input: { action: 'read', path: 'note.txt' }
               }
             ]
           },
           {
             role: 'tool',
-            name: 'read_file',
+            name: 'file',
             toolCallId: 'call-read-telemetry',
             content: 'agent note',
             isError: false
@@ -2533,7 +2440,7 @@ describe('agent loop', () => {
         ]).length,
         toolResultCharsInFinalPrompt: JSON.stringify({
           role: 'tool',
-          name: 'read_file',
+          name: 'file',
           toolCallId: 'call-read-telemetry',
           content: 'agent note',
           isError: false
@@ -2544,21 +2451,21 @@ describe('agent loop', () => {
           toolCalls: [
             {
               id: 'call-read-telemetry',
-              name: 'read_file',
-              input: { path: 'note.txt' }
+              name: 'file',
+              input: { action: 'read', path: 'note.txt' }
             }
           ]
         }).length,
         toolResultPromptGrowthCharsTotal: JSON.stringify({
           role: 'tool',
-          name: 'read_file',
+          name: 'file',
           toolCallId: 'call-read-telemetry',
           content: 'agent note',
           isError: false
         }).length,
         toolResultCharsAddedAcrossTurn: JSON.stringify({
           role: 'tool',
-          name: 'read_file',
+          name: 'file',
           toolCallId: 'call-read-telemetry',
           content: 'agent note',
           isError: false
@@ -2765,8 +2672,8 @@ describe('agent loop', () => {
         toolCalls: [
           {
             id: 'call-read-stop',
-            name: 'read_file',
-            input: { path: 'note.txt' }
+            name: 'file',
+            input: { action: 'read', path: 'note.txt' }
           }
         ]
       },
@@ -2775,8 +2682,8 @@ describe('agent loop', () => {
         toolCalls: [
           {
             id: 'call-read-stop-2',
-            name: 'read_file',
-            input: { path: 'note.txt' }
+            name: 'file',
+            input: { action: 'read', path: 'note.txt' }
           }
         ]
       }
@@ -2828,13 +2735,13 @@ describe('agent loop', () => {
         toolCalls: [
           {
             id: 'call-read-a',
-            name: 'read_file',
-            input: { path: 'A.txt' }
+            name: 'file',
+            input: { action: 'read', path: 'A.txt' }
           },
           {
             id: 'call-read-b',
-            name: 'read_file',
-            input: { path: 'B.txt' }
+            name: 'file',
+            input: { action: 'read', path: 'B.txt' }
           }
         ]
       },
@@ -2844,15 +2751,16 @@ describe('agent loop', () => {
       }
     ]);
 
-    const readTool: Tool<{ path: string }> = {
-      name: 'read_file',
+    const readTool: Tool<{ action: 'read'; path: string }> = {
+      name: 'file',
       description: 'Reads a fake file',
       inputSchema: {
         type: 'object',
         properties: {
+          action: { type: 'string' },
           path: { type: 'string' }
         },
-        required: ['path'],
+        required: ['action', 'path'],
         additionalProperties: false
       },
       async execute(input) {
@@ -2885,7 +2793,7 @@ describe('agent loop', () => {
       stage: 'tool_execution',
       data: {
         toolCallsTotal: 2,
-        toolCallsByName: { read_file: 2 },
+        toolCallsByName: { file: 2 },
         batchSource: 'single_provider_response',
         batchIndexWithinTurn: 1,
         providerResponseToolCallCount: 2,
@@ -3121,7 +3029,7 @@ describe('agent loop', () => {
               type: 'tool_call' as const,
               id: 'call_1',
               name: 'always_fails',
-              input: { path: 'note.txt' }
+              input: { action: 'read', path: 'note.txt' }
             };
             yield {
               type: 'finish' as const,
@@ -3147,9 +3055,10 @@ describe('agent loop', () => {
       inputSchema: {
         type: 'object',
         properties: {
+          action: { type: 'string' },
           path: { type: 'string' }
         },
-        required: ['path'],
+        required: ['action', 'path'],
         additionalProperties: false
       },
       async execute() {
@@ -3366,7 +3275,7 @@ describe('agent loop', () => {
 });
 
 describe('built-in tool behavior', () => {
-  it('keeps read_file inside the workspace root', async () => {
+  it('keeps file inside the workspace root', async () => {
     const parentDir = await mkdtemp(join(tmpdir(), 'tool-parent-'));
     const workspace = join(parentDir, 'workspace');
     const allowedPath = join(workspace, 'allowed.txt');
@@ -3376,29 +3285,29 @@ describe('built-in tool behavior', () => {
     await writeFile(allowedPath, 'inside', 'utf8');
     await writeFile(outsidePath, 'outside', 'utf8');
 
-    await expect(readFileTool.execute({ path: 'allowed.txt' }, { cwd: workspace })).resolves.toEqual({
+    await expect(fileTool.execute({ action: 'read', path: 'allowed.txt' }, { cwd: workspace })).resolves.toEqual({
       content: 'inside'
     });
 
-    await expect(readFileTool.execute({ path: '../outside.txt' }, { cwd: workspace })).rejects.toThrow(
+    await expect(fileTool.execute({ action: 'read', path: '../outside.txt' }, { cwd: workspace })).rejects.toThrow(
       /workspace/i
     );
-    await expect(readFileTool.execute({ path: outsidePath }, { cwd: workspace })).rejects.toThrow(/workspace/i);
+    await expect(fileTool.execute({ action: 'read', path: outsidePath }, { cwd: workspace })).rejects.toThrow(/workspace/i);
   });
 
-  it('truncates oversized read_file output with a marker', async () => {
+  it('truncates oversized file output with a marker', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'tool-read-truncate-'));
     const filePath = join(workspace, 'large.txt');
 
     await writeFile(filePath, 'a'.repeat(40_000), 'utf8');
 
-    const result = await readFileTool.execute({ path: 'large.txt' }, { cwd: workspace });
+    const result = await fileTool.execute({ action: 'read', path: 'large.txt' }, { cwd: workspace });
 
     expect(result.content.length).toBeLessThan(34_000);
     expect(result.content).toMatch(/truncated/i);
   });
 
-  it('keeps edit_file inside the workspace root and replaces only the first match', async () => {
+  it('keeps file inside the workspace root and replaces only the first match', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'tool-workspace-'));
     const editablePath = join(workspace, 'editable.txt');
     const outsidePath = join(tmpdir(), `outside-edit-${Date.now()}.txt`);
@@ -3406,17 +3315,17 @@ describe('built-in tool behavior', () => {
     await writeFile(editablePath, 'alpha\nalpha\n', 'utf8');
     await writeFile(outsidePath, 'blocked', 'utf8');
 
-    await editFileTool.execute(
+    await fileTool.execute(
       {
+        action: 'write',
         path: 'editable.txt',
-        oldText: 'alpha',
-        newText: 'beta'
+        content: 'beta\nalpha\n'
       },
       { cwd: workspace }
     );
 
     await expect(readFile(editablePath, 'utf8')).resolves.toBe('beta\nalpha\n');
-    await expect(editFileTool.execute({ path: outsidePath, oldText: 'blocked', newText: 'open' }, { cwd: workspace }))
+    await expect(fileTool.execute({ action: 'write', path: outsidePath, content: 'open' }, { cwd: workspace }))
       .rejects.toThrow(/workspace/i);
   });
 
@@ -3441,7 +3350,7 @@ describe('built-in tool behavior', () => {
     await writeFile(join(distDir, 'ignored.txt'), 'needle in build output', 'utf8');
     await writeFile(join(worktreesDir, 'ignored.txt'), 'needle in nested worktree', 'utf8');
 
-    const result = await searchTool.execute({ pattern: 'needle' }, { cwd: workspace });
+    const result = await fileTool.execute({ action: 'search', pattern: 'needle' }, { cwd: workspace });
     const data = result.data as {
       totalMatches: number;
       totalFiles: number;
@@ -3492,7 +3401,7 @@ describe('built-in tool behavior', () => {
 
     await writeFile(filePath, 'line 1\nneedle first\nline 3\nneedle second\nline 5\nline 6', 'utf8');
 
-    const result = await searchTool.execute({ pattern: 'needle' }, { cwd: workspace });
+    const result = await fileTool.execute({ action: 'search', pattern: 'needle' }, { cwd: workspace });
     const data = result.data as {
       files: Array<{
         snippets: Array<{
@@ -3527,13 +3436,13 @@ describe('built-in tool behavior', () => {
       'utf8'
     );
 
-    const shellSpy = vi.spyOn(shellToolModule.shellReadonlyTool, 'execute')
+    const shellSpy = vi.spyOn(shellToolModule.shellTool, 'execute')
       .mockRejectedValueOnce(new Error('Command failed: rg\nExit code: ENOENT'))
       .mockResolvedValueOnce({
         content: Array.from({ length: 400 }, (_, index) => `${filePath}:${index + 1}:needle line ${index + 1} ${'x'.repeat(20)}`).join('\n')
       });
 
-    const result = await searchTool.execute({ pattern: 'needle', maxMatches: 50 }, { cwd: workspace });
+    const result = await fileTool.execute({ action: 'search', pattern: 'needle', maxMatches: 50 }, { cwd: workspace });
     const data = result.data as {
       totalMatches: number;
       returnedMatches: number;
@@ -3554,14 +3463,14 @@ describe('built-in tool behavior', () => {
     });
   });
 
-  it('supports partial line reads in read_file', async () => {
+  it('supports partial line reads in file', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'tool-read-partial-'));
     const filePath = join(workspace, 'match.txt');
     const fileContent = Array.from({ length: 10 }, (_, index) => index === 4 ? 'needle here' : `line ${index + 1}`).join('\n');
 
     await writeFile(filePath, fileContent, 'utf8');
 
-    const result = await readFileTool.execute({ path: 'match.txt', startLine: 4, endLine: 6 } as never, { cwd: workspace });
+    const result = await fileTool.execute({ action: 'read', path: 'match.txt', startLine: 4, endLine: 6 } as never, { cwd: workspace });
 
     expect(result.content).toBe(['4: line 4', '5: needle here', '6: line 6'].join('\n'));
   });
@@ -3569,11 +3478,11 @@ describe('built-in tool behavior', () => {
   it('returns a compact structured result when search finds no matches', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'tool-search-empty-'));
 
-    vi.spyOn(shellToolModule.shellReadonlyTool, 'execute').mockResolvedValueOnce({
+    vi.spyOn(shellToolModule.shellTool, 'execute').mockResolvedValueOnce({
       content: ''
     });
 
-    const result = await searchTool.execute({ pattern: 'needle' }, { cwd: workspace });
+    const result = await fileTool.execute({ action: 'search', pattern: 'needle' }, { cwd: workspace });
     const data = result.data as {
       totalMatches: number;
       totalFiles: number;
@@ -3599,7 +3508,7 @@ describe('built-in tool behavior', () => {
     const workspace = await mkdtemp(join(tmpdir(), 'tool-shell-'));
 
     await expect(
-      shellExecTool.execute(
+      shellTool.execute(
         {
           command: process.execPath,
           args: ['-e', 'process.stdout.write("out"); process.stderr.write("err"); process.exit(7);']
@@ -3609,7 +3518,7 @@ describe('built-in tool behavior', () => {
     ).rejects.toThrow(/exit code:\s*7/i);
 
     await expect(
-      shellExecTool.execute(
+      shellTool.execute(
         {
           command: process.execPath,
           args: ['-e', 'process.stdout.write("out"); process.stderr.write("err"); process.exit(7);']
@@ -3623,7 +3532,7 @@ describe('built-in tool behavior', () => {
     const workspace = await mkdtemp(join(tmpdir(), 'tool-shell-success-'));
 
     await expect(
-      shellExecTool.execute(
+      shellTool.execute(
         {
           command: process.execPath,
           args: ['-e', 'process.stdout.write("out"); process.stderr.write("err");']
@@ -3646,12 +3555,12 @@ describe('built-in tool behavior', () => {
     const workspace = await mkdtemp(join(tmpdir(), 'tool-shell-readonly-'));
 
     await expect(
-      shellReadonlyTool.execute(
+      shellTool.execute(
         {
-          command: process.execPath,
-          args: ['-e', 'process.stdout.write("out")']
+          command: 'awk',
+          args: ['BEGIN { print "out" }']
         },
-        { cwd: workspace }
+        { cwd: workspace, mutationMode: 'readonly' }
       )
     ).rejects.toThrow(/readonly shell command is not allowed/i);
   });

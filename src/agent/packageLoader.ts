@@ -14,7 +14,7 @@ export async function loadAgentPackageFromDirectory(
   options: { preset: string; sourceTier: AgentPackageSourceTier }
 ): Promise<LoadedAgentPackage> {
   const entries = await readdir(directoryPath, { withFileTypes: true });
-  const promptFiles: Partial<Record<AgentPromptFileName, AgentPromptFile>> = {};
+  const promptFiles: Record<AgentPromptFileName, AgentPromptFile> = {};
   let manifest: LoadedAgentPackage['manifest'];
 
   for (const entry of entries) {
@@ -36,6 +36,10 @@ export async function loadAgentPackageFromDirectory(
       continue;
     }
 
+    if (!isMarkdownFile(entry.name)) {
+      continue;
+    }
+
     const filePath = join(directoryPath, entry.name);
     const raw = await readFile(filePath, 'utf8');
     promptFiles[entry.name] = {
@@ -52,6 +56,10 @@ export async function loadAgentPackageFromDirectory(
     manifest,
     promptFiles
   };
+}
+
+function isMarkdownFile(fileName: string): fileName is AgentPromptFileName {
+  return fileName.endsWith('.md');
 }
 
 function normalizeMarkdownContent(value: string): string {

@@ -1,4 +1,5 @@
 {
+  "promptFiles": ["AGENT.md", "SOUL.md", "TOOLS.md", "USER.md"],
   "policy": {
     "allowedCapabilityClasses": ["read"],
     "maxToolRounds": 6,

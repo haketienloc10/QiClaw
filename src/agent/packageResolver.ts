@@ -22,9 +22,13 @@ export async function resolveAgentPackage(
   const effectiveCompletion = mergeCompletionChain(packageChain);
   const effectiveDiagnostics = mergeDiagnosticsChain(packageChain);
   const effectivePromptFiles = mergePromptFileChain(packageChain);
+  const effectivePromptOrder = resolvePromptOrder(packageChain, effectivePromptFiles);
   const resolvedFiles = packageChain.flatMap((agentPackage) => [
     agentPackage.manifestPath,
-    ...listPromptFilesInOrder(agentPackage).map((promptFile) => promptFile.filePath)
+    ...orderedPromptFileNames(agentPackage).flatMap((fileName) => {
+      const promptFile = agentPackage.promptFiles[fileName];
+      return promptFile ? [promptFile.filePath] : [];
+    })
   ]);
   const resolvedPackage: ResolvedAgentPackage = {
     preset,
@@ -34,6 +38,7 @@ export async function resolveAgentPackage(
     effectivePolicy,
     effectiveCompletion,
     effectiveDiagnostics,
+    effectivePromptOrder,
     effectivePromptFiles,
     resolvedFiles
   };
@@ -136,40 +141,46 @@ function mergeDiagnosticsChain(packageChain: LoadedAgentPackage[]) {
   }, undefined);
 }
 
-function mergePromptFileChain(
-  packageChain: LoadedAgentPackage[]
-): Partial<Record<AgentPromptFileName, LoadedAgentPackage['promptFiles'][AgentPromptFileName]>> {
-  return [...packageChain].reverse().reduce<Partial<Record<AgentPromptFileName, LoadedAgentPackage['promptFiles'][AgentPromptFileName]>>>(
-    (merged, agentPackage) => {
-      for (const promptFile of listPromptFilesInOrder(agentPackage)) {
-        const fileName = getPromptFileName(agentPackage, promptFile);
-        if (fileName) {
-          merged[fileName] = promptFile;
-        }
-      }
+function mergePromptFileChain(packageChain: LoadedAgentPackage[]): ResolvedAgentPackage['effectivePromptFiles'] {
+  return [...packageChain].reverse().reduce<ResolvedAgentPackage['effectivePromptFiles']>((merged, agentPackage) => ({
+    ...merged,
+    ...agentPackage.promptFiles
+  }), {});
+}
 
-      return merged;
-    },
-    {}
+function resolvePromptOrder(
+  packageChain: LoadedAgentPackage[],
+  effectivePromptFiles: ResolvedAgentPackage['effectivePromptFiles']
+): AgentPromptFileName[] {
+  const inheritedManifestOrder = [...packageChain]
+    .reverse()
+    .flatMap((agentPackage) => agentPackage.manifest?.promptFiles ?? []);
+
+  return dedupePromptFileNames(inheritedManifestOrder as AgentPromptFileName[]).filter(
+    (fileName) => effectivePromptFiles[fileName]
   );
 }
 
-function listPromptFilesInOrder(agentPackage: LoadedAgentPackage) {
-  const manifestOrderedFileNames = agentPackage.manifest?.promptFiles ?? [];
-  const orderedPromptFiles = manifestOrderedFileNames.flatMap((fileName) => {
-    const promptFile = agentPackage.promptFiles[fileName];
-    return promptFile ? [promptFile] : [];
-  });
-  const remainingPromptFiles = Object.entries(agentPackage.promptFiles)
-    .filter(([fileName]) => !manifestOrderedFileNames.includes(fileName))
-    .map(([, promptFile]) => promptFile)
-    .filter((promptFile): promptFile is NonNullable<typeof promptFile> => promptFile !== undefined);
-
-  return [...orderedPromptFiles, ...remainingPromptFiles];
+function orderedPromptFileNames(agentPackage: LoadedAgentPackage): AgentPromptFileName[] {
+  const manifestOrder = agentPackage.manifest?.promptFiles ?? [];
+  const fileNames = Object.keys(agentPackage.promptFiles) as AgentPromptFileName[];
+  return dedupePromptFileNames([...manifestOrder, ...fileNames]);
 }
 
-function getPromptFileName(agentPackage: LoadedAgentPackage, promptFile: NonNullable<LoadedAgentPackage['promptFiles'][string]>) {
-  return Object.entries(agentPackage.promptFiles).find(([, candidatePromptFile]) => candidatePromptFile === promptFile)?.[0];
+function dedupePromptFileNames(fileNames: AgentPromptFileName[]): AgentPromptFileName[] {
+  const seen = new Set<AgentPromptFileName>();
+  const result: AgentPromptFileName[] = [];
+
+  for (const fileName of fileNames) {
+    if (seen.has(fileName)) {
+      continue;
+    }
+
+    seen.add(fileName);
+    result.push(fileName);
+  }
+
+  return result;
 }
 
 async function directoryExists(directoryPath: string): Promise<boolean> {
@@ -180,4 +191,3 @@ async function directoryExists(directoryPath: string): Promise<boolean> {
     return false;
   }
 }
-

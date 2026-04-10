@@ -1,29 +1,9 @@
 export type AgentCapabilityClass = 'read' | 'write' | 'search' | 'exec_readonly' | 'execute';
 export type AgentPackageSourceTier = 'project' | 'user' | 'builtin';
-export const agentPromptSlotFileNames = ['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'USER.md'] as const;
-export type AgentPromptSlotFileName = (typeof agentPromptSlotFileNames)[number];
+export type AgentPromptFileName = string;
 export type AgentMutationMode = 'none' | 'workspace-write';
 export type AgentDiagnosticsParticipationLevel = 'none' | 'normal' | 'trace-oriented' | 'audit-oriented';
 export type AgentRedactionSensitivity = 'standard' | 'standard-to-high' | 'high';
-
-export interface AgentIdentitySpec {
-  purpose: string;
-  behavioralFraming: string;
-  scopeBoundary: string;
-}
-
-export interface AgentCapabilitiesSpec {
-  allowedCapabilityClasses: AgentCapabilityClass[];
-  operatingSurface: string;
-  capabilityExclusions: string[];
-}
-
-export interface AgentPoliciesSpec {
-  safetyStance: string;
-  toolUsePolicy: string;
-  escalationPolicy: string;
-  mutationPolicy: string;
-}
 
 export interface AgentCompletionSpec {
   completionMode: string;
@@ -34,28 +14,6 @@ export interface AgentCompletionSpec {
   requiresToolEvidence?: boolean;
   requiresSubstantiveFinalAnswer?: boolean;
   forbidSuccessAfterToolErrors?: boolean;
-}
-
-export interface AgentContextProfile {
-  includeMemory?: boolean;
-  includeSkills?: boolean;
-  includeHistorySummary?: boolean;
-  priorityHints?: string[];
-}
-
-export interface AgentDiagnosticsProfile {
-  diagnosticsParticipationLevel: AgentDiagnosticsParticipationLevel;
-  traceabilityExpectation?: string;
-  redactionSensitivity?: AgentRedactionSensitivity;
-}
-
-export interface AgentSpec {
-  identity: AgentIdentitySpec;
-  capabilities: AgentCapabilitiesSpec;
-  policies: AgentPoliciesSpec;
-  completion: AgentCompletionSpec;
-  contextProfile?: AgentContextProfile;
-  diagnosticsProfile?: AgentDiagnosticsProfile;
 }
 
 export interface AgentRuntimePolicy {
@@ -85,6 +43,7 @@ export interface AgentPackageDiagnosticsManifest {
 
 export interface AgentPackageManifest {
   extends?: string;
+  promptFiles?: AgentPromptFileName[];
   policy?: AgentRuntimePolicy;
   completion?: AgentCompletionMetadata;
   diagnostics?: AgentPackageDiagnosticsManifest;
@@ -101,7 +60,7 @@ export interface LoadedAgentPackage {
   directoryPath: string;
   manifestPath: string;
   manifest?: AgentPackageManifest;
-  promptFiles: Partial<Record<AgentPromptSlotFileName, AgentPromptFile>>;
+  promptFiles: Record<AgentPromptFileName, AgentPromptFile>;
 }
 
 export interface ResolvedAgentPackage {
@@ -112,7 +71,8 @@ export interface ResolvedAgentPackage {
   effectivePolicy: AgentRuntimePolicy;
   effectiveCompletion?: AgentPackageManifest['completion'];
   effectiveDiagnostics?: AgentPackageManifest['diagnostics'];
-  effectivePromptFiles: Partial<Record<AgentPromptSlotFileName, AgentPromptFile>>;
+  effectivePromptOrder: AgentPromptFileName[];
+  effectivePromptFiles: Record<AgentPromptFileName, AgentPromptFile>;
   resolvedFiles: string[];
 }
 
@@ -120,7 +80,7 @@ export interface AgentPackagePreview {
   preset: string;
   sourceTier: AgentPackageSourceTier;
   extendsChain: string[];
-  sectionFiles: Partial<Record<AgentPromptSlotFileName, string>>;
+  promptFiles: Array<{ fileName: string; filePath: string }>;
   resolvedFiles: string[];
   effectiveRuntimePolicy: AgentRuntimePolicy;
   renderedPromptText: string;

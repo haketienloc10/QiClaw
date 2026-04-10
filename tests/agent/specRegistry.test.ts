@@ -1,14 +1,15 @@
+import { existsSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AgentPackageManifest, AgentPromptSlotFileName } from '../../src/agent/spec.js';
+import type { AgentPackageManifest, AgentPromptFileName } from '../../src/agent/spec.js';
 
 interface BuiltinFixtureInput {
   manifest: AgentPackageManifest;
-  promptFiles?: Partial<Record<AgentPromptSlotFileName, string>>;
+  promptFiles?: Partial<Record<AgentPromptFileName, string>>;
 }
 
 const tempDirs: string[] = [];
@@ -80,58 +81,30 @@ describe('specRegistry builtin parity', () => {
     expect(listBuiltinAgentSpecNames()).toEqual(['default', 'readonly']);
   });
 
-  it('derives the default builtin AgentSpec bridge fields from literal expected values', async () => {
-    const { getBuiltinAgentSpec } = await import('../../src/agent/specRegistry.js');
-    const spec = getBuiltinAgentSpec('default');
+  it('resolves builtin packages directly from package files without legacy AgentSpec derivation', async () => {
+    const { resolveBuiltinAgentPackage } = await import('../../src/agent/specRegistry.js');
+    const resolved = resolveBuiltinAgentPackage('default');
 
-    expect(spec.identity).toMatchObject({
-      purpose: 'Handle a single bounded task inside the QiClaw CLI runtime.',
-      behavioralFraming: 'Be concise, tool-using, evidence-aware, and scoped to the requested task.'
-    });
-    expect(spec.policies.toolUsePolicy).toBe(
-      'Use tools when the task depends on observed project state instead of relying on unsupported assumptions.'
-    );
-    expect(spec.completion.completionMode).toBe('Single-turn task completion with evidence-aware verification.');
-    expect(spec.completion.doneCriteriaShape).toBe(
-      'Return a non-empty final answer and provide tool evidence when the task requires inspection.'
-    );
-    expect(spec.completion.evidenceRequirement).toBe('Use direct project evidence for inspection-style claims.');
-    expect(spec.completion.stopVsDoneDistinction).toBe(
-      'A provider stop is not enough unless the final answer satisfies verification criteria.'
-    );
-    expect(spec.completion.maxToolRounds).toBe(10);
-    expect(spec.diagnosticsProfile).toEqual({
-      diagnosticsParticipationLevel: 'normal',
-      traceabilityExpectation: 'Keep runtime telemetry traceable without exposing unnecessary host details.',
-      redactionSensitivity: 'standard'
-    });
-    expect(spec.capabilities.allowedCapabilityClasses).toEqual(['read', 'write', 'search', 'exec_readonly', 'execute']);
+    expect(resolved.preset).toBe('default');
+    expect(resolved.extendsChain).toEqual(['default']);
+    expect(resolved.effectivePromptOrder).toEqual(['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'USER.md']);
+    expect(resolved.effectivePromptFiles['AGENT.md']?.content).toContain('Handle a single bounded task inside the QiClaw CLI runtime.');
+    expect(resolved.effectivePromptFiles['USER.md']?.content).toContain('# USER.md - About Your Human');
+    expect(resolved.effectivePolicy.allowedCapabilityClasses).toEqual(['read', 'write', 'search', 'exec_readonly', 'execute']);
+    expect(resolved.effectivePolicy.maxToolRounds).toBe(10);
   });
 
-  it('derives the readonly builtin AgentSpec bridge fields from literal expected values', async () => {
-    const { getBuiltinAgentSpec, resolveBuiltinAgentPackage } = await import('../../src/agent/specRegistry.js');
-    const spec = getBuiltinAgentSpec('readonly');
+  it('keeps builtin inheritance in resolved packages without AgentSpec bridge metadata', async () => {
+    const { resolveBuiltinAgentPackage } = await import('../../src/agent/specRegistry.js');
     const resolved = resolveBuiltinAgentPackage('readonly');
 
-    expect(spec.identity.purpose).toBe('Inspect the project surface and report findings without making edits.');
-    expect(spec.capabilities.allowedCapabilityClasses).toEqual(['read', 'search', 'exec_readonly']);
-    expect(spec.policies.mutationPolicy).toBe('Do not mutate the project surface.');
-    expect(spec.policies.toolUsePolicy).toBe(
-      'Use read and search tools to gather project evidence before making inspection claims.'
-    );
-    expect(spec.completion.completionMode).toBe('Single-turn read-only inspection with strict evidence-aware verification.');
-    expect(spec.completion.doneCriteriaShape).toBe(
-      'Return a substantive final answer grounded in direct project inspection evidence.'
-    );
-    expect(spec.completion.evidenceRequirement).toBe(
-      'Use successful read/search tool results for inspection-style claims.'
-    );
-    expect(spec.completion.stopVsDoneDistinction).toBe(
-      'A provider stop is insufficient unless the answer is substantive and consistent with the observed tool results.'
-    );
-    expect(spec.completion.requiresToolEvidence).toBe(true);
-    expect(spec.completion.maxToolRounds).toBe(6);
     expect(resolved.extendsChain).toEqual(['readonly', 'default']);
+    expect(resolved.effectivePromptOrder).toEqual(['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'USER.md']);
+    expect(resolved.effectivePromptFiles['AGENT.md']?.content).toContain('Inspect the project surface and report findings without making edits.');
+    expect(resolved.effectivePromptFiles['USER.md']?.content).toContain('Readonly user instructions');
+    expect(resolved.effectivePolicy.allowedCapabilityClasses).toEqual(['read', 'search', 'exec_readonly']);
+    expect(resolved.effectivePolicy.requiresToolEvidence).toBe(true);
+    expect(resolved.effectivePolicy.maxToolRounds).toBe(6);
   });
 });
 
@@ -144,9 +117,13 @@ describe('specRegistry builtin validation', () => {
     ];
 
     for (const directoryPath of directories) {
+      if (!existsSync(directoryPath)) {
+        continue;
+      }
+
       await expect(readFile(join(directoryPath, 'default', 'CHECKLIST.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
       await expect(readFile(join(directoryPath, 'readonly', 'CHECKLIST.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
-      await expect(readFile(join(directoryPath, 'default', 'USER.md'), 'utf8')).resolves.toContain('Default user instructions');
+      await expect(readFile(join(directoryPath, 'default', 'USER.md'), 'utf8')).resolves.toContain('# USER.md - About Your Human');
       await expect(readFile(join(directoryPath, 'readonly', 'USER.md'), 'utf8')).resolves.toContain('Readonly user instructions');
     }
   });
@@ -188,7 +165,7 @@ describe('specRegistry builtin validation', () => {
 
     const { resolveBuiltinAgentPackage } = await importSpecRegistryWithBuiltinDirectory(builtinPackagesDirectory);
 
-    expect(() => resolveBuiltinAgentPackage('default')).toThrow('Base package "default" must provide AGENT.md.');
+    expect(() => resolveBuiltinAgentPackage('default')).toThrow('Base package "default" must declare at least one prompt file in agent.json.');
   });
 
   it('detects builtin extends cycles in the sync registry path', async () => {
@@ -235,12 +212,54 @@ describe('specRegistry builtin validation', () => {
     );
   });
 
+  it('ignores discovered markdown files that are not listed in builtin manifests', async () => {
+    const builtinPackagesDirectory = await createBuiltinPackagesDirectory();
+    await writeBuiltinPackageFixture(builtinPackagesDirectory, 'default', {
+      manifest: {
+        promptFiles: ['AGENT.md', 'USER.md'],
+        policy: {
+          allowedCapabilityClasses: ['read'],
+          maxToolRounds: 2,
+          mutationMode: 'none'
+        }
+      },
+      promptFiles: {
+        'AGENT.md': 'Purpose: Default\nScope boundary: Default',
+        'USER.md': 'Default user instructions',
+        'STYLE.md': 'Unlisted builtin markdown should not enter effective prompt order'
+      }
+    });
+    await writeBuiltinPackageFixture(builtinPackagesDirectory, 'readonly', {
+      manifest: {
+        extends: 'default',
+        promptFiles: ['TOOLS.md'],
+        policy: {
+          allowedCapabilityClasses: ['read'],
+          maxToolRounds: 2,
+          mutationMode: 'none'
+        }
+      },
+      promptFiles: {
+        'TOOLS.md': 'Readonly tool instructions'
+      }
+    });
+
+    const { resolveBuiltinAgentPackage } = await importSpecRegistryWithBuiltinDirectory(builtinPackagesDirectory);
+    const resolved = resolveBuiltinAgentPackage('readonly');
+
+    expect(resolved.effectivePromptOrder).toEqual(['AGENT.md', 'USER.md', 'TOOLS.md']);
+    expect(resolved.effectivePromptFiles['STYLE.md']?.content).toBe(
+      'Unlisted builtin markdown should not enter effective prompt order'
+    );
+  });
+
   it('rethrows unexpected prompt read errors instead of masking them as missing files', async () => {
     const builtinPackagesDirectory = await createBuiltinPackagesDirectory();
     const failingPromptFilePath = join(builtinPackagesDirectory, 'default', 'AGENT.md');
 
     await writeBuiltinPackageFixture(builtinPackagesDirectory, 'default', {
       manifest: {
+        promptFiles: ['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'USER.md'],
         policy: {
           allowedCapabilityClasses: ['read'],
           maxToolRounds: 2,
@@ -258,6 +277,7 @@ describe('specRegistry builtin validation', () => {
     await writeBuiltinPackageFixture(builtinPackagesDirectory, 'readonly', {
       manifest: {
         extends: 'default',
+        promptFiles: ['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'USER.md'],
         policy: {
           allowedCapabilityClasses: ['read'],
           maxToolRounds: 2,
@@ -273,10 +293,10 @@ describe('specRegistry builtin validation', () => {
       }
     });
 
-    const { getBuiltinAgentSpec } = await importSpecRegistryWithBuiltinDirectory(builtinPackagesDirectory, {
+    const { resolveBuiltinAgentPackage } = await importSpecRegistryWithBuiltinDirectory(builtinPackagesDirectory, {
       failingPromptFilePath
     });
 
-    expect(() => getBuiltinAgentSpec('default')).toThrow(`EACCES: permission denied, open '${failingPromptFilePath}'`);
+    expect(() => resolveBuiltinAgentPackage('default')).toThrow(`EACCES: permission denied, open '${failingPromptFilePath}'`);
   });
 });

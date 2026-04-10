@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { getBuiltinAgentSpec } from '../../src/agent/specRegistry.js';
+import { resolveBuiltinAgentPackage } from '../../src/agent/specRegistry.js';
 import type { ResolvedAgentPackage } from '../../src/agent/spec.js';
 import { buildCli, type CliRunTurnResult } from '../../src/cli/main.js';
 import type { NormalizedEvent } from '../../src/provider/model.js';
@@ -31,7 +31,7 @@ const providerEnvKeys = [
 
 type ProviderEnvSnapshot = Partial<Record<(typeof providerEnvKeys)[number], string>>;
 
-const defaultAgentSpec = getBuiltinAgentSpec('default');
+const defaultResolvedPackage = resolveBuiltinAgentPackage('default');
 
 function snapshotProviderEnv(): ProviderEnvSnapshot {
   return {
@@ -99,6 +99,7 @@ function createBridgeResolvedPackage(policy: ResolvedAgentPackage['effectivePoli
     extendsChain: ['cli-bridge'],
     packageChain: [],
     effectivePolicy: policy,
+    effectivePromptOrder: ['AGENT.md'],
     effectivePromptFiles: {
       'AGENT.md': {
         filePath: '/virtual/AGENT.md',
@@ -126,7 +127,6 @@ function createTestRuntime(
   cwd: string,
   observer?: TelemetryObserver,
   overrides: Partial<{
-    agentSpec: typeof defaultAgentSpec | undefined;
     resolvedPackage: ResolvedAgentPackage;
     systemPrompt: string;
     maxToolRounds: number;
@@ -137,7 +137,6 @@ function createTestRuntime(
     availableTools: [],
     cwd,
     observer: observer ?? { record() {} },
-    agentSpec: overrides.agentSpec ?? defaultAgentSpec,
     resolvedPackage: overrides.resolvedPackage ?? createBridgeResolvedPackage({ maxToolRounds: overrides.maxToolRounds ?? 3 }),
     systemPrompt: overrides.systemPrompt ?? 'Test prompt',
     maxToolRounds: overrides.maxToolRounds ?? 3
@@ -651,7 +650,6 @@ describe('createRepl', () => {
         availableTools: [],
         cwd: '/tmp/qiclaw-interactive-layout',
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
@@ -787,7 +785,6 @@ describe('createRepl', () => {
         availableTools: [],
         cwd: '/tmp/qiclaw-interactive-multi-turn-layout',
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
@@ -860,8 +857,7 @@ describe('buildCli', () => {
       cwd: tempDir,
       stdout: { write() { return true; } },
       createRuntime: (runtimeOptions) => createTestRuntime(tempDir, runtimeOptions.observer, {
-        agentSpec: undefined,
-        resolvedPackage: runtimeResolvedPackage,
+                resolvedPackage: runtimeResolvedPackage,
         maxToolRounds: 7
       }),
       runTurn: async (input) => {
@@ -1161,7 +1157,6 @@ describe('buildCli', () => {
         availableTools: [],
         cwd: '/tmp/qiclaw-interactive-tool-placement',
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
@@ -1330,7 +1325,6 @@ describe('buildCli', () => {
         availableTools: [],
         cwd: '/tmp/qiclaw-interactive-tool-non-tty',
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
@@ -1444,8 +1438,7 @@ describe('buildCli', () => {
           availableTools: [],
           cwd: tempDir,
           observer: runtimeOptions.observer ?? createNoopObserver(),
-          agentSpec: defaultAgentSpec,
-          systemPrompt: 'Test prompt',
+                    systemPrompt: 'Test prompt',
           maxToolRounds: 3
         }),
         runTurn: async (input) => {
@@ -1510,8 +1503,7 @@ describe('buildCli', () => {
           availableTools: [],
           cwd: tempDir,
           observer: runtimeOptions.observer ?? createNoopObserver(),
-          agentSpec: defaultAgentSpec,
-          systemPrompt: 'Test prompt',
+                    systemPrompt: 'Test prompt',
           maxToolRounds: 3
         }),
         runTurn: async (input) => {
@@ -1582,8 +1574,7 @@ describe('buildCli', () => {
           availableTools: [],
           cwd: tempDir,
           observer: runtimeOptions.observer ?? createNoopObserver(),
-          agentSpec: defaultAgentSpec,
-          systemPrompt: 'Test prompt',
+                    systemPrompt: 'Test prompt',
           maxToolRounds: 3
         }),
         runTurn: async (input) => {
@@ -1721,7 +1712,6 @@ describe('buildCli', () => {
         availableTools: [],
         cwd: '/tmp/qiclaw-provider-thinking-immediate',
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
@@ -1831,7 +1821,6 @@ describe('buildCli', () => {
         availableTools: [],
         cwd: '/tmp/qiclaw-provider-thinking-multi-round',
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 6
@@ -1956,7 +1945,6 @@ describe('buildCli', () => {
         availableTools: [],
         cwd: '/tmp/qiclaw-provider-layout',
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
@@ -2048,7 +2036,6 @@ describe('buildCli', () => {
         availableTools: [],
         cwd: '/tmp/qiclaw-provider-thinking-footer',
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
@@ -2150,7 +2137,6 @@ describe('buildCli', () => {
         availableTools: [],
         cwd: '/tmp/qiclaw-provider-thinking-fallback-tty',
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
@@ -2244,7 +2230,6 @@ describe('buildCli', () => {
         availableTools: [],
         cwd: '/tmp/qiclaw-provider-thinking-cycle-fallback-tty',
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
@@ -2347,7 +2332,6 @@ describe('buildCli', () => {
         availableTools: [],
         cwd: '/tmp/qiclaw-provider-thinking-error-cleanup',
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
@@ -2400,7 +2384,6 @@ describe('buildCli', () => {
         availableTools: [],
         cwd: '/tmp/qiclaw-provider-thinking-non-tty',
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
@@ -2509,8 +2492,7 @@ describe('buildCli', () => {
             availableTools: [],
             cwd: '/tmp/qiclaw-test',
             observer: runtimeOptions.observer ?? createNoopObserver(),
-            agentSpec: defaultAgentSpec,
-            systemPrompt: 'Test prompt',
+                        systemPrompt: 'Test prompt',
             maxToolRounds: 3
           };
         },
@@ -2919,7 +2901,6 @@ describe('buildCli', () => {
         availableTools: [createReadFileTool()],
         cwd,
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
@@ -3007,7 +2988,6 @@ describe('buildCli', () => {
         availableTools: [searchTool],
         cwd,
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
@@ -3357,8 +3337,7 @@ describe('buildCli', () => {
             availableTools: [],
             cwd: runtimeOptions.cwd,
             observer: runtimeOptions.observer ?? createNoopObserver(),
-            agentSpec: defaultAgentSpec,
-            systemPrompt: 'Test prompt',
+                        systemPrompt: 'Test prompt',
             maxToolRounds: 3
           };
         },
@@ -3420,8 +3399,7 @@ describe('buildCli', () => {
             availableTools: [],
             cwd: runtimeOptions.cwd,
             observer: runtimeOptions.observer ?? createNoopObserver(),
-            agentSpec: defaultAgentSpec,
-            systemPrompt: 'Test prompt',
+                        systemPrompt: 'Test prompt',
             maxToolRounds: 3
           };
         },
@@ -3490,8 +3468,7 @@ describe('buildCli', () => {
           availableTools: [],
           cwd: '/tmp/qiclaw-readonly-spec-test',
           observer: runtimeOptions.observer ?? createNoopObserver(),
-          agentSpec: defaultAgentSpec,
-          systemPrompt: 'Test prompt',
+                    systemPrompt: 'Test prompt',
           maxToolRounds: 3
         };
       },
@@ -3557,7 +3534,8 @@ describe('buildCli', () => {
         expect(input.resolvedPackage?.effectivePolicy.allowedCapabilityClasses).toEqual(['read']);
         expect(input.resolvedPackage?.effectivePolicy.maxToolRounds).toBe(2);
         expect(input.resolvedPackage?.effectivePromptFiles['AGENT.md']?.filePath).toBe(join(presetDir, 'AGENT.md'));
-        expect(input.baseSystemPrompt).toContain('AGENT.md\nProject readonly override');
+        expect(input.baseSystemPrompt).toContain('Project readonly override');
+        expect(input.baseSystemPrompt).not.toContain('AGENT.md\nProject readonly override');
 
         return {
           stopReason: 'completed',
@@ -3624,11 +3602,15 @@ describe('buildCli', () => {
     expect(stdoutWrites.join('')).toContain('Agent spec preview: readonly\n');
     expect(stdoutWrites.join('')).toContain('Source tier: project\n');
     expect(stdoutWrites.join('')).toContain('Inheritance chain: readonly -> default\n');
-    expect(stdoutWrites.join('')).toContain(`AGENT.md: ${join(tempDir, '.qiclaw', 'agents', 'readonly', 'AGENT.md')}\n`);
+    expect(stdoutWrites.join('')).toContain('Prompt files:\n');
+    expect(stdoutWrites.join('')).not.toContain('Section files:\n');
+    expect(stdoutWrites.join('')).toContain(`- AGENT.md: ${join(tempDir, '.qiclaw', 'agents', 'readonly', 'AGENT.md')}\n`);
     expect(stdoutWrites.join('')).not.toContain('CHECKLIST.md:');
     expect(stdoutWrites.join('')).toContain('Rendered system prompt:\n');
-    expect(stdoutWrites.join('')).toContain('AGENT.md\nProject readonly override\n');
-    expect(stdoutWrites.join('')).toContain('USER.md\nProject user override\n');
+    expect(stdoutWrites.join('')).toContain('Project readonly override\n');
+    expect(stdoutWrites.join('')).toContain('Project user override\n');
+    expect(stdoutWrites.join('')).not.toContain('AGENT.md\nProject readonly override\n');
+    expect(stdoutWrites.join('')).not.toContain('USER.md\nProject user override\n');
     expect(stdoutWrites.join('')).toContain('Runtime constraints summary\n');
     expect(stdoutWrites.join('')).not.toContain('Completion mode:');
   });
@@ -3794,8 +3776,7 @@ describe('buildCli', () => {
           availableTools: [],
           cwd: runtimeOptions.cwd,
           observer: runtimeOptions.observer ?? createNoopObserver(),
-          agentSpec: defaultAgentSpec,
-          systemPrompt: 'Test prompt',
+                    systemPrompt: 'Test prompt',
           maxToolRounds: 3
         };
       },
@@ -3879,8 +3860,7 @@ describe('buildCli', () => {
             availableTools: [],
             cwd: runtimeOptions.cwd,
             observer: runtimeOptions.observer ?? createNoopObserver(),
-            agentSpec: defaultAgentSpec,
-            systemPrompt: 'Test prompt',
+                        systemPrompt: 'Test prompt',
             maxToolRounds: 3
           };
         },
@@ -3929,8 +3909,7 @@ describe('buildCli', () => {
             availableTools: [],
             cwd: runtimeOptions.cwd,
             observer: runtimeOptions.observer ?? createNoopObserver(),
-            agentSpec: defaultAgentSpec,
-            systemPrompt: 'Test prompt',
+                        systemPrompt: 'Test prompt',
             maxToolRounds: 3
           };
         },
@@ -3977,8 +3956,7 @@ describe('buildCli', () => {
             availableTools: [],
             cwd: runtimeOptions.cwd,
             observer: runtimeOptions.observer ?? createNoopObserver(),
-            agentSpec: defaultAgentSpec,
-            systemPrompt: 'Test prompt',
+                        systemPrompt: 'Test prompt',
             maxToolRounds: 3
           };
         },
@@ -4036,8 +4014,7 @@ describe('buildCli', () => {
             availableTools: [],
             cwd: runtimeOptions.cwd,
             observer: runtimeOptions.observer ?? createNoopObserver(),
-            agentSpec: defaultAgentSpec,
-            systemPrompt: 'Test prompt',
+                        systemPrompt: 'Test prompt',
             maxToolRounds: 3
           };
         },
@@ -4083,8 +4060,7 @@ describe('buildCli', () => {
             availableTools: [],
             cwd: runtimeOptions.cwd,
             observer: runtimeOptions.observer ?? createNoopObserver(),
-            agentSpec: defaultAgentSpec,
-            systemPrompt: 'Test prompt',
+                        systemPrompt: 'Test prompt',
             maxToolRounds: 3
           };
         },
@@ -4130,8 +4106,7 @@ describe('buildCli', () => {
             availableTools: [],
             cwd: runtimeOptions.cwd,
             observer: runtimeOptions.observer ?? createNoopObserver(),
-            agentSpec: defaultAgentSpec,
-            systemPrompt: 'Test prompt',
+                        systemPrompt: 'Test prompt',
             maxToolRounds: 3
           };
         },
@@ -4172,8 +4147,7 @@ describe('buildCli', () => {
             availableTools: [],
             cwd: runtimeOptions.cwd,
             observer: runtimeOptions.observer ?? createNoopObserver(),
-            agentSpec: defaultAgentSpec,
-            systemPrompt: 'Test prompt',
+                        systemPrompt: 'Test prompt',
             maxToolRounds: 3
           };
         },
@@ -4249,7 +4223,6 @@ describe('buildCli', () => {
         availableTools: [],
         cwd: '/tmp/qiclaw-prompt-layout',
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
@@ -4346,7 +4319,6 @@ describe('buildCli', () => {
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
@@ -4466,7 +4438,6 @@ describe('buildCli', () => {
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
@@ -4623,7 +4594,6 @@ describe('buildCli', () => {
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
@@ -4667,7 +4637,6 @@ describe('buildCli', () => {
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
@@ -4805,7 +4774,6 @@ describe('buildCli', () => {
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
@@ -4906,7 +4874,6 @@ describe('buildCli', () => {
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
@@ -5030,7 +4997,6 @@ describe('buildCli', () => {
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
@@ -5095,7 +5061,6 @@ describe('buildCli', () => {
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
@@ -5152,7 +5117,6 @@ describe('buildCli', () => {
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
@@ -5260,7 +5224,6 @@ describe('buildCli', () => {
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? createNoopObserver(),
-        agentSpec: defaultAgentSpec,
         resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
         systemPrompt: 'Test prompt',
         maxToolRounds: 3

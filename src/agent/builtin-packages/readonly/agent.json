@@ -1,5 +1,6 @@
 {
   "extends": "default",
+  "promptFiles": ["AGENT.md", "SOUL.md", "STYLE.md", "TOOLS.md", "USER.md"],
   "policy": {
     "allowedCapabilityClasses": ["read", "search", "exec_readonly"],
     "maxToolRounds": 6,

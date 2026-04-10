@@ -1,14 +1,9 @@
-import { agentPromptSlotFileNames } from './spec.js';
-import type { AgentPromptSlotFileName, ResolvedAgentPackage } from './spec.js';
-
-const promptSlotFileNames: AgentPromptSlotFileName[] = [...agentPromptSlotFileNames];
+import type { ResolvedAgentPackage } from './spec.js';
 
 export function renderAgentSystemPrompt(resolvedPackage: ResolvedAgentPackage): string {
-  const sections = promptSlotFileNames
-    .flatMap((slotFileName) => {
-      const promptFile = resolvedPackage.effectivePromptFiles[slotFileName];
-      return promptFile ? [[slotFileName, promptFile.content].join('\n')] : [];
-    })
+  const sections = resolvedPackage.effectivePromptOrder
+    .map((fileName) => resolvedPackage.effectivePromptFiles[fileName]?.content)
+    .filter((content): content is string => typeof content === 'string')
     .concat(renderRuntimeConstraintsSummary(resolvedPackage));
 
   return sections.join('\n\n');

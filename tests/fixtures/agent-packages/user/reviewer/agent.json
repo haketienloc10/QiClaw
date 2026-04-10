@@ -1,7 +1,15 @@
 {
+  "promptFiles": ["AGENT.md", "USER.md"],
   "policy": {
-    "allowedCapabilityClasses": ["read"],
-    "maxToolRounds": 2,
-    "mutationMode": "none"
+    "allowedCapabilityClasses": ["read", "search", "exec_readonly"],
+    "maxToolRounds": 6,
+    "mutationMode": "none",
+    "includeSkills": true
+  },
+  "completion": {
+    "completionMode": "runtime-policy",
+    "doneCriteriaShape": "checklist-driven",
+    "evidenceRequirement": "implicit",
+    "stopVsDoneDistinction": "base-done-vs-stop"
   }
 }

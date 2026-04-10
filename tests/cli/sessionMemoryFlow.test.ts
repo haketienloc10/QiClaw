@@ -4,14 +4,14 @@ import { tmpdir } from 'node:os';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { getBuiltinAgentSpec } from '../../src/agent/specRegistry.js';
+import { resolveBuiltinAgentPackage } from '../../src/agent/specRegistry.js';
 import { buildCli } from '../../src/cli/main.js';
 import { CheckpointStore } from '../../src/session/checkpointStore.js';
 import { createInteractiveCheckpointJson, getCheckpointStorePath, parseInteractiveCheckpointJson } from '../../src/session/session.js';
 import type { CaptureInteractiveTurnMemoryInput, PrepareInteractiveSessionMemoryResult } from '../../src/memory/sessionMemoryEngine.js';
 
 const tempDirs: string[] = [];
-const defaultAgentSpec = getBuiltinAgentSpec('default');
+const defaultResolvedPackage = resolveBuiltinAgentPackage('default');
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -97,7 +97,7 @@ describe('interactive session memory flow', () => {
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? { record() {} },
-        agentSpec: defaultAgentSpec,
+        resolvedPackage: defaultResolvedPackage,
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -173,7 +173,7 @@ describe('interactive session memory flow', () => {
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? { record() {} },
-        agentSpec: defaultAgentSpec,
+        resolvedPackage: defaultResolvedPackage,
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -206,7 +206,7 @@ describe('interactive session memory flow', () => {
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? { record() {} },
-        agentSpec: defaultAgentSpec,
+        resolvedPackage: defaultResolvedPackage,
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -283,7 +283,7 @@ describe('interactive session memory flow', () => {
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? { record() {} },
-        agentSpec: defaultAgentSpec,
+        resolvedPackage: defaultResolvedPackage,
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -378,7 +378,7 @@ describe('interactive session memory flow', () => {
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? { record() {} },
-        agentSpec: defaultAgentSpec,
+        resolvedPackage: defaultResolvedPackage,
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -479,7 +479,7 @@ describe('interactive session memory flow', () => {
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? { record() {} },
-        agentSpec: defaultAgentSpec,
+        resolvedPackage: defaultResolvedPackage,
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -555,7 +555,7 @@ describe('interactive session memory flow', () => {
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? { record() {} },
-        agentSpec: defaultAgentSpec,
+        resolvedPackage: defaultResolvedPackage,
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -653,7 +653,7 @@ describe('interactive session memory flow', () => {
           availableTools: [],
           cwd: tempDir,
           observer: runtimeOptions.observer ?? { record() {} },
-          agentSpec: defaultAgentSpec,
+          resolvedPackage: defaultResolvedPackage,
           systemPrompt: 'Test prompt',
           maxToolRounds: 3
         }),
@@ -703,7 +703,7 @@ describe('interactive session memory flow', () => {
           availableTools: [],
           cwd: tempDir,
           observer: runtimeOptions.observer ?? { record() {} },
-          agentSpec: defaultAgentSpec,
+          resolvedPackage: defaultResolvedPackage,
           systemPrompt: 'Test prompt',
           maxToolRounds: 3
         }),
@@ -780,7 +780,7 @@ describe('interactive session memory flow', () => {
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? { record() {} },
-        agentSpec: defaultAgentSpec,
+        resolvedPackage: defaultResolvedPackage,
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -831,7 +831,7 @@ describe('interactive session memory flow', () => {
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? { record() {} },
-        agentSpec: defaultAgentSpec,
+        resolvedPackage: defaultResolvedPackage,
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -946,7 +946,7 @@ describe('interactive session memory flow', () => {
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? { record() {} },
-        agentSpec: defaultAgentSpec,
+        resolvedPackage: defaultResolvedPackage,
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -1037,7 +1037,7 @@ describe('interactive session memory flow', () => {
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? { record() {} },
-        agentSpec: defaultAgentSpec,
+        resolvedPackage: defaultResolvedPackage,
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),
@@ -1134,7 +1134,7 @@ describe('interactive session memory flow', () => {
         availableTools: [],
         cwd: tempDir,
         observer: runtimeOptions.observer ?? { record() {} },
-        agentSpec: defaultAgentSpec,
+        resolvedPackage: defaultResolvedPackage,
         systemPrompt: 'Test prompt',
         maxToolRounds: 3
       }),

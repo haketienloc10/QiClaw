@@ -4,7 +4,6 @@ import pc from 'picocolors';
 import { createAgentPackagePreview } from '../agent/packagePreview.js';
 import { resolveAgentPackage as resolveAgentPackageForPreview } from '../agent/packageResolver.js';
 import { createAgentRuntime, type AgentRuntime } from '../agent/runtime.js';
-import { agentPromptSlotFileNames } from '../agent/spec.js';
 import type { ResolvedAgentPackage } from '../agent/spec.js';
 import {
   createRunAgentTurnExecution,
@@ -209,8 +208,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
                 userInput,
                 cwd: runtime.cwd,
                 maxToolRounds: runtime.maxToolRounds,
-                agentSpec: runtime.agentSpec,
-                resolvedPackage: runtime.resolvedPackage ?? undefined,
+                resolvedPackage: runtime.resolvedPackage,
                 observer: cliObserver.observer
               });
             },
@@ -304,8 +302,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
               userInput,
               cwd: runtime.cwd,
               maxToolRounds: runtime.maxToolRounds,
-              agentSpec: runtime.agentSpec,
-              resolvedPackage: runtime.resolvedPackage ?? undefined,
+              resolvedPackage: runtime.resolvedPackage,
               observer: cliObserver.observer,
               history: historyContext.history,
               historySummary: historyContext.historySummary,
@@ -1100,8 +1097,8 @@ function formatInteractiveInfoLine(text: string): string {
 
 async function formatAgentSpecPreview(agentSpecName: string, cwd: string): Promise<string> {
   const preview = createAgentPackagePreview(await resolveAgentPackagePreview(agentSpecName, cwd));
-  const sectionFileLines = agentPromptSlotFileNames
-    .map((slot) => `- ${slot}: ${preview.sectionFiles[slot] ?? '(not provided)'}`)
+  const promptFileLines = preview.promptFiles
+    .map((entry) => `- ${entry.fileName}: ${entry.filePath}`)
     .join('\n');
   const effectivePolicyText = JSON.stringify(preview.effectiveRuntimePolicy, null, 2);
 
@@ -1109,8 +1106,8 @@ async function formatAgentSpecPreview(agentSpecName: string, cwd: string): Promi
     `Agent spec preview: ${preview.preset}`,
     `Source tier: ${preview.sourceTier}`,
     `Inheritance chain: ${preview.extendsChain.join(' -> ')}`,
-    'Section files:',
-    sectionFileLines,
+    'Prompt files:',
+    promptFileLines || '- (none)',
     'Effective runtime policy:',
     effectivePolicyText,
     'Rendered system prompt:',

@@ -9,8 +9,7 @@ import {
   validateLoadedAgentPackage,
   validateResolvedAgentPackage
 } from './packageValidator.js';
-import { agentPromptSlotFileNames } from './spec.js';
-import type { AgentPackageSourceTier, AgentPromptSlotFileName, LoadedAgentPackage, ResolvedAgentPackage } from './spec.js';
+import type { AgentPackageSourceTier, AgentPromptFileName, LoadedAgentPackage, ResolvedAgentPackage } from './spec.js';
 
 export async function resolveAgentPackage(
   preset: string,
@@ -23,10 +22,11 @@ export async function resolveAgentPackage(
   const effectiveCompletion = mergeCompletionChain(packageChain);
   const effectiveDiagnostics = mergeDiagnosticsChain(packageChain);
   const effectivePromptFiles = mergePromptFileChain(packageChain);
+  const effectivePromptOrder = resolvePromptOrder(packageChain, effectivePromptFiles);
   const resolvedFiles = packageChain.flatMap((agentPackage) => [
     agentPackage.manifestPath,
-    ...agentPromptSlotFileNames.flatMap((slotFileName) => {
-      const promptFile = agentPackage.promptFiles[slotFileName];
+    ...orderedPromptFileNames(agentPackage).flatMap((fileName) => {
+      const promptFile = agentPackage.promptFiles[fileName];
       return promptFile ? [promptFile.filePath] : [];
     })
   ]);
@@ -38,6 +38,7 @@ export async function resolveAgentPackage(
     effectivePolicy,
     effectiveCompletion,
     effectiveDiagnostics,
+    effectivePromptOrder,
     effectivePromptFiles,
     resolvedFiles
   };
@@ -140,14 +141,46 @@ function mergeDiagnosticsChain(packageChain: LoadedAgentPackage[]) {
   }, undefined);
 }
 
-function mergePromptFileChain(packageChain: LoadedAgentPackage[]): Partial<Record<AgentPromptSlotFileName, LoadedAgentPackage['promptFiles'][AgentPromptSlotFileName]>> {
-  return [...packageChain].reverse().reduce<Partial<Record<AgentPromptSlotFileName, LoadedAgentPackage['promptFiles'][AgentPromptSlotFileName]>>>(
-    (merged, agentPackage) => ({
-      ...merged,
-      ...agentPackage.promptFiles
-    }),
-    {}
+function mergePromptFileChain(packageChain: LoadedAgentPackage[]): ResolvedAgentPackage['effectivePromptFiles'] {
+  return [...packageChain].reverse().reduce<ResolvedAgentPackage['effectivePromptFiles']>((merged, agentPackage) => ({
+    ...merged,
+    ...agentPackage.promptFiles
+  }), {});
+}
+
+function resolvePromptOrder(
+  packageChain: LoadedAgentPackage[],
+  effectivePromptFiles: ResolvedAgentPackage['effectivePromptFiles']
+): AgentPromptFileName[] {
+  const inheritedManifestOrder = [...packageChain]
+    .reverse()
+    .flatMap((agentPackage) => agentPackage.manifest?.promptFiles ?? []);
+
+  return dedupePromptFileNames(inheritedManifestOrder as AgentPromptFileName[]).filter(
+    (fileName) => effectivePromptFiles[fileName]
   );
+}
+
+function orderedPromptFileNames(agentPackage: LoadedAgentPackage): AgentPromptFileName[] {
+  const manifestOrder = agentPackage.manifest?.promptFiles ?? [];
+  const fileNames = Object.keys(agentPackage.promptFiles) as AgentPromptFileName[];
+  return dedupePromptFileNames([...manifestOrder, ...fileNames]);
+}
+
+function dedupePromptFileNames(fileNames: AgentPromptFileName[]): AgentPromptFileName[] {
+  const seen = new Set<AgentPromptFileName>();
+  const result: AgentPromptFileName[] = [];
+
+  for (const fileName of fileNames) {
+    if (seen.has(fileName)) {
+      continue;
+    }
+
+    seen.add(fileName);
+    result.push(fileName);
+  }
+
+  return result;
 }
 
 async function directoryExists(directoryPath: string): Promise<boolean> {
@@ -158,4 +191,3 @@ async function directoryExists(directoryPath: string): Promise<boolean> {
     return false;
   }
 }
-

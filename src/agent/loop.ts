@@ -23,7 +23,7 @@ import { measurePromptTelemetry } from '../telemetry/providerMetrics.js';
 import type { Tool } from '../tools/registry.js';
 
 import { buildDoneCriteria, type DoneCriteria } from './doneCriteria.js';
-import type { AgentCompletionSpec, AgentSpec, ResolvedAgentPackage } from './spec.js';
+import type { AgentCompletionSpec, ResolvedAgentPackage } from './spec.js';
 import { verifyAgentTurn, type AgentTurnVerification } from './verifier.js';
 
 export interface RunAgentTurnInput {
@@ -33,7 +33,6 @@ export interface RunAgentTurnInput {
   userInput: string;
   cwd: string;
   maxToolRounds: number;
-  agentSpec?: AgentSpec;
   resolvedPackage?: ResolvedAgentPackage;
   observer?: TelemetryObserver;
   memoryText?: string;
@@ -254,7 +253,7 @@ function resolveTurnCompletionSpec(input: RunAgentTurnInput): AgentCompletionSpe
     };
   }
 
-  return input.agentSpec?.completion;
+  return undefined;
 }
 
 function assertValidTurnCompletedEvent(
@@ -295,9 +294,9 @@ export async function* runAgentTurnStream(
         memoryText: input.memoryText,
         skillsText: input.skillsText,
         historySummary: input.historySummary,
-        includeMemory: resolvedPolicy?.includeMemory ?? input.agentSpec?.contextProfile?.includeMemory,
-        includeSkills: resolvedPolicy?.includeSkills ?? input.agentSpec?.contextProfile?.includeSkills,
-        includeHistorySummary: resolvedPolicy?.includeHistorySummary ?? input.agentSpec?.contextProfile?.includeHistorySummary,
+        includeMemory: resolvedPolicy?.includeMemory,
+        includeSkills: resolvedPolicy?.includeSkills,
+        includeHistorySummary: resolvedPolicy?.includeHistorySummary,
         history
       });
 

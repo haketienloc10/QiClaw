@@ -50,12 +50,18 @@ export function validateLoadedAgentPackage(agentPackage: LoadedAgentPackage): st
     return errors;
   }
 
-  if (!agentPackage.manifest.extends && !agentPackage.promptFiles['AGENT.md']) {
-    errors.push(`Base package "${agentPackage.preset}" must provide AGENT.md.`);
+  const manifestPromptFiles = Array.isArray(agentPackage.manifest.promptFiles)
+    ? (agentPackage.manifest.promptFiles as string[])
+    : [];
+
+  if (!agentPackage.manifest.extends && manifestPromptFiles.length === 0) {
+    errors.push(`Base package "${agentPackage.preset}" must declare at least one prompt file in agent.json.`);
   }
 
-  if (!agentPackage.manifest.extends && !agentPackage.promptFiles['USER.md']) {
-    errors.push(`Base package "${agentPackage.preset}" must provide USER.md.`);
+  for (const fileName of manifestPromptFiles) {
+    if (!agentPackage.promptFiles[fileName]) {
+      errors.push(`Agent package "${agentPackage.preset}" references missing prompt file "${fileName}" in agent.json.`);
+    }
   }
 
   const manifestPolicy = agentPackage.manifest.policy;
@@ -78,6 +84,16 @@ export function validateResolvedAgentPackage(agentPackage: ResolvedAgentPackage)
   const errors: string[] = [];
   const maxToolRounds = agentPackage.effectivePolicy.maxToolRounds;
   const allowedCapabilityClasses = agentPackage.effectivePolicy.allowedCapabilityClasses ?? [];
+
+  if (agentPackage.effectivePromptOrder.length === 0) {
+    errors.push(`Agent package "${agentPackage.preset}" must resolve at least one prompt file.`);
+  }
+
+  for (const fileName of agentPackage.effectivePromptOrder) {
+    if (!agentPackage.effectivePromptFiles[fileName]) {
+      errors.push(`Agent package "${agentPackage.preset}" resolved prompt order references missing prompt file "${fileName}".`);
+    }
+  }
 
   if (typeof maxToolRounds === 'number' && maxToolRounds < 1) {
     errors.push(`Agent package "${agentPackage.preset}" must set maxToolRounds to at least 1.`);
@@ -114,6 +130,19 @@ export function validateManifestShape(preset: string, manifest: LoadedAgentPacka
       errors.push(`Agent package "${preset}" must set extends to a string when provided.`);
     } else if (manifest.extends.trim().length === 0) {
       errors.push(`Agent package "${preset}" must set extends to a non-empty string when provided.`);
+    }
+  }
+
+  if (manifest.promptFiles !== undefined) {
+    if (!Array.isArray(manifest.promptFiles)) {
+      errors.push(`Agent package "${preset}" must set promptFiles to an array when provided.`);
+    } else {
+      for (const fileName of manifest.promptFiles) {
+        if (typeof fileName !== 'string' || fileName.trim().length === 0) {
+          errors.push(`Agent package "${preset}" must set promptFiles entries to non-empty strings.`);
+          break;
+        }
+      }
     }
   }
 

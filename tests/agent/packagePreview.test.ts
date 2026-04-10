@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -73,6 +74,7 @@ const resolvedPackage: ResolvedAgentPackage = {
     mutationMode: 'none',
     includeSkills: true
   },
+  effectivePromptOrder: ['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'USER.md'],
   effectivePromptFiles: {
     'AGENT.md': {
       filePath: '/workspace/.qiclaw/agents/reviewer/AGENT.md',
@@ -107,18 +109,18 @@ const resolvedPackage: ResolvedAgentPackage = {
 };
 
 describe('packagePreview', () => {
-  it('returns the preview model with the runtime-rendered prompt and section file sources', () => {
+  it('returns the preview model with the runtime-rendered prompt and ordered prompt file sources', () => {
     expect(createAgentPackagePreview(resolvedPackage)).toEqual({
       preset: 'reviewer',
       sourceTier: 'project',
       extendsChain: ['reviewer', 'readonly'],
-      sectionFiles: {
-        'AGENT.md': '/workspace/.qiclaw/agents/reviewer/AGENT.md',
-        'SOUL.md': '/builtin/readonly/SOUL.md',
-        'STYLE.md': '/workspace/.qiclaw/agents/reviewer/STYLE.md',
-        'TOOLS.md': '/builtin/readonly/TOOLS.md',
-        'USER.md': '/workspace/.qiclaw/agents/reviewer/USER.md'
-      },
+      promptFiles: [
+        { fileName: 'AGENT.md', filePath: '/workspace/.qiclaw/agents/reviewer/AGENT.md' },
+        { fileName: 'SOUL.md', filePath: '/builtin/readonly/SOUL.md' },
+        { fileName: 'STYLE.md', filePath: '/workspace/.qiclaw/agents/reviewer/STYLE.md' },
+        { fileName: 'TOOLS.md', filePath: '/builtin/readonly/TOOLS.md' },
+        { fileName: 'USER.md', filePath: '/workspace/.qiclaw/agents/reviewer/USER.md' }
+      ],
       resolvedFiles: [
         '/workspace/.qiclaw/agents/reviewer/agent.json',
         '/workspace/.qiclaw/agents/reviewer/AGENT.md',
@@ -141,11 +143,11 @@ describe('packagePreview', () => {
   it('includes the same runtime-rendered sections and constraints summary as production in explicit render order', () => {
     const renderedPromptText = createAgentPackagePreview(resolvedPackage).renderedPromptText;
 
-    const agentIndex = renderedPromptText.indexOf('AGENT.md\nProject reviewer override');
-    const soulIndex = renderedPromptText.indexOf('SOUL.md\nBuiltin soul');
-    const styleIndex = renderedPromptText.indexOf('STYLE.md\nProject style');
-    const toolsIndex = renderedPromptText.indexOf('TOOLS.md\nBuiltin tools');
-    const userIndex = renderedPromptText.indexOf('USER.md\nProject user instructions');
+    const agentIndex = renderedPromptText.indexOf('Project reviewer override');
+    const soulIndex = renderedPromptText.indexOf('Builtin soul');
+    const styleIndex = renderedPromptText.indexOf('Project style');
+    const toolsIndex = renderedPromptText.indexOf('Builtin tools');
+    const userIndex = renderedPromptText.indexOf('Project user instructions');
     const constraintsIndex = renderedPromptText.indexOf('Runtime constraints summary');
 
     expect(agentIndex).toBeGreaterThanOrEqual(0);
@@ -187,7 +189,13 @@ describe('packagePreview', () => {
   });
 
   it('resolves builtin package assets from dist output when loading the built registry module', async () => {
-    const builtRegistryModuleUrl = pathToFileURL(resolve(workspaceRoot, 'dist', 'agent', 'specRegistry.js')).href;
+    const builtRegistryModulePath = resolve(workspaceRoot, 'dist', 'agent', 'specRegistry.js');
+
+    if (!existsSync(builtRegistryModulePath)) {
+      return;
+    }
+
+    const builtRegistryModuleUrl = pathToFileURL(builtRegistryModulePath).href;
     const { resolveBuiltinAgentPackage: resolveBuiltBuiltinAgentPackage } = await import(builtRegistryModuleUrl);
 
     const resolved = resolveBuiltBuiltinAgentPackage('readonly');

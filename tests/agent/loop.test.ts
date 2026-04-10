@@ -8,7 +8,7 @@ import { dispatchToolCall } from '../../src/agent/dispatcher.js';
 import { collectCompletedTurn, runAgentTurn, runAgentTurnStream } from '../../src/agent/loop.js';
 import { createAgentRuntime } from '../../src/agent/runtime.js';
 import { resolveBuiltinAgentPackage } from '../../src/agent/specRegistry.js';
-import type { AgentSpec, ResolvedAgentPackage } from '../../src/agent/spec.js';
+import type { ResolvedAgentPackage } from '../../src/agent/spec.js';
 import { createInMemoryMetricsObserver } from '../../src/telemetry/metrics.js';
 import {
   buildAnthropicMessagesRequest,
@@ -63,6 +63,7 @@ function createBridgeResolvedPackage(options: {
     effectivePolicy: options.policy,
     effectiveCompletion: options.completion,
     effectiveDiagnostics: options.diagnostics,
+    effectivePromptOrder: ['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'USER.md'],
     effectivePromptFiles: {
       'AGENT.md': {
         filePath: '/virtual/AGENT.md',
@@ -1332,7 +1333,7 @@ describe('agent loop', () => {
     expect(result.history.map((entry) => entry.role)).toEqual(['user', 'assistant', 'tool', 'assistant']);
   });
 
-  it('includes prompt assembly context only when each runtime context gate allows it', async () => {
+  it('includes prompt assembly context by default when no resolvedPackage policy gates it off', async () => {
     const seenRequests: string[][] = [];
     const provider = createScriptedProvider(
       [
@@ -1354,37 +1355,7 @@ describe('agent loop', () => {
       memoryText: 'Memory: user prefers concise answers',
       skillsText: 'Skills: concise_response',
       historySummary: 'Summary: prior attempt failed',
-      history: [{ role: 'assistant', content: 'Earlier answer.' }],
-      agentSpec: {
-        identity: {
-          purpose: 'Legacy prompt-only purpose',
-          behavioralFraming: 'Legacy prompt-only framing',
-          scopeBoundary: 'Legacy prompt-only boundary'
-        },
-        capabilities: {
-          allowedCapabilityClasses: ['read', 'write', 'search', 'exec_readonly', 'execute'],
-          operatingSurface: 'Legacy prompt-only operating surface',
-          capabilityExclusions: []
-        },
-        policies: {
-          safetyStance: 'Legacy prompt-only safety stance',
-          toolUsePolicy: 'Legacy prompt-only tool use policy',
-          escalationPolicy: 'Legacy prompt-only escalation policy',
-          mutationPolicy: 'Allow workspace edits.'
-        },
-        completion: {
-          completionMode: 'legacy-prompt-only-mode',
-          doneCriteriaShape: 'legacy-prompt-only-shape',
-          evidenceRequirement: 'legacy-prompt-only-evidence',
-          stopVsDoneDistinction: 'legacy-prompt-only-stop-vs-done',
-          maxToolRounds: 10
-        },
-        contextProfile: {
-          includeMemory: false,
-          includeSkills: false,
-          includeHistorySummary: false
-        }
-      }
+      history: [{ role: 'assistant', content: 'Earlier answer.' }]
     });
 
     expect(result.history).toEqual([
@@ -1394,14 +1365,15 @@ describe('agent loop', () => {
     ]);
     expect(seenRequests).toEqual([
       [
-        'system:Base prompt',
+        'system:Base prompt\n\nSkills: concise_response\n\nSummary: prior attempt failed',
+        'user:Memory: user prefers concise answers',
         'assistant:Earlier answer.',
         'user:Answer briefly.'
       ]
     ]);
   });
 
-  it('applies AgentSpec completion booleans to verification while keeping bridge prose as compatibility metadata', async () => {
+  it('uses default completion policy when no resolvedPackage completion metadata is provided', async () => {
     const calls: string[][] = [];
     const provider = createScriptedProvider([
       {
@@ -1416,46 +1388,18 @@ describe('agent loop', () => {
       baseSystemPrompt: 'Spec prompt',
       userInput: 'Answer briefly.',
       cwd: '/tmp/runtime',
-      maxToolRounds: 10,
-      agentSpec: {
-        identity: {
-          purpose: 'Legacy completion purpose',
-          behavioralFraming: 'Legacy completion framing',
-          scopeBoundary: 'Legacy completion boundary'
-        },
-        capabilities: {
-          allowedCapabilityClasses: ['read', 'write', 'search', 'exec_readonly', 'execute'],
-          operatingSurface: 'Legacy completion operating surface',
-          capabilityExclusions: []
-        },
-        policies: {
-          safetyStance: 'Legacy completion safety stance',
-          toolUsePolicy: 'Legacy completion tool use policy',
-          escalationPolicy: 'Legacy completion escalation policy',
-          mutationPolicy: 'Allow workspace edits.'
-        },
-        completion: {
-          completionMode: 'Single-turn task completion with evidence-aware verification.',
-          doneCriteriaShape: 'Return a non-empty final answer and provide tool evidence when the task requires inspection.',
-          evidenceRequirement: 'Use direct project evidence for inspection-style claims.',
-          stopVsDoneDistinction: 'A provider stop is not enough unless the final answer satisfies verification criteria.',
-          maxToolRounds: 10,
-          requiresToolEvidence: false,
-          requiresSubstantiveFinalAnswer: true,
-          forbidSuccessAfterToolErrors: true
-        }
-      }
+      maxToolRounds: 10
     });
 
     expect(result.doneCriteria).toMatchObject({
       requiresToolEvidence: false,
-      requiresSubstantiveFinalAnswer: true,
-      forbidSuccessAfterToolErrors: true
+      requiresSubstantiveFinalAnswer: false,
+      forbidSuccessAfterToolErrors: false
     });
-    expect(result.doneCriteria.completionMode).toBe('Single-turn task completion with evidence-aware verification.');
+    expect(result.doneCriteria.completionMode).toBeUndefined();
     expect(calls).toEqual([['system:Spec prompt', 'user:Answer briefly.']]);
-    expect(result.verification.isVerified).toBe(false);
-    expect(result.verification.finalAnswerIsSubstantive).toBe(false);
+    expect(result.verification.isVerified).toBe(true);
+    expect(result.verification.finalAnswerIsSubstantive).toBe(true);
     expect(result.verification.noUnresolvedToolErrors).toBe(true);
   });
 
@@ -1699,7 +1643,6 @@ describe('agent loop', () => {
     expect(runtime.provider.name).toBe('anthropic');
     expect(runtime.provider.model).toBe('claude-sonnet-4-20250514');
     expect(runtime.observer.record).toBeTypeOf('function');
-    expect(runtime.agentSpec?.capabilities.allowedCapabilityClasses).toEqual(['read', 'write', 'search', 'exec_readonly', 'execute']);
     expect(runtime.resolvedPackage).toMatchObject({
       preset: 'default',
       sourceTier: 'builtin',
@@ -1717,7 +1660,7 @@ describe('agent loop', () => {
         redactionSensitivity: 'standard'
       }
     });
-    expect(runtime.systemPrompt).toContain('AGENT.md');
+    expect(runtime.systemPrompt).toContain('Purpose: Handle a single bounded task inside the QiClaw CLI runtime.');
     expect(runtime.systemPrompt).toContain('- Allowed capability classes: read, write, search, exec_readonly, execute');
     expect(runtime.systemPrompt).toContain('Runtime constraints summary');
     expect(runtime.maxToolRounds).toBe(10);
@@ -1764,10 +1707,9 @@ describe('agent loop', () => {
       resolvedPackage
     });
 
-    expect(runtime.agentSpec).toBeUndefined();
     expect(runtime.resolvedPackage).toBe(resolvedPackage);
     expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['read_file', 'search']);
-    expect(runtime.systemPrompt).toContain('AGENT.md');
+    expect(runtime.systemPrompt).toContain('Purpose: Bridge agent purpose');
     expect(runtime.systemPrompt).toContain('Bridge agent purpose');
     expect(runtime.systemPrompt).toContain('- Include memory: no');
     expect(runtime.maxToolRounds).toBe(3);
@@ -1812,7 +1754,7 @@ describe('agent loop', () => {
     });
   });
 
-  it('prefers resolvedPackage context gating over legacy agentSpec contextProfile on the runtime path', async () => {
+  it('uses resolvedPackage-only context gating on the runtime path', async () => {
     const seenRequests: string[][] = [];
     const provider = createScriptedProvider([
       {
@@ -1832,39 +1774,6 @@ describe('agent loop', () => {
         forbidSuccessAfterToolErrors: false
       }
     });
-    const legacyAgentSpec: AgentSpec = {
-      identity: {
-        purpose: 'Legacy bridge purpose',
-        behavioralFraming: 'Legacy framing',
-        scopeBoundary: 'Legacy boundary'
-      },
-      capabilities: {
-        allowedCapabilityClasses: ['read', 'write', 'search', 'exec_readonly', 'execute'],
-        operatingSurface: 'Legacy operating surface',
-        capabilityExclusions: []
-      },
-      policies: {
-        safetyStance: 'Legacy safety stance',
-        toolUsePolicy: 'Legacy tool use policy',
-        escalationPolicy: 'Legacy escalation policy',
-        mutationPolicy: 'Allow workspace edits.'
-      },
-      completion: {
-        completionMode: 'legacy-mode',
-        doneCriteriaShape: 'legacy-shape',
-        evidenceRequirement: 'legacy-evidence',
-        stopVsDoneDistinction: 'legacy-stop-vs-done',
-        maxToolRounds: 9,
-        requiresToolEvidence: true,
-        requiresSubstantiveFinalAnswer: true,
-        forbidSuccessAfterToolErrors: true
-      },
-      contextProfile: {
-        includeMemory: true,
-        includeSkills: true,
-        includeHistorySummary: true
-      }
-    };
 
     const result = await runAgentTurn({
       provider,
@@ -1873,7 +1782,6 @@ describe('agent loop', () => {
       userInput: 'Answer briefly.',
       cwd: '/tmp/runtime-bridge-context',
       maxToolRounds: 2,
-      agentSpec: legacyAgentSpec,
       resolvedPackage,
       memoryText: 'Memory: should be hidden',
       skillsText: 'Skills: should be hidden',
@@ -1891,7 +1799,7 @@ describe('agent loop', () => {
     expect(result.history.at(-1)?.content).toBe('Done.');
   });
 
-  it('prefers resolvedPackage completion metadata and policy over legacy agentSpec completion on the runtime path', async () => {
+  it('uses resolvedPackage-only completion metadata and policy on the runtime path', async () => {
     const provider = createScriptedProvider([
       {
         message: { role: 'assistant', content: 'Done.' },
@@ -1913,34 +1821,6 @@ describe('agent loop', () => {
         stopVsDoneDistinction: 'resolved-stop-vs-done'
       }
     });
-    const legacyAgentSpec: AgentSpec = {
-      identity: {
-        purpose: 'Legacy bridge purpose',
-        behavioralFraming: 'Legacy framing',
-        scopeBoundary: 'Legacy boundary'
-      },
-      capabilities: {
-        allowedCapabilityClasses: ['read', 'write', 'search', 'exec_readonly', 'execute'],
-        operatingSurface: 'Legacy operating surface',
-        capabilityExclusions: []
-      },
-      policies: {
-        safetyStance: 'Legacy safety stance',
-        toolUsePolicy: 'Legacy tool use policy',
-        escalationPolicy: 'Legacy escalation policy',
-        mutationPolicy: 'Allow workspace edits.'
-      },
-      completion: {
-        completionMode: 'legacy-mode',
-        doneCriteriaShape: 'legacy-shape',
-        evidenceRequirement: 'legacy-evidence',
-        stopVsDoneDistinction: 'legacy-stop-vs-done',
-        maxToolRounds: 9,
-        requiresToolEvidence: true,
-        requiresSubstantiveFinalAnswer: true,
-        forbidSuccessAfterToolErrors: true
-      }
-    };
 
     const result = await runAgentTurn({
       provider,
@@ -1949,7 +1829,6 @@ describe('agent loop', () => {
       userInput: 'Answer briefly.',
       cwd: '/tmp/runtime-bridge-completion',
       maxToolRounds: 2,
-      agentSpec: legacyAgentSpec,
       resolvedPackage
     });
 
@@ -1979,10 +1858,9 @@ describe('agent loop', () => {
     });
 
     expect(runtime.cwd).toBe('/tmp/runtime-readonly');
-    expect(runtime.agentSpec?.capabilities.allowedCapabilityClasses).toEqual(['read', 'search', 'exec_readonly']);
     expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['read_file', 'search', 'shell_readonly']);
     expect(runtime.maxToolRounds).toBe(6);
-    expect(runtime.systemPrompt).toContain('AGENT');
+    expect(runtime.systemPrompt).toContain('Purpose: Inspect the project surface and report findings without making edits.');
     expect(runtime.systemPrompt).toContain('- Allowed capability classes: read, search, exec_readonly');
     expect(runtime.systemPrompt).toContain('- Mutation mode: none');
     expect(runtime.systemPrompt).toContain('Runtime constraints summary');

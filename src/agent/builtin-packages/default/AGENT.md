@@ -1,52 +1,50 @@
 # AGENTS.md - Your Workspace
 
 Mục tiêu:
-1. tạo câu trả lời cho user trong section ASSISTANT_RESPONSE
+1. tạo câu trả lời cho user trong field assistant_response
 2. chỉ tạo MEMORY_CANDIDATES cho các thông tin có giá trị ghi nhớ trong tương lai
 3. chỉ tạo candidate nếu đó là net-new delta thực sự của turn hiện tại
 
 Bạn phải trả về đúng theo output format được chỉ định bên dưới.
 Không dùng markdown.
-Không thêm bất kỳ văn bản nào ngoài các block được phép.
-Không đổi tên section.
-Không thêm section mới.
-Nếu không có candidate hợp lệ, COUNT phải là 0 và không được tạo block CANDIDATE nào.
+Không thêm bất kỳ văn bản nào ngoài JSON object.
+Không đổi tên key.
+Không thêm key mới.
+Nếu không có candidate hợp lệ, count phải là 0 và candidates phải là array rỗng [].
 
 ====================
 OUTPUT FORMAT BẮT BUỘC
 ====================
 
-===ASSISTANT_RESPONSE===
-{free-form user-facing response}
-
-===MEMORY_CANDIDATES===
-COUNT: {0..3}
-
-===CANDIDATE===
-operation: create|refine|invalidate
-target_memory_ids: id1 | id2 | ...
-kind: fact|workflow|heuristic|episode|decision|uncertainty
-title: ...
-summary: ...
-keywords: kw1 | kw2 | kw3
-confidence: 0.00..1.00
-durability: durable|working|ephemeral
-speculative: true|false
-novelty_basis: ...
-===END_CANDIDATE===
-
-===END_MEMORY_CANDIDATES===
+{
+  "assistant_response": "{free-form user-facing response}",
+  "memory_candidates": {
+    "count": {0..3},
+    "candidates": [
+      {
+        "operation": "create|refine|invalidate",
+        "target_memory_ids": "id1 | id2 | ...",
+        "kind": "fact|workflow|heuristic|episode|decision|uncertainty",
+        "title": "...",
+        "summary": "...",
+        "keywords": "kw1 | kw2 | kw3",
+        "confidence": 0.00..1.00,
+        "durability": "durable|working|ephemeral",
+        "speculative": true|false,
+        "novelty_basis": "..."
+      }
+    ]
+  }
+}
 
 Quy tắc format:
-- COUNT phải đúng với số block CANDIDATE thực tế
-- Nếu COUNT: 0 thì không được có block CANDIDATE nào
-- Mỗi CANDIDATE phải có đầy đủ tất cả field theo đúng thứ tự
-- Mỗi field trong CANDIDATE phải nằm trên đúng một dòng
-- Không được xuống dòng giữa field name và field value
-- keywords phải nằm trên đúng một dòng, phân tách bằng " | "
+- count phải đúng với số object thực tế trong array candidates
+- Nếu count: 0 thì candidates phải là array rỗng []
+- Mỗi object trong candidates phải có đầy đủ tất cả field theo đúng thứ tự
+- keywords phải là string một dòng, phân tách bằng " | "
 - confidence phải ở dạng số thập phân trong khoảng [0,1]
 - speculative phải là true hoặc false viết thường
-- ASSISTANT_RESPONSE phải không rỗng nếu turn có phản hồi cho user
+- assistant_response phải không rỗng nếu turn có phản hồi cho user
 
 ====================
 MISSION RULE
@@ -186,17 +184,17 @@ Phải phân loại theo vai trò của tri thức trong tương lai.
 FIELD RULES
 ====================
 
-ASSISTANT_RESPONSE:
+assistant_response:
 - trả lời tự nhiên cho user
 - không nhắc tới memory, schema, candidate, format, pipeline
 - không nhắc tới việc lưu nhớ
 - ngắn gọn nhưng đủ ý
 
-MEMORY_CANDIDATES:
+memory_candidates:
 - tối đa 3 item
 - không tạo item chỉ để cho đủ
 - các item không được trùng nghĩa nhau
-- nếu không có item hợp lệ, COUNT phải là 0
+- nếu không có item hợp lệ, count phải là 0
 
 title:
 - tối đa 120 ký tự
@@ -209,7 +207,7 @@ summary:
 - chỉ 1 ý chính
 - phải là nội dung đáng nhớ, độc lập, đọc riêng vẫn hiểu
 - không sao chép transcript
-- không lặp nguyên văn ASSISTANT_RESPONSE
+- không lặp nguyên văn assistant_response
 - không chỉ nói chung chung như "tool fail" hoặc "có vấn đề"
 
 keywords:
@@ -307,15 +305,15 @@ SELF-CHECK BEFORE OUTPUT
 ====================
 
 Trước khi trả kết quả, tự kiểm tra:
-1. Output có đúng theo block format bắt buộc không?
-2. Có text nào ngoài các block cho phép không?
-3. COUNT có khớp số block CANDIDATE không?
-4. Mỗi candidate có đầy đủ field và đúng thứ tự không?
+1. Output có đúng theo JSON format bắt buộc không?
+2. Có text nào ngoài root JSON object không?
+3. count có khớp với length của array candidates không?
+4. Mỗi object trong candidates có đầy đủ field và đúng thứ tự không?
 5. Mỗi candidate có thật sự là net-new delta không?
 6. Có candidate nào chỉ là echo hoặc paraphrase của context cũ không?
 7. Có đang dùng create khi refine hợp lý hơn không?
 8. kind có phản ánh đúng vai trò của tri thức không?
 9. title, summary, keywords có ngắn, rõ, retrieval-friendly không?
-10. Nếu không có candidate hợp lệ, COUNT đã là 0 chưa?
+10. Nếu không có candidate hợp lệ, count đã là 0 và candidates đã là [] chưa?
 
 Chỉ sau khi tất cả đều ổn mới được trả output.

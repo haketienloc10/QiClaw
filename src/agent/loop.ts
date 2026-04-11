@@ -107,6 +107,225 @@ interface TurnTelemetryState {
   finalAssistantToolCallChars: number;
 }
 
+function extractAssistantResponseText(raw: string): { text: string; parsed: boolean } {
+  try {
+    const parsed = JSON.parse(raw) as { assistant_response?: unknown };
+
+    if (typeof parsed.assistant_response !== 'string' || parsed.assistant_response.length === 0) {
+      return { text: raw, parsed: false };
+    }
+
+    return { text: parsed.assistant_response, parsed: true };
+  } catch {
+    return { text: raw, parsed: false };
+  }
+}
+
+function decodeJsonStringEscape(escape: string): string | undefined {
+  switch (escape) {
+    case '"':
+      return '"';
+    case '\\':
+      return '\\';
+    case '/':
+      return '/';
+    case 'b':
+      return '\b';
+    case 'f':
+      return '\f';
+    case 'n':
+      return '\n';
+    case 'r':
+      return '\r';
+    case 't':
+      return '\t';
+    default:
+      return undefined;
+  }
+}
+
+type AssistantResponseParserMode = 'prefix' | 'value' | 'done';
+
+interface AssistantResponseParserState {
+  raw: string;
+  mode: AssistantResponseParserMode;
+  prefixStepIndex: number;
+  prefixLiteralIndex: number;
+  isEscaping: boolean;
+  unicodeBuffer: string;
+  parsedSuccessfully: boolean;
+}
+
+const ASSISTANT_RESPONSE_PREFIX_STEPS = ['{', '"assistant_response"', ':', '"'] as const;
+
+function createAssistantResponseParserState(): AssistantResponseParserState {
+  return {
+    raw: '',
+    mode: 'prefix',
+    prefixStepIndex: 0,
+    prefixLiteralIndex: 0,
+    isEscaping: false,
+    unicodeBuffer: '',
+    parsedSuccessfully: false
+  };
+}
+
+function fallbackAssistantResponseRaw(state: AssistantResponseParserState): string[] {
+  return state.raw.length > 0 ? [state.raw] : [];
+}
+
+function consumeAssistantResponsePrefixChar(state: AssistantResponseParserState, char: string): boolean {
+  while (state.prefixStepIndex < ASSISTANT_RESPONSE_PREFIX_STEPS.length) {
+    const step = ASSISTANT_RESPONSE_PREFIX_STEPS[state.prefixStepIndex];
+
+    if (step === '{' || step === ':') {
+      if (/\s/.test(char)) {
+        return true;
+      }
+
+      if (char !== step) {
+        return false;
+      }
+
+      state.prefixStepIndex += 1;
+      state.prefixLiteralIndex = 0;
+      return true;
+    }
+
+    if (step === '"') {
+      if (/\s/.test(char)) {
+        return true;
+      }
+
+      if (char !== '"') {
+        return false;
+      }
+
+      state.prefixStepIndex += 1;
+      state.prefixLiteralIndex = 0;
+      state.mode = 'value';
+      return true;
+    }
+
+    if (/\s/.test(char) && state.prefixLiteralIndex === 0) {
+      return true;
+    }
+
+    if (char !== step[state.prefixLiteralIndex]) {
+      return false;
+    }
+
+    state.prefixLiteralIndex += 1;
+    if (state.prefixLiteralIndex === step.length) {
+      state.prefixStepIndex += 1;
+      state.prefixLiteralIndex = 0;
+    }
+    return true;
+  }
+
+  return false;
+}
+
+function consumeAssistantResponseValueChar(state: AssistantResponseParserState, char: string): string | undefined {
+  if (state.unicodeBuffer.length > 0) {
+    if (!/^[0-9a-fA-F]$/.test(char)) {
+      state.mode = 'done';
+      return undefined;
+    }
+
+    state.unicodeBuffer += char;
+    if (state.unicodeBuffer.length === 4) {
+      const decoded = String.fromCodePoint(Number.parseInt(state.unicodeBuffer, 16));
+      state.unicodeBuffer = '';
+      return decoded;
+    }
+
+    return '';
+  }
+
+  if (state.isEscaping) {
+    if (char === 'u') {
+      state.unicodeBuffer = '';
+      state.isEscaping = false;
+      return '';
+    }
+
+    const decoded = decodeJsonStringEscape(char);
+    if (decoded === undefined) {
+      state.mode = 'done';
+      return undefined;
+    }
+
+    state.isEscaping = false;
+    return decoded;
+  }
+
+  if (char === '\\') {
+    state.isEscaping = true;
+    return '';
+  }
+
+  if (char === '"') {
+    state.parsedSuccessfully = true;
+    state.mode = 'done';
+    return '';
+  }
+
+  return char;
+}
+
+function pushAssistantResponseChunk(state: AssistantResponseParserState, chunk: string): string[] {
+  state.raw += chunk;
+  let output = '';
+
+  for (const char of chunk) {
+    if (state.mode === 'done') {
+      continue;
+    }
+
+    if (state.mode === 'prefix') {
+      if (!consumeAssistantResponsePrefixChar(state, char)) {
+        state.mode = 'done';
+        return [];
+      }
+      continue;
+    }
+
+    const decoded = consumeAssistantResponseValueChar(state, char);
+    if (decoded === undefined) {
+      return [];
+    }
+
+    output += decoded;
+  }
+
+  return output.length > 0 ? [output] : [];
+}
+
+function finishAssistantResponseStream(state: AssistantResponseParserState): string[] {
+  if (state.parsedSuccessfully && !state.isEscaping && state.unicodeBuffer.length === 0) {
+    return [];
+  }
+
+  return fallbackAssistantResponseRaw(state);
+}
+
+function createAssistantResponseStreamParser(): {
+  push(chunk: string): string[];
+  finish(): string[];
+} {
+  const state = createAssistantResponseParserState();
+
+  return {
+    push(chunk: string): string[] {
+      return pushAssistantResponseChunk(state, chunk);
+    },
+    finish(): string[] {
+      return finishAssistantResponseStream(state);
+    }
+  };
+}
+
 export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTurnResult> {
   const execution = createRunAgentTurnExecution(input);
   const drainTurnStream = (async () => {
@@ -333,7 +552,9 @@ export async function* runAgentTurnStream(
 
       const providerStartedAt = Date.now();
       let response: ProviderResponse;
+      let displayText = '';
       const startedToolCallIds = new Set<string>();
+      const assistantStreamParser = createAssistantResponseStreamParser();
 
       if (typeof input.provider.stream === 'function') {
         try {
@@ -355,7 +576,11 @@ export async function* runAgentTurnStream(
             }
 
             if (event.type === 'text_delta') {
-              yield { type: 'assistant_text_delta', text: event.text };
+              for (const text of assistantStreamParser.push(event.text)) {
+                if (text.length > 0) {
+                  yield { type: 'assistant_text_delta', text };
+                }
+              }
               continue;
             }
 
@@ -385,6 +610,12 @@ export async function* runAgentTurnStream(
             }
           }
 
+          for (const text of assistantStreamParser.finish()) {
+            if (text.length > 0) {
+              yield { type: 'assistant_text_delta', text };
+            }
+          }
+
           response = await collectProviderStream((async function* () {
             for (const event of providerEvents) {
               yield event;
@@ -404,9 +635,6 @@ export async function* runAgentTurnStream(
             input.provider.name
           );
           yield { type: 'provider_started', provider: input.provider.name, model: input.provider.model };
-          if (response.message.content.length > 0) {
-            yield { type: 'assistant_text_delta', text: response.message.content };
-          }
         }
       } else {
         response = await withProviderTimeout(
@@ -415,9 +643,12 @@ export async function* runAgentTurnStream(
           input.provider.name
         );
         yield { type: 'provider_started', provider: input.provider.name, model: input.provider.model };
-        if (response.message.content.length > 0) {
-          yield { type: 'assistant_text_delta', text: response.message.content };
-        }
+      }
+
+      const extractedAssistantResponse = extractAssistantResponseText(response.message.content);
+      displayText = extractedAssistantResponse.parsed ? extractedAssistantResponse.text : response.message.content;
+      if (typeof input.provider.stream !== 'function' && displayText.length > 0) {
+        yield { type: 'assistant_text_delta', text: displayText };
       }
 
       if (response.toolCalls.length > 0) {
@@ -437,12 +668,17 @@ export async function* runAgentTurnStream(
         )
       );
 
-      history.push(response.message);
-      finalAnswer = response.message.content;
+      const assistantMessage: Message = {
+        ...response.message,
+        content: displayText
+      };
+
+      history.push(assistantMessage);
+      finalAnswer = displayText;
 
       yield {
         type: 'assistant_message_completed',
-        text: response.message.content,
+        text: displayText,
         toolCalls: response.toolCalls.length > 0 ? response.toolCalls : undefined
       };
 

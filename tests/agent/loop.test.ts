@@ -47,6 +47,7 @@ afterEach(() => {
 
 const defaultResolvedPackage = resolveBuiltinAgentPackage('default');
 const readonlyResolvedPackage = resolveBuiltinAgentPackage('readonly');
+const toolInput = { action: 'read', path: 'note.txt' };
 
 function createBridgeResolvedPackage(options: {
   policy: ResolvedAgentPackage['effectivePolicy'];
@@ -230,7 +231,7 @@ describe('provider normalization, provider, and dispatcher', () => {
           {
             id: 'call-read-1',
             name: 'file',
-            input: { action: 'read', path: 'note.txt' }
+            input: toolInput
           }
         ]
       })
@@ -242,7 +243,7 @@ describe('provider normalization, provider, and dispatcher', () => {
           {
             id: 'call-read-1',
             name: 'file',
-            input: { action: 'read', path: 'note.txt' }
+            input: toolInput
           }
         ]
       },
@@ -250,7 +251,7 @@ describe('provider normalization, provider, and dispatcher', () => {
         {
           id: 'call-read-1',
           name: 'file',
-          input: { action: 'read', path: 'note.txt' }
+          input: toolInput
         }
       ]
     } satisfies ProviderResponse);
@@ -263,7 +264,7 @@ describe('provider normalization, provider, and dispatcher', () => {
           {
             id: 'call-read-1',
             name: 'file',
-            input: { action: 'read', path: 'note.txt' }
+            input: toolInput
           }
         ]
       })
@@ -275,7 +276,7 @@ describe('provider normalization, provider, and dispatcher', () => {
           {
             id: 'call-read-1',
             name: 'file',
-            input: { action: 'read', path: 'note.txt' }
+            input: toolInput
           }
         ]
       },
@@ -283,7 +284,7 @@ describe('provider normalization, provider, and dispatcher', () => {
         {
           id: 'call-read-1',
           name: 'file',
-          input: { action: 'read', path: 'note.txt' }
+          input: toolInput
         }
       ]
     } satisfies ProviderResponse);
@@ -379,13 +380,13 @@ describe('provider normalization, provider, and dispatcher', () => {
   it('extracts Anthropic text content and tool calls from mixed content blocks', () => {
     const text = readAnthropicTextContent([
       { type: 'text', text: 'I will inspect the file.' },
-      { type: 'tool_use', id: 'toolu_1', name: 'file', input: { action: 'read', path: 'note.txt' } },
+      { type: 'tool_use', id: 'toolu_1', name: 'file', input: toolInput },
       { type: 'text', text: ' Then I will summarize it.' }
     ]);
 
     const toolCalls = extractAnthropicToolCalls([
       { type: 'text', text: 'ignore me' },
-      { type: 'tool_use', id: 'toolu_1', name: 'file', input: { action: 'read', path: 'note.txt' } }
+      { type: 'tool_use', id: 'toolu_1', name: 'file', input: toolInput }
     ]);
 
     expect(text).toBe('I will inspect the file. Then I will summarize it.');
@@ -393,7 +394,7 @@ describe('provider normalization, provider, and dispatcher', () => {
       {
         id: 'toolu_1',
         name: 'file',
-        input: { action: 'read', path: 'note.txt' }
+        input: toolInput
       }
     ]);
   });
@@ -411,7 +412,7 @@ describe('provider normalization, provider, and dispatcher', () => {
             {
               id: 'toolu_123',
               name: 'file',
-              input: { action: 'read', path: 'note.txt' }
+              input: toolInput
             }
           ]
         } as any,
@@ -432,7 +433,7 @@ describe('provider normalization, provider, and dispatcher', () => {
         role: 'assistant',
         content: [
           { type: 'text', text: 'I will inspect it.' },
-          { type: 'tool_use', id: 'toolu_123', name: 'file', input: { action: 'read', path: 'note.txt' } }
+          { type: 'tool_use', id: 'toolu_123', name: 'file', input: toolInput }
         ]
       },
       {
@@ -540,7 +541,7 @@ describe('provider normalization, provider, and dispatcher', () => {
             {
               id: 'call_123',
               name: 'file',
-              input: { action: 'read', path: 'note.txt' }
+              input: toolInput
             }
           ]
         } as any,
@@ -633,7 +634,7 @@ describe('provider normalization, provider, and dispatcher', () => {
       {
         id: 'call_1',
         name: 'file',
-        input: { action: 'read', path: 'note.txt' }
+        input: toolInput
       },
       {
         id: 'call_2',
@@ -692,7 +693,7 @@ describe('provider normalization, provider, and dispatcher', () => {
     const toolCall: ToolCallRequest = {
       id: 'call-read-1',
       name: 'file',
-      input: { action: 'read', path: 'note.txt' }
+      input: toolInput
     };
 
     await expect(dispatchToolCall(toolCall, { cwd: workspace })).resolves.toEqual({
@@ -831,14 +832,13 @@ describe('agent loop', () => {
       events.push(event as { type: string; [key: string]: unknown });
     }
 
-    expect(events.slice(0, 5)).toEqual([
+    expect(events.slice(0, 4)).toEqual([
       { type: 'turn_started' },
       { type: 'provider_started', provider: 'openai', model: 'gpt-test' },
-      { type: 'assistant_text_delta', text: 'Hello' },
-      { type: 'assistant_text_delta', text: ' world' },
+      { type: 'assistant_text_delta', text: 'Hello world' },
       { type: 'assistant_message_completed', text: 'Hello world', toolCalls: undefined }
     ]);
-    expect(events[5]).toMatchObject({
+    expect(events[4]).toMatchObject({
       type: 'turn_completed',
       finalAnswer: 'Hello world',
       stopReason: 'completed',
@@ -897,6 +897,117 @@ describe('agent loop', () => {
     expect(result.toolRoundsUsed).toBe(0);
   });
 
+  it('shows only assistant_response when a generate response uses the JSON output format', async () => {
+    const generate = vi.fn(async () => normalizeProviderResponse({
+      content: JSON.stringify({
+        assistant_response: 'Chào bạn',
+        memory_candidates: {
+          count: 0,
+          candidates: []
+        }
+      })
+    }));
+    const provider: ModelProvider = {
+      name: 'scripted-generate-only',
+      model: 'test-model',
+      generate
+    };
+
+    const events = await Array.fromAsync(runAgentTurnStream({
+      provider,
+      availableTools: [],
+      baseSystemPrompt: 'system',
+      userInput: 'say hi',
+      cwd: process.cwd(),
+      maxToolRounds: 1
+    }));
+
+    expect(events).toEqual([
+      { type: 'turn_started' },
+      { type: 'provider_started', provider: 'scripted-generate-only', model: 'test-model' },
+      { type: 'assistant_text_delta', text: 'Chào bạn' },
+      { type: 'assistant_message_completed', text: 'Chào bạn', toolCalls: undefined },
+      {
+        type: 'turn_completed',
+        finalAnswer: 'Chào bạn',
+        stopReason: 'completed',
+        history: [
+          { role: 'user', content: 'say hi' },
+          { role: 'assistant', content: 'Chào bạn' }
+        ],
+        toolRoundsUsed: 0,
+        doneCriteria: expect.objectContaining({
+          goal: 'say hi',
+          checklist: ['say hi'],
+          requiresToolEvidence: false
+        }),
+        turnCompleted: true
+      }
+    ]);
+  });
+
+  it('falls back to raw text when assistant_response is missing from JSON output', async () => {
+    const raw = JSON.stringify({
+      memory_candidates: {
+        count: 0,
+        candidates: []
+      }
+    });
+    const generate = vi.fn(async () => normalizeProviderResponse({
+      content: raw
+    }));
+    const provider: ModelProvider = {
+      name: 'scripted-generate-only',
+      model: 'test-model',
+      generate
+    };
+
+    const result = await runAgentTurn({
+      provider,
+      availableTools: [],
+      baseSystemPrompt: 'system',
+      userInput: 'say hi',
+      cwd: process.cwd(),
+      maxToolRounds: 1
+    });
+
+    expect(result.finalAnswer).toBe(raw);
+    expect(result.history).toEqual([
+      { role: 'user', content: 'say hi' },
+      {
+        role: 'assistant',
+        content: raw
+      }
+    ]);
+  });
+
+  it('falls back to raw text when response is not valid JSON', async () => {
+    const raw = 'Bạn hãy in nguyên văn chuỗi {"assistant_response": để minh họa parser JSON.';
+    const generate = vi.fn(async () => normalizeProviderResponse({
+      content: raw
+    }));
+    const provider: ModelProvider = {
+      name: 'scripted-generate-only',
+      model: 'test-model',
+      generate
+    };
+
+    const result = await runAgentTurn({
+      provider,
+      availableTools: [],
+      baseSystemPrompt: 'system',
+      userInput: 'show marker literally',
+      cwd: process.cwd(),
+      maxToolRounds: 1
+    });
+
+    expect(result.finalAnswer).toBe(raw);
+    expect(result.history).toEqual([
+      { role: 'user', content: 'show marker literally' },
+      { role: 'assistant', content: raw }
+    ]);
+  });
+
   it('keeps runAgentTurn result parity with the collected turn_completed stream payload', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'agent-loop-stream-parity-'));
     await writeFile(join(workspace, 'note.txt'), 'agent note', 'utf8');
@@ -908,7 +1019,7 @@ describe('agent loop', () => {
           {
             id: 'call-read-parity-1',
             name: 'file',
-            input: { action: 'read', path: 'note.txt' }
+            input: toolInput
           }
         ]
       }),
@@ -970,7 +1081,7 @@ describe('agent loop', () => {
             type: 'tool_call' as const,
             id: 'call-read-stream-1',
             name: 'file',
-            input: { action: 'read', path: 'note.txt' }
+            input: toolInput
           };
           yield {
             type: 'finish' as const,
@@ -1026,13 +1137,13 @@ describe('agent loop', () => {
     expect(events).toEqual([
       { type: 'turn_started' },
       { type: 'provider_started', provider: 'openai', model: 'gpt-test' },
-      { type: 'assistant_text_delta', text: 'Checking note' },
       {
         type: 'tool_call_started',
         id: 'call-read-stream-1',
         name: 'file',
-        input: { action: 'read', path: 'note.txt' }
+        input: toolInput
       },
+      { type: 'assistant_text_delta', text: 'Checking note' },
       {
         type: 'assistant_message_completed',
         text: 'Checking note',
@@ -1040,7 +1151,7 @@ describe('agent loop', () => {
           {
             id: 'call-read-stream-1',
             name: 'file',
-            input: { action: 'read', path: 'note.txt' }
+            input: toolInput
           }
         ]
       },
@@ -1067,7 +1178,7 @@ describe('agent loop', () => {
               {
                 id: 'call-read-stream-1',
                 name: 'file',
-                input: { action: 'read', path: 'note.txt' }
+                input: toolInput
               }
             ]
           },
@@ -1109,7 +1220,7 @@ describe('agent loop', () => {
             type: 'tool_call' as const,
             id: 'call-read-stream-history',
             name: 'file',
-            input: { action: 'read', path: 'note.txt' }
+            input: toolInput
           };
           yield {
             type: 'finish' as const,
@@ -1166,14 +1277,13 @@ describe('agent loop', () => {
     expect(events).toEqual([
       { type: 'turn_started' },
       { type: 'provider_started', provider: 'openai', model: 'gpt-test' },
-      { type: 'assistant_text_delta', text: 'Checking ' },
-      { type: 'assistant_text_delta', text: 'note' },
       {
         type: 'tool_call_started',
         id: 'call-read-stream-history',
         name: 'file',
-        input: { action: 'read', path: 'note.txt' }
+        input: toolInput
       },
+      { type: 'assistant_text_delta', text: 'Checking note' },
       {
         type: 'assistant_message_completed',
         text: 'Checking note',
@@ -1181,7 +1291,7 @@ describe('agent loop', () => {
           {
             id: 'call-read-stream-history',
             name: 'file',
-            input: { action: 'read', path: 'note.txt' }
+            input: toolInput
           }
         ]
       },
@@ -1193,8 +1303,7 @@ describe('agent loop', () => {
         isError: false
       },
       { type: 'provider_started', provider: 'openai', model: 'gpt-test' },
-      { type: 'assistant_text_delta', text: 'Done ' },
-      { type: 'assistant_text_delta', text: 'reading note' },
+      { type: 'assistant_text_delta', text: 'Done reading note' },
       { type: 'assistant_message_completed', text: 'Done reading note', toolCalls: undefined },
       {
         type: 'turn_completed',
@@ -1209,7 +1318,7 @@ describe('agent loop', () => {
               {
                 id: 'call-read-stream-history',
                 name: 'file',
-                input: { action: 'read', path: 'note.txt' }
+                input: toolInput
               }
             ]
           },
@@ -1233,6 +1342,195 @@ describe('agent loop', () => {
     ]);
   });
 
+  it('streams assistant_response incrementally from a JSON streamed response and preserves tool calls', async () => {
+    let round = 0;
+    const executedToolCalls: string[] = [];
+    const provider: ModelProvider = {
+      name: 'openai',
+      model: 'gpt-test',
+      async *stream() {
+        round += 1;
+
+        yield { type: 'start' as const, provider: 'openai', model: 'gpt-test' };
+
+        if (round === 1) {
+          yield { type: 'text_delta' as const, text: '{"assistant_response":"Checking ' };
+          yield { type: 'text_delta' as const, text: 'note","memory_candidates":{"count":0,' };
+          yield { type: 'text_delta' as const, text: '"candidates":[]}}' };
+          yield {
+            type: 'tool_call' as const,
+            id: 'call-read-stream-structured',
+            name: 'file',
+            input: toolInput
+          };
+          yield {
+            type: 'finish' as const,
+            finish: { stopReason: 'tool_use' },
+            usage: { inputTokens: 10, outputTokens: 3, totalTokens: 13 }
+          };
+          return;
+        }
+
+        yield { type: 'text_delta' as const, text: '{"assistant_response":"Done\\n' };
+        yield { type: 'text_delta' as const, text: 'reading note","memory_candidates":{' };
+        yield { type: 'text_delta' as const, text: '"count":0,"candidates":[]}}' };
+        yield {
+          type: 'finish' as const,
+          finish: { stopReason: 'end_turn' },
+          usage: { inputTokens: 14, outputTokens: 4, totalTokens: 18 }
+        };
+      },
+      async generate() {
+        throw new Error('runAgentTurnStream should use provider.stream in this test');
+      }
+    };
+
+    const events: Array<{ type: string; [key: string]: unknown }> = [];
+    for await (const event of runAgentTurnStream({
+      provider,
+      availableTools: [
+        {
+          name: 'file',
+          description: 'Read test file',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              action: { type: 'string' },
+              path: { type: 'string' }
+            },
+            required: ['action', 'path'],
+            additionalProperties: false
+          },
+          async execute(input: { action: 'read'; path: string }) {
+            executedToolCalls.push(String(input.path));
+            return { content: `read:${String(input.path)}` };
+          }
+        }
+      ],
+      baseSystemPrompt: 'system',
+      userInput: 'read the note',
+      cwd: process.cwd(),
+      maxToolRounds: 2
+    })) {
+      events.push(event as { type: string; [key: string]: unknown });
+    }
+
+    expect(executedToolCalls).toEqual(['note.txt']);
+    expect(events.slice(0, 11)).toEqual([
+      { type: 'turn_started' },
+      { type: 'provider_started', provider: 'openai', model: 'gpt-test' },
+      { type: 'assistant_text_delta', text: 'Checking ' },
+      { type: 'assistant_text_delta', text: 'note' },
+      {
+        type: 'tool_call_started',
+        id: 'call-read-stream-structured',
+        name: 'file',
+        input: toolInput
+      },
+      {
+        type: 'assistant_message_completed',
+        text: 'Checking note',
+        toolCalls: [
+          {
+            id: 'call-read-stream-structured',
+            name: 'file',
+            input: toolInput
+          }
+        ]
+      },
+      {
+        type: 'tool_call_completed',
+        id: 'call-read-stream-structured',
+        name: 'file',
+        resultPreview: '{"content":"read:note.txt"}',
+        isError: false
+      },
+      { type: 'provider_started', provider: 'openai', model: 'gpt-test' },
+      { type: 'assistant_text_delta', text: 'Done\n' },
+      { type: 'assistant_text_delta', text: 'reading note' },
+      { type: 'assistant_message_completed', text: 'Done\nreading note', toolCalls: undefined }
+    ]);
+
+    expect(events[11]).toMatchObject({
+      type: 'turn_completed',
+      finalAnswer: 'Done\nreading note',
+      stopReason: 'completed',
+      history: [
+        { role: 'user', content: 'read the note' },
+        {
+          role: 'assistant',
+          content: 'Checking note',
+          toolCalls: [
+            {
+              id: 'call-read-stream-structured',
+              name: 'file',
+              input: toolInput
+            }
+          ]
+        },
+        {
+          role: 'tool',
+          name: 'file',
+          toolCallId: 'call-read-stream-structured',
+          content: 'read:note.txt',
+          isError: false
+        },
+        { role: 'assistant', content: 'Done\nreading note', toolCalls: undefined }
+      ],
+      toolRoundsUsed: 1,
+      doneCriteria: expect.objectContaining({
+        goal: 'read the note',
+        checklist: ['read the note'],
+        requiresToolEvidence: true
+      }),
+      turnCompleted: true
+    });
+  });
+
+  it('streams escaped quotes and backslashes from JSON assistant_response without changing text', async () => {
+    const provider: ModelProvider = {
+      name: 'openai',
+      model: 'gpt-test',
+      async *stream() {
+        yield { type: 'start' as const, provider: 'openai', model: 'gpt-test' };
+        yield { type: 'text_delta' as const, text: '{"assistant_response":"He said \\\"hi\\\" at C:\\\\tmp"' };
+        yield { type: 'text_delta' as const, text: ',"memory_candidates":{"count":0,"candidates":[]}}' };
+        yield {
+          type: 'finish' as const,
+          finish: { stopReason: 'end_turn' },
+          usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 }
+        };
+      },
+      async generate() {
+        throw new Error('runAgentTurn should collect from stream in this test');
+      }
+    };
+
+    const events = await Array.fromAsync(runAgentTurnStream({
+      provider,
+      availableTools: [],
+      baseSystemPrompt: 'system',
+      userInput: 'say hi',
+      cwd: process.cwd(),
+      maxToolRounds: 1
+    }));
+
+    expect(events.slice(0, 4)).toEqual([
+      { type: 'turn_started' },
+      { type: 'provider_started', provider: 'openai', model: 'gpt-test' },
+      { type: 'assistant_text_delta', text: 'He said "hi" at C:\\tmp' },
+      { type: 'assistant_message_completed', text: 'He said "hi" at C:\\tmp', toolCalls: undefined }
+    ]);
+    expect(events[4]).toMatchObject({
+      type: 'turn_completed',
+      finalAnswer: 'He said "hi" at C:\\tmp',
+      history: [
+        { role: 'user', content: 'say hi' },
+        { role: 'assistant', content: 'He said "hi" at C:\\tmp' }
+      ]
+    });
+  });
+
   it('does not emit duplicate tool_call_started events for repeated streamed tool call ids', async () => {
     let round = 0;
     const executedToolCalls: string[] = [];
@@ -1250,13 +1548,13 @@ describe('agent loop', () => {
             type: 'tool_call' as const,
             id: 'call-read-stream-duplicate',
             name: 'file',
-            input: { action: 'read', path: 'note.txt' }
+            input: toolInput
           };
           yield {
             type: 'tool_call' as const,
             id: 'call-read-stream-duplicate',
             name: 'file',
-            input: { action: 'read', path: 'note.txt' }
+            input: toolInput
           };
           yield {
             type: 'finish' as const,
@@ -1314,7 +1612,7 @@ describe('agent loop', () => {
         type: 'tool_call_started',
         id: 'call-read-stream-duplicate',
         name: 'file',
-        input: { action: 'read', path: 'note.txt' }
+        input: toolInput
       }
     ]);
     expect(events).toContainEqual({
@@ -1324,7 +1622,7 @@ describe('agent loop', () => {
         {
           id: 'call-read-stream-duplicate',
           name: 'file',
-          input: { action: 'read', path: 'note.txt' }
+          input: toolInput
         }
       ]
     });
@@ -1342,7 +1640,7 @@ describe('agent loop', () => {
           {
             id: 'call-read-1',
             name: 'file',
-            input: { action: 'read', path: 'note.txt' }
+            input: toolInput
           }
         ]
       },
@@ -1629,7 +1927,7 @@ describe('agent loop', () => {
           {
             id: 'call-read-1',
             name: 'file',
-            input: { action: 'read', path: 'note.txt' }
+            input: toolInput
           }
         ]
       },
@@ -1639,7 +1937,7 @@ describe('agent loop', () => {
           {
             id: 'call-read-2',
             name: 'file',
-            input: { action: 'read', path: 'note.txt' }
+            input: toolInput
           }
         ]
       }
@@ -1705,7 +2003,7 @@ describe('agent loop', () => {
           {
             id: 'call-read-1',
             name: 'file',
-            input: { action: 'read', path: 'note.txt' }
+            input: toolInput
           }
         ]
       },
@@ -1748,7 +2046,7 @@ describe('agent loop', () => {
           {
             id: 'call-read-1',
             name: 'file',
-            input: { action: 'read', path: 'note.txt' }
+            input: toolInput
           }
         ]
       },
@@ -2032,7 +2330,7 @@ describe('agent loop', () => {
     expect(runtime.resolvedPackage.effectivePolicy.allowedCapabilityClasses).toEqual(['read']);
     expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch', 'summary_tool']);
     expect(runtime.maxToolRounds).toBe(6);
-    expect(runtime.systemPrompt).toContain('Purpose: Inspect the project surface');
+    expect(runtime.systemPrompt).toContain('Behavioral framing: Be concise, inspection-focused, and explicit about evidence gathered from the project surface.');
     expect(runtime.systemPrompt).toContain('- Allowed capability classes: read');
     expect(runtime.systemPrompt).toContain('- Mutation mode: none');
     expect(runtime.systemPrompt).toContain('Runtime constraints summary');
@@ -2052,7 +2350,7 @@ describe('agent loop', () => {
           {
             id: 'call-read-telemetry',
             name: 'file',
-            input: { action: 'read', path: 'note.txt' }
+            input: toolInput
           }
         ],
         finish: {
@@ -2365,7 +2663,7 @@ describe('agent loop', () => {
             {
               id: 'call-read-telemetry',
               name: 'file',
-              input: { action: 'read', path: 'note.txt' }
+              input: toolInput
             }
           ]
         }).length,
@@ -2404,7 +2702,7 @@ describe('agent loop', () => {
               {
                 id: 'call-read-telemetry',
                 name: 'file',
-                input: { action: 'read', path: 'note.txt' }
+                input: toolInput
               }
             ]
           },
@@ -2439,7 +2737,7 @@ describe('agent loop', () => {
                 {
                   id: 'call-read-telemetry',
                   name: 'file',
-                  input: { action: 'read', path: 'note.txt' }
+                  input: toolInput
                 }
               ]
             }).length,
@@ -2570,7 +2868,7 @@ describe('agent loop', () => {
               {
                 id: 'call-read-telemetry',
                 name: 'file',
-                input: { action: 'read', path: 'note.txt' }
+                input: toolInput
               }
             ]
           },
@@ -2596,7 +2894,7 @@ describe('agent loop', () => {
             {
               id: 'call-read-telemetry',
               name: 'file',
-              input: { action: 'read', path: 'note.txt' }
+              input: toolInput
             }
           ]
         }).length,
@@ -2817,7 +3115,7 @@ describe('agent loop', () => {
           {
             id: 'call-read-stop',
             name: 'file',
-            input: { action: 'read', path: 'note.txt' }
+            input: toolInput
           }
         ]
       },
@@ -2827,7 +3125,7 @@ describe('agent loop', () => {
           {
             id: 'call-read-stop-2',
             name: 'file',
-            input: { action: 'read', path: 'note.txt' }
+            input: toolInput
           }
         ]
       }
@@ -3173,7 +3471,7 @@ describe('agent loop', () => {
               type: 'tool_call' as const,
               id: 'call_1',
               name: 'always_fails',
-              input: { action: 'read', path: 'note.txt' }
+              input: toolInput
             };
             yield {
               type: 'finish' as const,

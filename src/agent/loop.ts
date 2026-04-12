@@ -43,10 +43,24 @@ export interface RunAgentTurnInput {
 
 export type AgentTurnStopReason = 'completed' | 'max_tool_rounds_reached';
 
+export interface ModelMemoryCandidate {
+  operation: 'create' | 'refine' | 'invalidate';
+  target_memory_ids: string;
+  kind: 'fact' | 'workflow' | 'heuristic' | 'episode' | 'decision' | 'uncertainty';
+  title: string;
+  summary: string;
+  keywords: string;
+  confidence: number;
+  durability: 'durable' | 'working' | 'ephemeral';
+  speculative: boolean;
+  novelty_basis: string;
+}
+
 export interface RunAgentTurnResult {
   stopReason: AgentTurnStopReason;
   finalAnswer: string;
   history: Message[];
+  memoryCandidates: ModelMemoryCandidate[];
   toolRoundsUsed: number;
   doneCriteria: DoneCriteria;
   verification: AgentTurnVerification;
@@ -69,6 +83,7 @@ export type TurnEvent =
       finalAnswer: string;
       stopReason: AgentTurnStopReason;
       history: Message[];
+      memoryCandidates: ModelMemoryCandidate[];
       toolRoundsUsed: number;
       doneCriteria: DoneCriteria;
       turnCompleted: boolean;
@@ -79,6 +94,7 @@ interface CollectedTurnState {
   stopReason: AgentTurnStopReason;
   finalAnswer: string;
   history: Message[];
+  memoryCandidates: ModelMemoryCandidate[];
   toolRoundsUsed: number;
   doneCriteria: DoneCriteria;
   turnCompleted: boolean;
@@ -107,17 +123,58 @@ interface TurnTelemetryState {
   finalAssistantToolCallChars: number;
 }
 
-function extractAssistantResponseText(raw: string): { text: string; parsed: boolean } {
+function isModelMemoryCandidate(value: unknown): value is ModelMemoryCandidate {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  return (candidate.operation === 'create' || candidate.operation === 'refine' || candidate.operation === 'invalidate')
+    && typeof candidate.target_memory_ids === 'string'
+    && (candidate.kind === 'fact'
+      || candidate.kind === 'workflow'
+      || candidate.kind === 'heuristic'
+      || candidate.kind === 'episode'
+      || candidate.kind === 'decision'
+      || candidate.kind === 'uncertainty')
+    && typeof candidate.title === 'string'
+    && typeof candidate.summary === 'string'
+    && typeof candidate.keywords === 'string'
+    && typeof candidate.confidence === 'number'
+    && (candidate.durability === 'durable' || candidate.durability === 'working' || candidate.durability === 'ephemeral')
+    && typeof candidate.speculative === 'boolean'
+    && typeof candidate.novelty_basis === 'string';
+}
+
+function extractStructuredAssistantResponse(raw: string): {
+  text: string;
+  parsed: boolean;
+  memoryCandidates: ModelMemoryCandidate[];
+} {
   try {
-    const parsed = JSON.parse(raw) as { assistant_response?: unknown };
+    const parsed = JSON.parse(raw) as {
+      assistant_response?: unknown;
+      memory_candidates?: {
+        count?: unknown;
+        candidates?: unknown;
+      };
+    };
 
     if (typeof parsed.assistant_response !== 'string' || parsed.assistant_response.length === 0) {
-      return { text: raw, parsed: false };
+      return { text: raw, parsed: false, memoryCandidates: [] };
     }
 
-    return { text: parsed.assistant_response, parsed: true };
+    const candidates = Array.isArray(parsed.memory_candidates?.candidates)
+      ? parsed.memory_candidates.candidates.filter(isModelMemoryCandidate)
+      : [];
+
+    return {
+      text: parsed.assistant_response,
+      parsed: true,
+      memoryCandidates: candidates
+    };
   } catch {
-    return { text: raw, parsed: false };
+    return { text: raw, parsed: false, memoryCandidates: [] };
   }
 }
 
@@ -386,6 +443,7 @@ export function createRunAgentTurnExecution(input: RunAgentTurnInput): RunAgentT
             stopReason: event.stopReason,
             finalAnswer: event.finalAnswer,
             history: event.history,
+            memoryCandidates: event.memoryCandidates,
             toolRoundsUsed: event.toolRoundsUsed,
             doneCriteria: event.doneCriteria,
             turnCompleted: event.turnCompleted
@@ -433,6 +491,7 @@ export async function collectCompletedTurn(stream: AsyncIterable<TurnEvent>): Pr
         stopReason: event.stopReason,
         finalAnswer: event.finalAnswer,
         history: event.history,
+        memoryCandidates: event.memoryCandidates,
         toolRoundsUsed: event.toolRoundsUsed,
         doneCriteria: event.doneCriteria,
         turnCompleted: event.turnCompleted
@@ -503,6 +562,7 @@ export async function* runAgentTurnStream(
   const doneCriteria = buildDoneCriteria(input.userInput, completionSpec);
   const telemetry = state?.telemetry ?? createTurnTelemetryState();
   let finalAnswer = '';
+  let finalMemoryCandidates: ModelMemoryCandidate[] = [];
 
   yield { type: 'turn_started' };
 
@@ -645,7 +705,8 @@ export async function* runAgentTurnStream(
         yield { type: 'provider_started', provider: input.provider.name, model: input.provider.model };
       }
 
-      const extractedAssistantResponse = extractAssistantResponseText(response.message.content);
+      const extractedAssistantResponse = extractStructuredAssistantResponse(response.message.content);
+      finalMemoryCandidates = extractedAssistantResponse.memoryCandidates;
       displayText = extractedAssistantResponse.parsed ? extractedAssistantResponse.text : response.message.content;
       if (typeof input.provider.stream !== 'function' && displayText.length > 0) {
         yield { type: 'assistant_text_delta', text: displayText };
@@ -687,6 +748,7 @@ export async function* runAgentTurnStream(
           finalAnswer,
           stopReason: 'completed',
           history,
+          memoryCandidates: finalMemoryCandidates,
           toolRoundsUsed: telemetry.toolRound,
           doneCriteria,
           turnCompleted: true
@@ -699,6 +761,7 @@ export async function* runAgentTurnStream(
           finalAnswer,
           stopReason: 'max_tool_rounds_reached',
           history,
+          memoryCandidates: finalMemoryCandidates,
           toolRoundsUsed: telemetry.toolRound,
           doneCriteria,
           turnCompleted: false
@@ -788,6 +851,7 @@ export async function* runAgentTurnStream(
           finalAnswer,
           stopReason: 'max_tool_rounds_reached',
           history,
+          memoryCandidates: finalMemoryCandidates,
           toolRoundsUsed: telemetry.toolRound,
           doneCriteria,
           turnCompleted: false
@@ -807,7 +871,7 @@ function buildResult(
   collected: CollectedTurnState,
   maxToolRounds: number
 ): RunAgentTurnResult {
-  const { stopReason, finalAnswer, history, toolRoundsUsed, doneCriteria, turnCompleted } = collected;
+  const { stopReason, finalAnswer, history, memoryCandidates, toolRoundsUsed, doneCriteria, turnCompleted } = collected;
   const verification = verifyAgentTurn({
     criteria: doneCriteria,
     finalAnswer,
@@ -868,6 +932,7 @@ function buildResult(
     stopReason,
     finalAnswer,
     history,
+    memoryCandidates,
     toolRoundsUsed,
     doneCriteria,
     verification
@@ -880,6 +945,7 @@ function buildTurnCompletedEvent(input: Omit<Extract<TurnEvent, { type: 'turn_co
     finalAnswer: input.finalAnswer,
     stopReason: input.stopReason,
     history: [...input.history],
+    memoryCandidates: [...input.memoryCandidates],
     toolRoundsUsed: input.toolRoundsUsed,
     doneCriteria: input.doneCriteria,
     turnCompleted: input.turnCompleted

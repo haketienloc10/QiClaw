@@ -14,20 +14,20 @@ describe('session memory paths', () => {
     const sessionId = 'session_123';
 
     expect(getSessionDirectoryPath(cwd, sessionId)).toBe('/workspace/qiclaw/.qiclaw/sessions/session_123');
-    expect(getSessionMemoryPath(cwd, sessionId)).toBe('/workspace/qiclaw/.qiclaw/sessions/session_123/memory.mv2');
-    expect(getSessionMemoryMetaPath(cwd, sessionId)).toBe('/workspace/qiclaw/.qiclaw/sessions/session_123/memory.meta.json');
+    expect(getSessionMemoryPath(cwd, sessionId)).toBe('/workspace/qiclaw/.qiclaw/sessions/session_123/memory/index.json');
+    expect(getSessionMemoryMetaPath(cwd, sessionId)).toBe('/workspace/qiclaw/.qiclaw/sessions/session_123/memory/meta.json');
     expect(getSessionMemoryArtifactPaths(cwd, sessionId)).toEqual({
-      directoryPath: '/workspace/qiclaw/.qiclaw/sessions/session_123',
-      memoryPath: '/workspace/qiclaw/.qiclaw/sessions/session_123/memory.mv2',
-      metaPath: '/workspace/qiclaw/.qiclaw/sessions/session_123/memory.meta.json'
+      directoryPath: '/workspace/qiclaw/.qiclaw/sessions/session_123/memory',
+      memoryPath: '/workspace/qiclaw/.qiclaw/sessions/session_123/memory/index.json',
+      metaPath: '/workspace/qiclaw/.qiclaw/sessions/session_123/memory/meta.json'
     });
   });
 
   it('derives user-global memory artifact paths outside the repo', () => {
     expect(getGlobalMemoryArtifactPaths({ baseDirectory: '/home/alice/.qiclaw/memory/global' })).toEqual({
       directoryPath: '/home/alice/.qiclaw/memory/global',
-      memoryPath: '/home/alice/.qiclaw/memory/global/memory.mv2',
-      metaPath: '/home/alice/.qiclaw/memory/global/memory.meta.json'
+      memoryPath: '/home/alice/.qiclaw/memory/global/index.json',
+      metaPath: '/home/alice/.qiclaw/memory/global/meta.json'
     });
   });
 });

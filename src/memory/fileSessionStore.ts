@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import type { MemoryFindResult as FindResult } from './findResult.js';
 
-import { getGlobalMemoryArtifactPaths, type SessionMemoryArtifactPaths } from './sessionPaths.js';
+import { getSessionMemoryArtifactPaths, type SessionMemoryArtifactPaths } from './sessionPaths.js';
 import {
   buildPersistedMemoryRecord,
   buildRecallCandidate,
@@ -16,36 +16,38 @@ import {
   type SessionMemoryMeta,
   type SessionMemoryStatus
 } from './sessionMemoryTypes.js';
+import { isHashPrefixMatch } from './hash.js';
 import type { MemoryEmbeddingConfig } from './memoryEmbeddingConfig.js';
 import { sanitizeRecallQuery } from './recallQuerySanitizer.js';
 
-export interface GlobalMemoryStoreOptions {
-  baseDirectory?: string;
+export interface FileSessionStoreOptions {
+  cwd: string;
+  sessionId: string;
   memoryConfig?: MemoryEmbeddingConfig;
 }
 
-export interface GlobalMemoryFindOptions {
+export interface FileSessionFindOptions {
   k: number;
 }
 
-type GlobalMemoryIndexRecord = PersistedSessionMemoryRecord;
+type SessionMemoryIndexRecord = PersistedSessionMemoryRecord;
 
-interface GlobalMemoryIndex {
-  entries: GlobalMemoryIndexRecord[];
+interface SessionMemoryIndex {
+  entries: SessionMemoryIndexRecord[];
 }
 
-const GLOBAL_SESSION_ID = 'user-global';
 const META_VERSION = 1;
-const META_ENGINE = 'file-global-memory-store';
-const TRACK = 'user-global';
+const META_ENGINE = 'file-session-memory-store';
 
-export class GlobalMemoryStore {
+export class FileSessionStore {
+  private readonly sessionId: string;
   private readonly artifactPaths: SessionMemoryArtifactPaths;
   private readonly memoryConfig?: MemoryEmbeddingConfig;
 
-  constructor(options: GlobalMemoryStoreOptions = {}) {
+  constructor(options: FileSessionStoreOptions) {
+    this.sessionId = options.sessionId;
     this.memoryConfig = options.memoryConfig;
-    this.artifactPaths = getGlobalMemoryArtifactPaths(options.baseDirectory ? { baseDirectory: options.baseDirectory } : undefined);
+    this.artifactPaths = getSessionMemoryArtifactPaths(options.cwd, options.sessionId);
   }
 
   paths(): SessionMemoryArtifactPaths {
@@ -64,14 +66,14 @@ export class GlobalMemoryStore {
 
   async readMeta(): Promise<SessionMemoryMeta> {
     if (!existsSync(this.artifactPaths.metaPath)) {
-      return buildDefaultMeta(this.artifactPaths);
+      return buildDefaultMeta(this.sessionId, this.artifactPaths);
     }
 
     try {
       const parsed = JSON.parse(await readFile(this.artifactPaths.metaPath, 'utf8')) as Partial<SessionMemoryMeta>;
-      return mergeMeta(buildDefaultMeta(this.artifactPaths), parsed);
+      return mergeMeta(buildDefaultMeta(this.sessionId, this.artifactPaths), parsed);
     } catch {
-      return buildDefaultMeta(this.artifactPaths);
+      return buildDefaultMeta(this.sessionId, this.artifactPaths);
     }
   }
 
@@ -80,12 +82,11 @@ export class GlobalMemoryStore {
   }
 
   async put(entry: SessionMemoryEntry): Promise<string> {
-    const globalEntry = { ...entry, sessionId: GLOBAL_SESSION_ID };
-    const markdownPath = await writeMarkdownArtifact(this.artifactPaths.directoryPath, globalEntry);
+    const markdownPath = await writeMarkdownArtifact(this.artifactPaths.directoryPath, entry);
     const index = await this.readIndex();
     index.entries = [
-      ...index.entries.filter((candidate) => candidate.hash !== globalEntry.hash),
-      toIndexRecord(globalEntry, markdownPath)
+      ...index.entries.filter((candidate) => candidate.hash !== entry.hash),
+      toIndexRecord(entry, markdownPath)
     ];
     await this.writeIndex(index);
 
@@ -95,7 +96,7 @@ export class GlobalMemoryStore {
       totalEntries: index.entries.length
     });
 
-    return buildSessionMemoryUri(GLOBAL_SESSION_ID, globalEntry.hash);
+    return buildSessionMemoryUri(entry.sessionId, entry.hash);
   }
 
   async seal(): Promise<void> {
@@ -106,7 +107,7 @@ export class GlobalMemoryStore {
     });
   }
 
-  async find(query: string, options: GlobalMemoryFindOptions): Promise<FindResult> {
+  async find(query: string, options: FileSessionFindOptions): Promise<FindResult> {
     const safeQuery = sanitizeRecallQuery(query);
 
     if (!safeQuery) {
@@ -125,7 +126,7 @@ export class GlobalMemoryStore {
     const index = await this.readIndex();
     const tokens = tokenize(safeQuery);
     const hits = index.entries
-      .filter((entry) => entry.status === 'active')
+      .filter((entry) => entry.sessionId === this.sessionId && entry.status === 'active')
       .map((entry) => ({ entry, score: scoreIndexRecord(entry, tokens) }))
       .filter((candidate) => candidate.score > 0)
       .sort((left, right) => right.score - left.score || right.entry.importance - left.entry.importance)
@@ -143,13 +144,30 @@ export class GlobalMemoryStore {
     } satisfies FindResult;
   }
 
-  async recall(query: string, options: GlobalMemoryFindOptions): Promise<SessionMemoryCandidate[]> {
+  async recall(query: string, options: FileSessionFindOptions): Promise<SessionMemoryCandidate[]> {
     const result = await this.find(query, options);
     const meta = await this.readMeta();
 
     return result.hits
-      .filter((hit) => hit.track === TRACK)
-      .map((hit) => toGlobalMemoryCandidate(hit, meta))
+      .filter((hit) => hit.track === `session:${this.sessionId}`)
+      .map((hit) => toSessionMemoryCandidate(hit, this.sessionId, meta))
+      .filter((candidate): candidate is SessionMemoryCandidate => candidate !== undefined);
+  }
+
+  async recallByHashPrefix(prefix: string, options: FileSessionFindOptions): Promise<SessionMemoryCandidate[]> {
+    const normalizedPrefix = prefix.trim().toLowerCase();
+
+    if (normalizedPrefix.length === 0) {
+      return [];
+    }
+
+    const index = await this.readIndex();
+    const meta = await this.readMeta();
+
+    return index.entries
+      .filter((entry) => entry.sessionId === this.sessionId && entry.status === 'active' && isHashPrefixMatch(entry.hash, normalizedPrefix))
+      .slice(0, options.k)
+      .map((entry) => toSessionMemoryCandidate(toFindHit(entry, 1), this.sessionId, meta))
       .filter((candidate): candidate is SessionMemoryCandidate => candidate !== undefined);
   }
 
@@ -216,11 +234,11 @@ export class GlobalMemoryStore {
     return normalized;
   }
 
-  private async readIndex(): Promise<GlobalMemoryIndex> {
+  private async readIndex(): Promise<SessionMemoryIndex> {
     await ensureIndexFile(this.artifactPaths.memoryPath);
 
     try {
-      const parsed = JSON.parse(await readFile(this.artifactPaths.memoryPath, 'utf8')) as Partial<GlobalMemoryIndex>;
+      const parsed = JSON.parse(await readFile(this.artifactPaths.memoryPath, 'utf8')) as Partial<SessionMemoryIndex>;
       return {
         entries: Array.isArray(parsed.entries)
           ? parsed.entries.filter(isIndexRecord)
@@ -231,16 +249,16 @@ export class GlobalMemoryStore {
     }
   }
 
-  private async writeIndex(index: GlobalMemoryIndex): Promise<void> {
+  private async writeIndex(index: SessionMemoryIndex): Promise<void> {
     await writeFile(this.artifactPaths.memoryPath, JSON.stringify(index, null, 2));
   }
 }
 
-function buildDefaultMeta(artifactPaths: SessionMemoryArtifactPaths): SessionMemoryMeta {
+function buildDefaultMeta(sessionId: string, artifactPaths: SessionMemoryArtifactPaths): SessionMemoryMeta {
   return {
     version: META_VERSION,
     engine: META_ENGINE,
-    sessionId: GLOBAL_SESSION_ID,
+    sessionId,
     memoryPath: artifactPaths.memoryPath,
     metaPath: artifactPaths.metaPath,
     totalEntries: 0,
@@ -269,7 +287,7 @@ function mergeMeta(base: SessionMemoryMeta, parsed: Partial<SessionMemoryMeta>):
   return {
     version: typeof parsed.version === 'number' ? parsed.version : base.version,
     engine: typeof parsed.engine === 'string' ? parsed.engine : base.engine,
-    sessionId: GLOBAL_SESSION_ID,
+    sessionId: typeof parsed.sessionId === 'string' ? parsed.sessionId : base.sessionId,
     memoryPath: typeof parsed.memoryPath === 'string' ? parsed.memoryPath : base.memoryPath,
     metaPath: typeof parsed.metaPath === 'string' ? parsed.metaPath : base.metaPath,
     totalEntries: typeof parsed.totalEntries === 'number' ? parsed.totalEntries : base.totalEntries,
@@ -289,16 +307,15 @@ async function ensureIndexFile(memoryPath: string): Promise<void> {
   await writeFile(memoryPath, JSON.stringify({ entries: [] }, null, 2));
 }
 
-function toIndexRecord(entry: SessionMemoryEntry, markdownPath: string): GlobalMemoryIndexRecord {
+function toIndexRecord(entry: SessionMemoryEntry, markdownPath: string): SessionMemoryIndexRecord {
   return buildPersistedMemoryRecord({
     ...entry,
-    sessionId: GLOBAL_SESSION_ID,
     tags: [...entry.tags],
     markdownPath
   });
 }
 
-function isIndexRecord(value: unknown): value is GlobalMemoryIndexRecord {
+function isIndexRecord(value: unknown): value is SessionMemoryIndexRecord {
   if (!value || typeof value !== 'object') {
     return false;
   }
@@ -359,7 +376,7 @@ function tokenize(value: string): string[] {
   return value.toLowerCase().split(/\s+/u).map((token) => token.trim()).filter(Boolean);
 }
 
-function scoreIndexRecord(entry: GlobalMemoryIndexRecord, tokens: string[]): number {
+function scoreIndexRecord(entry: SessionMemoryIndexRecord, tokens: string[]): number {
   if (tokens.length === 0) {
     return 0;
   }
@@ -387,26 +404,30 @@ function scoreIndexRecord(entry: GlobalMemoryIndexRecord, tokens: string[]): num
   return score + entry.importance + Math.min(entry.accessCount * 0.1, 1);
 }
 
-function toFindHit(entry: GlobalMemoryIndexRecord, score: number): FindResult['hits'][number] {
+function toFindHit(entry: SessionMemoryIndexRecord, score: number): FindResult['hits'][number] {
   return {
     id: entry.hash,
     doc_id: entry.hash,
     score,
-    uri: buildSessionMemoryUri(GLOBAL_SESSION_ID, entry.hash),
+    uri: buildSessionMemoryUri(entry.sessionId, entry.hash),
     title: entry.summaryText,
     text: JSON.stringify(entry),
     snippet: entry.fullText,
-    track: TRACK,
+    track: `session:${entry.sessionId}`,
     kind: entry.kind,
     tags: entry.tags,
     timestamp: entry.createdAt
   } as FindResult['hits'][number];
 }
 
-function toGlobalMemoryCandidate(hit: FindResult['hits'][number], meta: SessionMemoryMeta): SessionMemoryCandidate | undefined {
+function toSessionMemoryCandidate(
+  hit: FindResult['hits'][number],
+  sessionId: string,
+  meta: SessionMemoryMeta
+): SessionMemoryCandidate | undefined {
   const uriParts = typeof hit.uri === 'string' ? parseSessionMemoryUri(hit.uri) : undefined;
 
-  if (!uriParts || uriParts.sessionId !== GLOBAL_SESSION_ID) {
+  if (!uriParts || uriParts.sessionId !== sessionId) {
     return undefined;
   }
 
@@ -415,8 +436,8 @@ function toGlobalMemoryCandidate(hit: FindResult['hits'][number], meta: SessionM
     : hit.snippet;
 
   try {
-    const parsed = JSON.parse(rawText) as GlobalMemoryIndexRecord;
-    if (!isIndexRecord(parsed) || parsed.hash !== uriParts.hash) {
+    const parsed = JSON.parse(rawText) as SessionMemoryIndexRecord;
+    if (!isIndexRecord(parsed) || parsed.sessionId !== sessionId || parsed.hash !== uriParts.hash) {
       return undefined;
     }
 

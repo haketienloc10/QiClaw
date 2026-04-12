@@ -40,10 +40,10 @@ describe('parseInteractiveCheckpointJson', () => {
       historySummary: 'Read package.json successfully.',
       sessionMemory: {
         storeSessionId: 'session-memory-1',
-        engine: 'memvid-session-store',
+        engine: 'file-session-memory-store',
         version: 1,
-        memoryPath: '/tmp/.qiclaw/sessions/session_123/memory.mv2',
-        metaPath: '/tmp/.qiclaw/sessions/session_123/memory.meta.json',
+        memoryPath: '/tmp/.qiclaw/sessions/session_123/memory/index.json',
+        metaPath: '/tmp/.qiclaw/sessions/session_123/memory/meta.json',
         totalEntries: 4,
         lastCompactedAt: '2026-04-06T00:00:00.000Z',
         latestSummaryText: 'package summary'
@@ -78,10 +78,10 @@ describe('parseInteractiveCheckpointJson', () => {
       historySummary: 'Read package.json successfully.',
       sessionMemory: {
         storeSessionId: 'session-memory-1',
-        engine: 'memvid-session-store',
+        engine: 'file-session-memory-store',
         version: 1,
-        memoryPath: '/tmp/.qiclaw/sessions/session_123/memory.mv2',
-        metaPath: '/tmp/.qiclaw/sessions/session_123/memory.meta.json',
+        memoryPath: '/tmp/.qiclaw/sessions/session_123/memory/index.json',
+        metaPath: '/tmp/.qiclaw/sessions/session_123/memory/meta.json',
         totalEntries: 4,
         lastCompactedAt: '2026-04-06T00:00:00.000Z',
         latestSummaryText: 'package summary'
@@ -118,10 +118,10 @@ describe('parseInteractiveCheckpointJson', () => {
       history: [],
       sessionMemory: {
         storeSessionId: 'session_123',
-        engine: 'memvid-session-store',
+        engine: 'file-session-memory-store',
         version: '1',
-        memoryPath: '/tmp/memory.mv2',
-        metaPath: '/tmp/memory.meta.json',
+        memoryPath: '/tmp/memory/index.json',
+        metaPath: '/tmp/memory/meta.json',
         totalEntries: 4
       }
     });

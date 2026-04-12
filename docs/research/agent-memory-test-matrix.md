@@ -97,7 +97,7 @@ Easy-to-miss risks:
 | `empty_memory_injection` | Empty memory creates a fake prompt block | `src/context/promptBuilder.ts` | Skip whitespace-only memory text |
 | `history_loss` | Pruning removes data that checkpoint should retain | `src/context/historyPruner.ts`, `src/session/session.ts` | Separate prompt pruning from checkpoint persistence |
 | `checkpoint_drift` | Checkpoint misses session/history/memory metadata | `src/session/checkpointStore.ts`, `src/session/session.ts` | Fix checkpoint schema/write order |
-| `cross_session_leak` | Session memory appears in unrelated session | `src/memory/sessionPaths.ts`, `src/memory/memvidSessionStore.ts` | Fix path/session namespace isolation |
+| `cross_session_leak` | Session memory appears in unrelated session | `src/memory/sessionPaths.ts`, `src/memory/fileSessionStore.ts` | Fix path/session namespace isolation |
 | `global_recall_miss` | Global memory is not recalled from another session/repo | `src/memory/globalMemoryStore.ts`, `src/memory/sessionMemoryEngine.ts` | Fix global path and merge logic |
 | `agent_loop_order_error` | Turn history order is wrong around tool calls/results | `src/agent/loop.ts`, `tests/agent/loop.test.ts` | Fix history append order |
 
@@ -116,7 +116,7 @@ Easy-to-miss risks:
 | A09 | P1 | Unit | Explicit memory and implicit memory have similar retrieval score | Scoring runs | Explicit memory receives boost | 2 | Explicit memory ranks lower | `recall_ranking_error` | `tests/memory/decay.test.ts` |
 | A10 | P1 | Unit | Candidate has high access count | Scoring runs | Access count gives bounded boost | 2 | Access boost absent or unbounded | `recall_ranking_error` | `tests/memory/decay.test.ts` |
 | A11 | P0 | Unit | Memory budget can only fit compressed entries | Fidelity assignment runs | Low-score entries degrade to essence/hash first | 3 | Important memory degrades before weak memory | `budget_overflow` | `tests/memory/fidelity.test.ts` |
-| A12 | P0 | Integration | Store contains hash-only recalled item | Recall by hash prefix is requested | Full content is returned | 3 | Only summary/hash is returned | `budget_overflow` | `tests/memory/memvidSessionStore.test.ts` |
+| A12 | P0 | Integration | Store contains hash-only recalled item | Recall by hash prefix is requested | Full content is returned | 3 | Only summary/hash is returned | `budget_overflow` | `tests/memory/fileSessionStore.test.ts` |
 | A13 | P1 | Integration | Session A and B use different session IDs | Both write similar local memory | Paths and recall results remain isolated | 2 | B recalls A session-local memory | `cross_session_leak` | `tests/memory/sessionPaths.test.ts` |
 | A14 | P1 | Integration | Global preference should be promoted | Capture runs with global store available | Entry is persisted in global store only when promotion criteria match | 2 | Entry goes to wrong store | `global_recall_miss` | `tests/cli/sessionMemoryFlow.test.ts` |
 
@@ -150,7 +150,7 @@ Easy-to-miss risks:
 | C09 | P1 | Integration | Provider keeps emitting tool calls until limit | `runAgentTurn` reaches max rounds | Stop reason is max rounds and memory capture does not mark success procedure | 2 | Failed/incomplete loop captured as success | `agent_loop_order_error` | `tests/agent/loop.test.ts` |
 | C10 | P1 | Regression | Two checkpoints share same `updatedAt` | Latest checkpoint is requested | Tie-break is deterministic | 2 | Latest checkpoint changes nondeterministically | `checkpoint_drift` | `tests/session/checkpointStore.test.ts` |
 | C11 | P1 | Regression | Checkpoint contains session memory metadata | Session resumes | Same session ID and memory paths are used | 2 | Resume creates unrelated memory namespace | `checkpoint_drift` | `tests/session/session.test.ts` |
-| C12 | P1 | E2E | Memory has degraded to hash rendering | User supplies hash prefix later | Full content can be recovered | 2 | Hash recall cannot restore full memory | `budget_overflow` | `tests/memory/memvidSessionStore.test.ts` |
+| C12 | P1 | E2E | Memory has degraded to hash rendering | User supplies hash prefix later | Full content can be recovered | 2 | Hash recall cannot restore full memory | `budget_overflow` | `tests/memory/fileSessionStore.test.ts` |
 
 ## D. Benchmark Scoring + Diagnosis coverage
 
@@ -198,7 +198,7 @@ Suggested implementation order:
 
 | Area | Primary files |
 | --- | --- |
-| Memory capture/store/scoring | `tests/memory/sessionMemoryEngine.test.ts`, `tests/memory/decay.test.ts`, `tests/memory/fidelity.test.ts`, `tests/memory/memvidSessionStore.test.ts` |
+| Memory capture/store/scoring | `tests/memory/sessionMemoryEngine.test.ts`, `tests/memory/decay.test.ts`, `tests/memory/fidelity.test.ts`, `tests/memory/fileSessionStore.test.ts` |
 | Prompt and history context | `tests/context/historyPruner.test.ts` |
 | CLI multi-turn flow | `tests/cli/sessionMemoryFlow.test.ts` |
 | Agent provider/tool loop | `tests/agent/loop.test.ts` |

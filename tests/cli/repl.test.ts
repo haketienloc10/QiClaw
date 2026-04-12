@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ResolvedAgentPackage } from '../../src/agent/spec.js';
+import { resolveBuiltinAgentPackage } from '../../src/agent/specRegistry.js';
 import { buildCli, type CliRunTurnResult } from '../../src/cli/main.js';
 import type { NormalizedEvent } from '../../src/provider/model.js';
 import { createRepl } from '../../src/cli/repl.js';
@@ -17,6 +18,7 @@ import { searchTool } from '../../src/tools/search.js';
 import type { Tool } from '../../src/tools/tool.js';
 
 const INTERACTIVE_PULSE_SETTLE_MS = 240;
+const defaultResolvedPackage = resolveBuiltinAgentPackage('default');
 
 const tempDirs: string[] = [];
 const providerEnvKeys = [
@@ -1715,6 +1717,113 @@ describe('buildCli', () => {
       expect(selectedLog).toContain('"type":"tool_call_started"');
       await expect(readFile(flagLogPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
       await expect(readFile(envLogPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
+  it('writes memory_candidates records into the selected debug JSONL file', async () => {
+    await withProviderEnvSnapshot(async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-04-12T10:00:00.000Z'));
+
+      const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-memory-candidates-log-'));
+      tempDirs.push(tempDir);
+
+      const debugLogPath = join(tempDir, 'debug', 'telemetry.jsonl');
+      const rotatedLogPath = join(tempDir, 'debug', 'telemetry-2026-04-12.jsonl');
+
+      const cli = buildCli({
+        argv: ['--debug-log', debugLogPath],
+        cwd: tempDir,
+        createSessionId: () => 'session-memory-debug',
+        readLine: (() => {
+          const inputs = ['remember my language preference', '/exit'];
+          return async () => inputs.shift();
+        })(),
+        stdout: { write() { return true; } },
+        createRuntime: (runtimeOptions) => ({
+          provider: createNoopTestProvider(),
+          availableTools: [],
+          cwd: tempDir,
+          observer: runtimeOptions.observer ?? createNoopObserver(),
+          resolvedPackage: defaultResolvedPackage,
+          systemPrompt: 'Test prompt',
+          maxToolRounds: 3
+        }),
+        prepareSessionMemory: async () => ({
+          memoryText: '',
+          store: {} as never,
+          globalStore: undefined,
+          recalled: [],
+          checkpointState: {
+            storeSessionId: 'session-memory-debug',
+            engine: 'file-session-memory-store',
+            version: 1,
+            memoryPath: '/tmp/memory/index.json',
+            metaPath: '/tmp/memory/meta.json',
+            totalEntries: 0,
+            lastCompactedAt: null
+          }
+        }),
+        captureTurnMemory: async () => ({
+          saved: false,
+          checkpointState: {
+            storeSessionId: 'session-memory-debug',
+            engine: 'file-session-memory-store',
+            version: 1,
+            memoryPath: '/tmp/memory/index.json',
+            metaPath: '/tmp/memory/meta.json',
+            totalEntries: 0,
+            lastCompactedAt: null
+          }
+        }),
+        runTurn: async (input) => ({
+          stopReason: 'completed',
+          finalAnswer: 'Tôi sẽ trả lời bằng tiếng Việt.',
+          history: [
+            { role: 'user', content: input.userInput },
+            { role: 'assistant', content: 'Tôi sẽ trả lời bằng tiếng Việt.' }
+          ],
+          memoryCandidates: [
+            {
+              operation: 'create',
+              target_memory_ids: '',
+              kind: 'fact',
+              title: 'User prefers Vietnamese',
+              summary: 'Always answer in Vietnamese unless explicitly asked otherwise.',
+              keywords: 'language | vietnamese | preference',
+              confidence: 0.94,
+              durability: 'durable',
+              speculative: false,
+              novelty_basis: 'User explicitly stated this preference in the current turn.'
+            }
+          ],
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true as const,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
+            toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
+            toolMessagesCount: 0,
+            checks: []
+          }
+        })
+      });
+
+      await expect(cli.run()).resolves.toBe(0);
+
+      const selectedLog = await readFile(rotatedLogPath, 'utf8');
+      expect(selectedLog).toContain('"type":"memory_candidates"');
+      expect(selectedLog).toContain('"sessionId":"session-memory-debug"');
+      expect(selectedLog).toContain('"title":"User prefers Vietnamese"');
     });
   });
 
@@ -5803,9 +5912,9 @@ describe('buildCli', () => {
           recalled: [],
           checkpointState: {
             storeSessionId: 'session-test-1',
-            engine: 'memvid-session-store',
+            engine: 'file-session-memory-store',
             version: 1,
-            memoryPath: join(tempDir, 'session-memory.mv2'),
+            memoryPath: join(tempDir, 'session-memory/index.json'),
             metaPath: join(tempDir, 'session-memory-meta.json'),
             totalEntries: 0,
             lastCompactedAt: null

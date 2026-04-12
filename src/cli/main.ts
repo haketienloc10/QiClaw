@@ -7,6 +7,7 @@ import { createAgentRuntime, type AgentRuntime } from '../agent/runtime.js';
 import type { ResolvedAgentPackage } from '../agent/spec.js';
 import {
   createRunAgentTurnExecution,
+  type ModelMemoryCandidate,
   type RunAgentTurnInput,
   type RunAgentTurnResult,
   type TurnEvent
@@ -72,6 +73,17 @@ type CliDisplayMode = 'compact' | 'interactive';
 interface PendingFooterRenderState {
   isVerified: boolean;
   toolRoundsUsed: number;
+}
+
+interface MemoryCandidatesDebugRecord {
+  type: 'memory_candidates';
+  timestamp: string;
+  sessionId: string;
+  sourceTurnId?: string;
+  parsed: boolean;
+  count: number;
+  candidates: ModelMemoryCandidate[];
+  parseFallbackUsed: boolean;
 }
 
 type CliStdout = Pick<NodeJS.WriteStream, 'write'> & {
@@ -193,6 +205,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
           mode: parsed.prompt ? 'compact' : 'interactive'
         });
         const debugRecallInputs = cliObserver.createRecallInputsDebugLogger();
+        const debugMemoryCandidates = cliObserver.createMemoryCandidatesDebugLogger();
         runtime.observer = cliObserver.observer;
 
         if (parsed.prompt) {
@@ -321,7 +334,21 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
                   history = [...history, ...newTurnMessages];
                   historySummary = readTurnHistorySummary(settledResult) ?? historyContext.historySummary;
 
-                  if (preparedMemory) {
+                  const memoryCandidates = settledResult.memoryCandidates ?? [];
+
+                if (debugMemoryCandidates) {
+                  debugMemoryCandidates({
+                    type: 'memory_candidates',
+                    timestamp: new Date().toISOString(),
+                    sessionId: sessionMemoryState?.storeSessionId ?? sessionId,
+                    parsed: memoryCandidates.length > 0,
+                    count: memoryCandidates.length,
+                    candidates: memoryCandidates,
+                    parseFallbackUsed: memoryCandidates.length === 0
+                  });
+                }
+
+                if (preparedMemory) {
                     try {
                       const captureResult = await captureTurnMemory({
                         store: preparedMemory.store,
@@ -329,6 +356,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
                         userInput,
                         finalAnswer: settledResult.finalAnswer,
                         history,
+                        memoryCandidates,
                         memoryConfig
                       });
 
@@ -954,6 +982,7 @@ function createCliObserver(options: {
   observer: TelemetryObserver;
   flushPendingFooter(): void;
   createRecallInputsDebugLogger(): ((record: RecallInputsDebugRecord) => void) | undefined;
+  createMemoryCandidatesDebugLogger(): ((record: MemoryCandidatesDebugRecord) => void) | undefined;
 } {
   const observers: TelemetryObserver[] = [options.metrics];
   let compactObserver: CompactCliTelemetryObserver | undefined;
@@ -1032,6 +1061,15 @@ function createCliObserver(options: {
       }
 
       return (record: RecallInputsDebugRecord) => {
+        recallInputsDebugWriter?.appendLine(`${JSON.stringify(record)}\n`);
+      };
+    },
+    createMemoryCandidatesDebugLogger() {
+      if (!recallInputsDebugWriter) {
+        return undefined;
+      }
+
+      return (record: MemoryCandidatesDebugRecord) => {
         recallInputsDebugWriter?.appendLine(`${JSON.stringify(record)}\n`);
       };
     }

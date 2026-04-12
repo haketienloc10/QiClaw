@@ -935,6 +935,7 @@ describe('agent loop', () => {
           { role: 'user', content: 'say hi' },
           { role: 'assistant', content: 'Chào bạn' }
         ],
+        memoryCandidates: [],
         toolRoundsUsed: 0,
         doneCriteria: expect.objectContaining({
           goal: 'say hi',
@@ -943,6 +944,51 @@ describe('agent loop', () => {
         }),
         turnCompleted: true
       }
+    ]);
+  });
+
+  it('returns parsed memory_candidates alongside assistant_response for generate responses', async () => {
+    const memoryCandidate = {
+      operation: 'create',
+      target_memory_ids: '',
+      kind: 'fact',
+      title: 'User prefers Vietnamese',
+      summary: 'Always answer in Vietnamese unless explicitly asked otherwise.',
+      keywords: 'language | vietnamese | preference',
+      confidence: 0.94,
+      durability: 'durable',
+      speculative: false,
+      novelty_basis: 'User explicitly stated this preference in the current turn.'
+    };
+    const generate = vi.fn(async () => normalizeProviderResponse({
+      content: JSON.stringify({
+        assistant_response: 'Đã hiểu.',
+        memory_candidates: {
+          count: 1,
+          candidates: [memoryCandidate]
+        }
+      })
+    }));
+    const provider: ModelProvider = {
+      name: 'scripted-generate-only',
+      model: 'test-model',
+      generate
+    };
+
+    const result = await runAgentTurn({
+      provider,
+      availableTools: [],
+      baseSystemPrompt: 'system',
+      userInput: 'say hi',
+      cwd: process.cwd(),
+      maxToolRounds: 1
+    });
+
+    expect(result.finalAnswer).toBe('Đã hiểu.');
+    expect(result.memoryCandidates).toEqual([memoryCandidate]);
+    expect(result.history).toEqual([
+      { role: 'user', content: 'say hi' },
+      { role: 'assistant', content: 'Đã hiểu.' }
     ]);
   });
 
@@ -1192,6 +1238,7 @@ describe('agent loop', () => {
           },
           { role: 'assistant', content: 'Done reading note', toolCalls: undefined }
         ],
+        memoryCandidates: [],
         toolRoundsUsed: 1,
         doneCriteria: expect.objectContaining({
           goal: 'read the note',
@@ -1333,6 +1380,7 @@ describe('agent loop', () => {
           },
           { role: 'assistant', content: 'Done reading note', toolCalls: undefined }
         ],
+        memoryCandidates: [],
         toolRoundsUsed: 1,
         doneCriteria: expect.objectContaining({
           goal: 'read the note',

@@ -7,7 +7,7 @@ function createCandidate(overrides: Partial<SessionMemoryCandidate> = {}): Sessi
   return {
     hash: 'abc123def456',
     sessionId: 'session_1',
-    memoryType: 'fact',
+    kind: 'fact',
     fullText: 'This is the full memory text with enough characters to exceed tiny budgets.',
     summaryText: 'Short summary for warm recall.',
     essenceText: 'Tiny essence.',

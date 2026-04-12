@@ -12,16 +12,16 @@ export function getSessionDirectoryPath(cwd: string, sessionId: string): string 
 }
 
 export function getSessionMemoryPath(cwd: string, sessionId: string): string {
-  return join(getSessionDirectoryPath(cwd, sessionId), 'memory.mv2');
+  return join(getSessionDirectoryPath(cwd, sessionId), 'memory', 'index.json');
 }
 
 export function getSessionMemoryMetaPath(cwd: string, sessionId: string): string {
-  return join(getSessionDirectoryPath(cwd, sessionId), 'memory.meta.json');
+  return join(getSessionDirectoryPath(cwd, sessionId), 'memory', 'meta.json');
 }
 
 export function getSessionMemoryArtifactPaths(cwd: string, sessionId: string): SessionMemoryArtifactPaths {
   return {
-    directoryPath: getSessionDirectoryPath(cwd, sessionId),
+    directoryPath: join(getSessionDirectoryPath(cwd, sessionId), 'memory'),
     memoryPath: getSessionMemoryPath(cwd, sessionId),
     metaPath: getSessionMemoryMetaPath(cwd, sessionId)
   };
@@ -35,7 +35,7 @@ export function getGlobalMemoryArtifactPaths(options: { baseDirectory?: string }
   const directoryPath = options.baseDirectory ?? getGlobalMemoryBaseDirectory();
   return {
     directoryPath,
-    memoryPath: join(directoryPath, 'memory.mv2'),
-    metaPath: join(directoryPath, 'memory.meta.json')
+    memoryPath: join(directoryPath, 'index.json'),
+    metaPath: join(directoryPath, 'meta.json')
   };
 }

@@ -7,7 +7,7 @@ import {
 } from '../../src/memory/sessionMemoryEngine.js';
 import * as sessionMemoryMaintenance from '../../src/memory/sessionMemoryMaintenance.js';
 import * as decay from '../../src/memory/decay.js';
-import { MemvidSessionStore } from '../../src/memory/memvidSessionStore.js';
+import { FileSessionStore } from '../../src/memory/fileSessionStore.js';
 import { GlobalMemoryStore } from '../../src/memory/globalMemoryStore.js';
 import type { SessionMemoryCandidate } from '../../src/memory/sessionMemoryTypes.js';
 
@@ -15,7 +15,7 @@ function createCandidate(overrides: Partial<SessionMemoryCandidate> = {}): Sessi
   return {
     hash: 'abc123def456',
     sessionId: 'session_1',
-    memoryType: 'fact',
+    kind: 'fact',
     fullText: 'User explicitly asked to always answer in Vietnamese with concise wording.',
     summaryText: 'Answer in Vietnamese.',
     essenceText: 'Vietnamese responses.',
@@ -42,7 +42,7 @@ describe('captureInteractiveTurnMemory', () => {
 
     try {
       const result = await captureInteractiveTurnMemory({
-        store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory.mv2' }) } as never,
+        store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory/index.json' }) } as never,
         sessionId: 'session_1',
         userInput: 'remember that i use pnpm',
         finalAnswer: 'I will remember that you use pnpm.'
@@ -64,7 +64,7 @@ describe('captureInteractiveTurnMemory', () => {
 
     try {
       await expect(captureInteractiveTurnMemory({
-        store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory.mv2' }) } as never,
+        store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory/index.json' }) } as never,
         sessionId: 'session_1',
         userInput: 'remember that i use pnpm',
         finalAnswer: 'I will remember that you use pnpm.'
@@ -79,10 +79,10 @@ describe('captureInteractiveTurnMemory', () => {
 
   const readMeta = vi.fn(async () => ({
     version: 1,
-    engine: 'memvid-session-store',
+    engine: 'file-session-memory-store',
     sessionId: 'session_1',
-    memoryPath: '/tmp/memory.mv2',
-    metaPath: '/tmp/memory.meta.json',
+    memoryPath: '/tmp/memory/index.json',
+    metaPath: '/tmp/memory/meta.json',
     totalEntries: 0,
     lastCompactedAt: null,
     lastVerifiedAt: null,
@@ -96,7 +96,7 @@ describe('captureInteractiveTurnMemory', () => {
     const seal = vi.fn(async () => undefined);
 
     const result = await captureInteractiveTurnMemory({
-      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory.mv2' }) } as never,
+      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory/index.json' }) } as never,
       sessionId: 'session_1',
       userInput: 'do you remember that I prefer concise answers?',
       finalAnswer: 'Yes, I remember that preference.'
@@ -107,12 +107,179 @@ describe('captureInteractiveTurnMemory', () => {
     expect(seal).not.toHaveBeenCalled();
   });
 
+  it('persists memory_candidates before falling back to heuristic capture', async () => {
+    const put = vi.fn(async () => undefined);
+    const seal = vi.fn(async () => undefined);
+
+    const result = await captureInteractiveTurnMemory({
+      store: {
+        put,
+        seal,
+        readMeta,
+        paths: () => ({
+          directoryPath: '/tmp/memory',
+          memoryPath: '/tmp/memory/index.json',
+          metaPath: '/tmp/memory/meta.json'
+        })
+      } as never,
+      sessionId: 'session_1',
+      userInput: 'hãy nhớ rằng tôi thích trả lời bằng tiếng Việt',
+      finalAnswer: 'Tôi sẽ nhớ rằng bạn thích trả lời bằng tiếng Việt.',
+      memoryCandidates: [
+        {
+          operation: 'create',
+          target_memory_ids: '',
+          kind: 'fact',
+          title: 'User prefers Vietnamese',
+          summary: 'Always answer in Vietnamese unless explicitly asked otherwise.',
+          keywords: 'language | vietnamese | preference',
+          confidence: 0.94,
+          durability: 'durable',
+          speculative: false,
+          novelty_basis: 'User explicitly stated this preference in the current turn.'
+        }
+      ]
+    });
+
+    expect(result.saved).toBe(true);
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(seal).toHaveBeenCalledTimes(1);
+    expect(result.entry).toMatchObject({
+      kind: 'fact',
+      summaryText: 'Always answer in Vietnamese unless explicitly asked otherwise',
+      essenceText: 'User prefers Vietnamese',
+      explicitSave: false,
+      sourceTurnId: undefined,
+      updatedAt: expect.any(String),
+      status: 'active',
+      invalidatedAt: undefined,
+      markdownPath: expect.stringMatching(/^\/tmp\/memory\/\d{4}-\d{2}-\d{2}\/fact\/[a-f0-9]+\.md$/)
+    });
+    expect(result.entry?.tags).toContain('language');
+    expect(result.entry?.tags).toContain('vietnamese');
+  });
+
+  it('persists refine candidates by superseding target memories and saving the refined memory', async () => {
+    const put = vi.fn(async () => undefined);
+    const seal = vi.fn(async () => undefined);
+    const supersede = vi.fn(async () => ['abc123def456']);
+
+    const result = await captureInteractiveTurnMemory({
+      store: {
+        put,
+        seal,
+        readMeta,
+        paths: () => ({ memoryPath: '/tmp/memory/index.json' }),
+        supersedeByHashes: supersede
+      } as never,
+      sessionId: 'session_1',
+      userInput: 'remember my answer preference more precisely',
+      finalAnswer: 'I refined that preference.',
+      memoryCandidates: [
+        {
+          operation: 'refine',
+          target_memory_ids: 'abc123def456',
+          kind: 'decision',
+          title: 'User prefers Vietnamese concise answers',
+          summary: 'Answer in Vietnamese with concise wording unless explicitly asked otherwise.',
+          keywords: 'language | vietnamese | concise',
+          confidence: 0.91,
+          durability: 'durable',
+          speculative: false,
+          novelty_basis: 'The user clarified both language and brevity in the current turn.'
+        }
+      ]
+    });
+
+    expect(result.saved).toBe(true);
+    expect(supersede).toHaveBeenCalledWith(['abc123def456'], expect.any(String));
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(result.entry).toMatchObject({
+      kind: 'decision',
+      summaryText: 'Answer in Vietnamese with concise wording unless explicitly asked otherwise',
+      essenceText: 'User prefers Vietnamese concise answers'
+    });
+  });
+
+  it('keeps normalized model kinds for workflow and uncertainty candidates', async () => {
+    const workflowPut = vi.fn(async () => undefined);
+    const workflowSeal = vi.fn(async () => undefined);
+
+    const workflowResult = await captureInteractiveTurnMemory({
+      store: {
+        put: workflowPut,
+        seal: workflowSeal,
+        readMeta,
+        paths: () => ({ memoryPath: '/tmp/memory/index.json' })
+      } as never,
+      sessionId: 'session_1',
+      userInput: 'remember the deploy workflow',
+      finalAnswer: 'I will remember that workflow.',
+      memoryCandidates: [
+        {
+          operation: 'create',
+          target_memory_ids: '',
+          kind: 'workflow',
+          title: 'Deploy workflow',
+          summary: 'Run build, run tests, and deploy only after both pass.',
+          keywords: 'deploy | workflow | tests',
+          confidence: 0.93,
+          durability: 'durable',
+          speculative: false,
+          novelty_basis: 'The user described a reusable workflow explicitly.'
+        }
+      ]
+    });
+
+    expect(workflowResult.saved).toBe(true);
+    expect(workflowResult.entry).toMatchObject({
+      kind: 'workflow',
+      summaryText: 'Run build, run tests, and deploy only after both pass'
+    });
+
+    const put = vi.fn(async () => undefined);
+    const seal = vi.fn(async () => undefined);
+    const invalidate = vi.fn(async () => ['abc123def456']);
+
+    const result = await captureInteractiveTurnMemory({
+      store: {
+        put,
+        seal,
+        readMeta,
+        paths: () => ({ memoryPath: '/tmp/memory/index.json' }),
+        invalidateByHashes: invalidate
+      } as never,
+      sessionId: 'session_1',
+      userInput: 'that uncertainty is no longer true',
+      finalAnswer: 'Understood. I will discard that memory.',
+      memoryCandidates: [
+        {
+          operation: 'invalidate',
+          target_memory_ids: 'abc123def456',
+          kind: 'uncertainty',
+          title: 'Deprecated uncertainty',
+          summary: 'This uncertainty is no longer valid.',
+          keywords: 'deprecated | uncertainty',
+          confidence: 0.88,
+          durability: 'working',
+          speculative: false,
+          novelty_basis: 'The user explicitly said the prior uncertainty no longer applies.'
+        }
+      ]
+    });
+
+    expect(result.saved).toBe(false);
+    expect(invalidate).toHaveBeenCalledWith(['abc123def456'], expect.any(String));
+    expect(put).not.toHaveBeenCalled();
+    expect(seal).not.toHaveBeenCalled();
+  });
+
   it('persists Vietnamese explicit save requests without the command prefix', async () => {
     const put = vi.fn(async () => undefined);
     const seal = vi.fn(async () => undefined);
 
     const result = await captureInteractiveTurnMemory({
-      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory.mv2' }) } as never,
+      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory/index.json' }) } as never,
       sessionId: 'session_1',
       userInput: 'hãy nhớ rằng tôi thích trả lời bằng tiếng Việt',
       finalAnswer: 'Tôi sẽ nhớ rằng bạn thích trả lời bằng tiếng Việt.'
@@ -122,7 +289,7 @@ describe('captureInteractiveTurnMemory', () => {
     expect(put).toHaveBeenCalledTimes(1);
     expect(seal).toHaveBeenCalledTimes(1);
     expect(result.entry).toMatchObject({
-      memoryType: 'fact',
+      kind: 'fact',
       summaryText: 'tôi thích trả lời bằng tiếng Việt',
       essenceText: 'tôi thích trả lời bằng tiếng Việt',
       explicitSave: true
@@ -136,7 +303,7 @@ describe('captureInteractiveTurnMemory', () => {
     const seal = vi.fn(async () => undefined);
 
     const result = await captureInteractiveTurnMemory({
-      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory.mv2' }) } as never,
+      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory/index.json' }) } as never,
       sessionId: 'session_1',
       userInput: 'ghi nhớ là tôi dùng pnpm',
       finalAnswer: 'Tôi sẽ nhớ rằng bạn dùng pnpm.'
@@ -144,7 +311,7 @@ describe('captureInteractiveTurnMemory', () => {
 
     expect(result.saved).toBe(true);
     expect(result.entry).toMatchObject({
-      memoryType: 'fact',
+      kind: 'fact',
       summaryText: 'tôi dùng pnpm',
       explicitSave: true
     });
@@ -159,7 +326,7 @@ describe('captureInteractiveTurnMemory', () => {
 
     try {
       const result = await captureInteractiveTurnMemory({
-        store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory.mv2' }) } as never,
+        store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory/index.json' }) } as never,
         sessionId: 'session_1',
         userInput: 'remember that my favorite editor is neovim',
         finalAnswer: 'I will remember that your favorite editor is neovim.'
@@ -167,7 +334,7 @@ describe('captureInteractiveTurnMemory', () => {
 
       expect(result.saved).toBe(true);
       expect(result.entry).toMatchObject({
-        memoryType: 'fact',
+        kind: 'fact',
         summaryText: 'that my favorite editor is neovim',
         explicitSave: true
       });
@@ -188,7 +355,7 @@ describe('captureInteractiveTurnMemory', () => {
     const seal = vi.fn(async () => undefined);
 
     const result = await captureInteractiveTurnMemory({
-      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory.mv2' }) } as never,
+      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory/index.json' }) } as never,
       sessionId: 'session_1',
       userInput: 'bạn có nhớ tôi thích câu trả lời ngắn gọn không?',
       finalAnswer: 'Có, tôi nhớ sở thích đó.'
@@ -204,7 +371,7 @@ describe('captureInteractiveTurnMemory', () => {
     const seal = vi.fn(async () => undefined);
 
     const result = await captureInteractiveTurnMemory({
-      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory.mv2' }) } as never,
+      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory/index.json' }) } as never,
       sessionId: 'session_1',
       userInput: 'show me the package version',
       finalAnswer: 'package.json shows version 1.2.3.',
@@ -230,7 +397,7 @@ describe('captureInteractiveTurnMemory', () => {
     expect(put).toHaveBeenCalledTimes(1);
     expect(seal).toHaveBeenCalledTimes(1);
     expect(result.entry).toMatchObject({
-      memoryType: 'procedure',
+      kind: 'workflow',
       summaryText: expect.stringContaining('Read'),
       essenceText: expect.stringContaining('version 1.2.3'),
       explicitSave: false
@@ -242,7 +409,7 @@ describe('captureInteractiveTurnMemory', () => {
     const seal = vi.fn(async () => undefined);
 
     const result = await captureInteractiveTurnMemory({
-      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory.mv2' }) } as never,
+      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory/index.json' }) } as never,
       sessionId: 'session_1',
       userInput: 'how should you check package version next time?',
       finalAnswer: 'You can read package.json to confirm the version quickly.',
@@ -276,7 +443,7 @@ describe('captureInteractiveTurnMemory', () => {
     const seal = vi.fn(async () => undefined);
 
     const result = await captureInteractiveTurnMemory({
-      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory.mv2' }) } as never,
+      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory/index.json' }) } as never,
       sessionId: 'session_1',
       userInput: 'hãy kiểm tra phiên bản package',
       finalAnswer: 'package.json cho thấy phiên bản 1.2.3.',
@@ -300,7 +467,7 @@ describe('captureInteractiveTurnMemory', () => {
 
     expect(result.saved).toBe(true);
     expect(result.entry).toMatchObject({
-      memoryType: 'procedure',
+      kind: 'workflow',
       explicitSave: false
     });
     expect(result.entry?.summaryText).toContain('phiên bản 1.2.3');
@@ -312,7 +479,7 @@ describe('captureInteractiveTurnMemory', () => {
     const seal = vi.fn(async () => undefined);
 
     const result = await captureInteractiveTurnMemory({
-      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory.mv2' }) } as never,
+      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory/index.json' }) } as never,
       sessionId: 'session_1',
       userInput: 'hãy đọc file package',
       finalAnswer: 'Hãy thử lại với đường dẫn đúng hoặc kiểm tra lại tên file.',
@@ -336,7 +503,7 @@ describe('captureInteractiveTurnMemory', () => {
 
     expect(result.saved).toBe(true);
     expect(result.entry).toMatchObject({
-      memoryType: 'failure',
+      kind: 'uncertainty',
       explicitSave: false
     });
     expect(result.entry?.summaryText).toContain('thử lại');
@@ -347,7 +514,7 @@ describe('captureInteractiveTurnMemory', () => {
     const seal = vi.fn(async () => undefined);
 
     const result = await captureInteractiveTurnMemory({
-      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory.mv2' }) } as never,
+      store: { put, seal, readMeta, paths: () => ({ memoryPath: '/tmp/memory/index.json' }) } as never,
       sessionId: 'session_1',
       userInput: 'read the package file',
       finalAnswer: 'Try again with the correct path or verify the file name.',
@@ -373,21 +540,21 @@ describe('captureInteractiveTurnMemory', () => {
     expect(put).toHaveBeenCalledTimes(1);
     expect(seal).toHaveBeenCalledTimes(1);
     expect(result.entry).toMatchObject({
-      memoryType: 'failure',
+      kind: 'uncertainty',
       explicitSave: false
     });
-    expect(result.entry?.memoryType).not.toBe('procedure');
+    expect(result.entry?.kind).not.toBe('procedure');
     expect(result.entry?.summaryText.toLowerCase()).toContain('try again');
   });
 });
 
 describe('prepareInteractiveSessionMemory', () => {
   it('passes the memory embedding config into session and global store constructors during prepare', async () => {
-    const open = vi.spyOn(MemvidSessionStore.prototype, 'open').mockResolvedValue(undefined);
+    const open = vi.spyOn(FileSessionStore.prototype, 'open').mockResolvedValue(undefined);
     const globalOpen = vi.spyOn(GlobalMemoryStore.prototype, 'open').mockResolvedValue(undefined);
-    const readMeta = vi.spyOn(MemvidSessionStore.prototype, 'readMeta').mockResolvedValue({
+    const readMeta = vi.spyOn(FileSessionStore.prototype, 'readMeta').mockResolvedValue({
       version: 1,
-      engine: 'memvid-session-store',
+      engine: 'file-session-memory-store',
       sessionId: 'session_1',
       memoryPath: '/tmp/existing.mv2',
       metaPath: '/tmp/meta.json',
@@ -400,7 +567,7 @@ describe('prepareInteractiveSessionMemory', () => {
     });
     const globalReadMeta = vi.spyOn(GlobalMemoryStore.prototype, 'readMeta').mockResolvedValue({
       version: 1,
-      engine: 'memvid-global-memory-store',
+      engine: 'file-global-memory-store',
       sessionId: 'user-global',
       memoryPath: '/tmp/global.mv2',
       metaPath: '/tmp/global-meta.json',
@@ -411,9 +578,9 @@ describe('prepareInteractiveSessionMemory', () => {
       lastSealedAt: null,
       accessStatsByHash: {}
     });
-    const recall = vi.spyOn(MemvidSessionStore.prototype, 'recall').mockResolvedValue([]);
+    const recall = vi.spyOn(FileSessionStore.prototype, 'recall').mockResolvedValue([]);
     const globalRecall = vi.spyOn(GlobalMemoryStore.prototype, 'recall').mockResolvedValue([]);
-    const touchByHashes = vi.spyOn(MemvidSessionStore.prototype, 'touchByHashes').mockResolvedValue([]);
+    const touchByHashes = vi.spyOn(FileSessionStore.prototype, 'touchByHashes').mockResolvedValue([]);
     const globalTouchByHashes = vi.spyOn(GlobalMemoryStore.prototype, 'touchByHashes').mockResolvedValue([]);
     const verifyOpen = vi.spyOn(sessionMemoryMaintenance, 'verifySessionStoreOnOpen').mockResolvedValue({ ok: true, verified: false });
 
@@ -445,11 +612,11 @@ describe('prepareInteractiveSessionMemory', () => {
   });
 
   it('runs best-effort maintenance verify when opening an existing store and continues on success', async () => {
-    const open = vi.spyOn(MemvidSessionStore.prototype, 'open').mockResolvedValue(undefined);
-    const writeMeta = vi.spyOn(MemvidSessionStore.prototype, 'writeMeta').mockResolvedValue(undefined);
-    const readMeta = vi.spyOn(MemvidSessionStore.prototype, 'readMeta').mockResolvedValue({
+    const open = vi.spyOn(FileSessionStore.prototype, 'open').mockResolvedValue(undefined);
+    const writeMeta = vi.spyOn(FileSessionStore.prototype, 'writeMeta').mockResolvedValue(undefined);
+    const readMeta = vi.spyOn(FileSessionStore.prototype, 'readMeta').mockResolvedValue({
       version: 1,
-      engine: 'memvid-session-store',
+      engine: 'file-session-memory-store',
       sessionId: 'session_1',
       memoryPath: '/tmp/existing.mv2',
       metaPath: '/tmp/meta.json',
@@ -460,8 +627,24 @@ describe('prepareInteractiveSessionMemory', () => {
       lastSealedAt: null,
       accessStatsByHash: {}
     });
-    const recall = vi.spyOn(MemvidSessionStore.prototype, 'recall').mockResolvedValue([]);
-    const touchByHashes = vi.spyOn(MemvidSessionStore.prototype, 'touchByHashes').mockResolvedValue([]);
+    const recall = vi.spyOn(FileSessionStore.prototype, 'recall').mockResolvedValue([]);
+    const touchByHashes = vi.spyOn(FileSessionStore.prototype, 'touchByHashes').mockResolvedValue([]);
+    const globalOpen = vi.spyOn(GlobalMemoryStore.prototype, 'open').mockResolvedValue(undefined);
+    const globalReadMeta = vi.spyOn(GlobalMemoryStore.prototype, 'readMeta').mockResolvedValue({
+      version: 1,
+      engine: 'file-global-memory-store',
+      sessionId: 'user-global',
+      memoryPath: '/tmp/global/index.json',
+      metaPath: '/tmp/global/meta.json',
+      totalEntries: 0,
+      lastCompactedAt: null,
+      lastVerifiedAt: null,
+      lastDoctorAt: null,
+      lastSealedAt: null,
+      accessStatsByHash: {}
+    });
+    const globalRecall = vi.spyOn(GlobalMemoryStore.prototype, 'recall').mockResolvedValue([]);
+    const globalTouchByHashes = vi.spyOn(GlobalMemoryStore.prototype, 'touchByHashes').mockResolvedValue([]);
     const verifyOpen = vi.spyOn(sessionMemoryMaintenance, 'verifySessionStoreOnOpen').mockResolvedValue({
       ok: true,
       verified: true,
@@ -477,7 +660,7 @@ describe('prepareInteractiveSessionMemory', () => {
         userInput: 'do you remember anything about me?',
         checkpointState: {
           storeSessionId: 'session_1',
-          engine: 'memvid-session-store',
+          engine: 'file-session-memory-store',
           version: 1,
           memoryPath: '/tmp/existing.mv2',
           metaPath: '/tmp/meta.json',
@@ -489,7 +672,7 @@ describe('prepareInteractiveSessionMemory', () => {
       expect(result.memoryText).toBe('');
       expect(verifyOpen).toHaveBeenCalledTimes(1);
       expect(verifyOpen).toHaveBeenCalledWith(expect.objectContaining({
-        store: expect.any(MemvidSessionStore),
+        store: expect.any(FileSessionStore),
         meta: expect.objectContaining({ memoryPath: '/tmp/existing.mv2' })
       }));
     } finally {
@@ -498,15 +681,19 @@ describe('prepareInteractiveSessionMemory', () => {
       readMeta.mockRestore();
       recall.mockRestore();
       touchByHashes.mockRestore();
+      globalOpen.mockRestore();
+      globalReadMeta.mockRestore();
+      globalRecall.mockRestore();
+      globalTouchByHashes.mockRestore();
       verifyOpen.mockRestore();
     }
   });
 
   it('propagates maintenance verify failures so the CLI layer can fail open', async () => {
-    const open = vi.spyOn(MemvidSessionStore.prototype, 'open').mockResolvedValue(undefined);
-    const readMeta = vi.spyOn(MemvidSessionStore.prototype, 'readMeta').mockResolvedValue({
+    const open = vi.spyOn(FileSessionStore.prototype, 'open').mockResolvedValue(undefined);
+    const readMeta = vi.spyOn(FileSessionStore.prototype, 'readMeta').mockResolvedValue({
       version: 1,
-      engine: 'memvid-session-store',
+      engine: 'file-session-memory-store',
       sessionId: 'session_1',
       memoryPath: '/tmp/existing.mv2',
       metaPath: '/tmp/meta.json',
@@ -517,9 +704,9 @@ describe('prepareInteractiveSessionMemory', () => {
       lastSealedAt: null,
       accessStatsByHash: {}
     });
-    const writeMeta = vi.spyOn(MemvidSessionStore.prototype, 'writeMeta').mockResolvedValue(undefined);
-    const recall = vi.spyOn(MemvidSessionStore.prototype, 'recall').mockResolvedValue([]);
-    const touchByHashes = vi.spyOn(MemvidSessionStore.prototype, 'touchByHashes').mockResolvedValue([]);
+    const writeMeta = vi.spyOn(FileSessionStore.prototype, 'writeMeta').mockResolvedValue(undefined);
+    const recall = vi.spyOn(FileSessionStore.prototype, 'recall').mockResolvedValue([]);
+    const touchByHashes = vi.spyOn(FileSessionStore.prototype, 'touchByHashes').mockResolvedValue([]);
     const verifyOpen = vi.spyOn(sessionMemoryMaintenance, 'verifySessionStoreOnOpen').mockRejectedValue(new Error('verify failed'));
 
     try {
@@ -529,7 +716,7 @@ describe('prepareInteractiveSessionMemory', () => {
         userInput: 'do you remember anything about me?',
         checkpointState: {
           storeSessionId: 'session_1',
-          engine: 'memvid-session-store',
+          engine: 'file-session-memory-store',
           version: 1,
           memoryPath: '/tmp/existing.mv2',
           metaPath: '/tmp/meta.json',
@@ -551,11 +738,11 @@ describe('prepareInteractiveSessionMemory', () => {
   });
 
   it('logs recall inputs for debugging with the filtered query list', async () => {
-    const open = vi.spyOn(MemvidSessionStore.prototype, 'open').mockResolvedValue(undefined);
+    const open = vi.spyOn(FileSessionStore.prototype, 'open').mockResolvedValue(undefined);
     const globalOpen = vi.spyOn(GlobalMemoryStore.prototype, 'open').mockResolvedValue(undefined);
-    const readMeta = vi.spyOn(MemvidSessionStore.prototype, 'readMeta').mockResolvedValue({
+    const readMeta = vi.spyOn(FileSessionStore.prototype, 'readMeta').mockResolvedValue({
       version: 1,
-      engine: 'memvid-session-store',
+      engine: 'file-session-memory-store',
       sessionId: 'session_1',
       memoryPath: '/tmp/memory.json',
       metaPath: '/tmp/meta.json',
@@ -568,7 +755,7 @@ describe('prepareInteractiveSessionMemory', () => {
     });
     const globalReadMeta = vi.spyOn(GlobalMemoryStore.prototype, 'readMeta').mockResolvedValue({
       version: 1,
-      engine: 'memvid-global-memory-store',
+      engine: 'file-global-memory-store',
       sessionId: 'user-global',
       memoryPath: '/tmp/global-memory.json',
       metaPath: '/tmp/global-meta.json',
@@ -580,12 +767,12 @@ describe('prepareInteractiveSessionMemory', () => {
       accessStatsByHash: {}
     });
     const verifyOpen = vi.spyOn(sessionMemoryMaintenance, 'verifySessionStoreOnOpen').mockResolvedValue({ ok: true, verified: false });
-    const recall = vi.spyOn(MemvidSessionStore.prototype, 'recall')
+    const recall = vi.spyOn(FileSessionStore.prototype, 'recall')
       .mockResolvedValueOnce([
         createCandidate({
           hash: 'session-user-1',
           sessionId: 'session_1',
-          memoryType: 'fact',
+          kind: 'fact',
           summaryText: 'User hit from current input.',
           essenceText: 'User hit.',
           source: 'turn-user',
@@ -598,7 +785,7 @@ describe('prepareInteractiveSessionMemory', () => {
         createCandidate({
           hash: 'session-history-1',
           sessionId: 'session_1',
-          memoryType: 'procedure',
+          kind: 'workflow',
           summaryText: 'History hit from summary.',
           essenceText: 'History hit.',
           source: 'turn-history',
@@ -611,7 +798,7 @@ describe('prepareInteractiveSessionMemory', () => {
         createCandidate({
           hash: 'session-user-1',
           sessionId: 'session_1',
-          memoryType: 'fact',
+          kind: 'fact',
           summaryText: 'User hit from current input.',
           essenceText: 'User hit.',
           source: 'turn-user',
@@ -625,7 +812,7 @@ describe('prepareInteractiveSessionMemory', () => {
         createCandidate({
           hash: 'global-user-1',
           sessionId: 'user-global',
-          memoryType: 'fact',
+          kind: 'fact',
           summaryText: 'Global user hit.',
           essenceText: 'Global user hit.',
           source: 'global-user',
@@ -639,7 +826,7 @@ describe('prepareInteractiveSessionMemory', () => {
         createCandidate({
           hash: 'global-latest-1',
           sessionId: 'user-global',
-          memoryType: 'failure',
+          kind: 'uncertainty',
           summaryText: 'Global latest-summary hit.',
           essenceText: 'Global latest hit.',
           source: 'global-latest',
@@ -648,7 +835,7 @@ describe('prepareInteractiveSessionMemory', () => {
           explicitSave: false
         })
       ]);
-    const touchByHashes = vi.spyOn(MemvidSessionStore.prototype, 'touchByHashes').mockResolvedValue([]);
+    const touchByHashes = vi.spyOn(FileSessionStore.prototype, 'touchByHashes').mockResolvedValue([]);
     const globalTouchByHashes = vi.spyOn(GlobalMemoryStore.prototype, 'touchByHashes').mockResolvedValue([]);
     const debugRecallInputs = vi.fn();
 
@@ -660,7 +847,7 @@ describe('prepareInteractiveSessionMemory', () => {
         historySummary: 'History summary: pinned preference stored',
         checkpointState: {
           storeSessionId: 'session_1',
-          engine: 'memvid-session-store',
+          engine: 'file-session-memory-store',
           version: 1,
           memoryPath: '/tmp/memory.json',
           metaPath: '/tmp/meta.json',
@@ -721,7 +908,7 @@ describe('prepareInteractiveSessionMemory', () => {
               {
                 hash: 'session-user-1',
                 sessionId: 'session_1',
-                memoryType: 'fact',
+                kind: 'fact',
                 summaryText: 'User hit from current input.',
                 source: 'turn-user',
                 retrievalScore: 0.91,
@@ -733,7 +920,7 @@ describe('prepareInteractiveSessionMemory', () => {
               {
                 hash: 'global-user-1',
                 sessionId: 'user-global',
-                memoryType: 'fact',
+                kind: 'fact',
                 summaryText: 'Global user hit.',
                 source: 'global-user',
                 retrievalScore: 0.61,
@@ -749,7 +936,7 @@ describe('prepareInteractiveSessionMemory', () => {
               {
                 hash: 'session-history-1',
                 sessionId: 'session_1',
-                memoryType: 'procedure',
+                kind: 'workflow',
                 summaryText: 'History hit from summary.',
                 source: 'turn-history',
                 retrievalScore: 0.72,
@@ -766,7 +953,7 @@ describe('prepareInteractiveSessionMemory', () => {
               {
                 hash: 'session-user-1',
                 sessionId: 'session_1',
-                memoryType: 'fact',
+                kind: 'fact',
                 summaryText: 'User hit from current input.',
                 source: 'turn-user',
                 retrievalScore: 0.91,
@@ -778,7 +965,7 @@ describe('prepareInteractiveSessionMemory', () => {
               {
                 hash: 'global-latest-1',
                 sessionId: 'user-global',
-                memoryType: 'failure',
+                kind: 'uncertainty',
                 summaryText: 'Global latest-summary hit.',
                 source: 'global-latest',
                 retrievalScore: 0.52,
@@ -797,7 +984,7 @@ describe('prepareInteractiveSessionMemory', () => {
           {
             hash: 'session-user-1',
             sessionId: 'session_1',
-            memoryType: 'fact',
+            kind: 'fact',
             summaryText: 'User hit from current input.',
             source: 'turn-user',
             retrievalScore: 0.91,
@@ -807,7 +994,7 @@ describe('prepareInteractiveSessionMemory', () => {
           {
             hash: 'global-user-1',
             sessionId: 'user-global',
-            memoryType: 'fact',
+            kind: 'fact',
             summaryText: 'Global user hit.',
             source: 'global-user',
             retrievalScore: 0.61,
@@ -817,7 +1004,7 @@ describe('prepareInteractiveSessionMemory', () => {
           {
             hash: 'session-history-1',
             sessionId: 'session_1',
-            memoryType: 'procedure',
+            kind: 'workflow',
             summaryText: 'History hit from summary.',
             source: 'turn-history',
             retrievalScore: 0.72,
@@ -827,7 +1014,7 @@ describe('prepareInteractiveSessionMemory', () => {
           {
             hash: 'global-latest-1',
             sessionId: 'user-global',
-            memoryType: 'failure',
+            kind: 'uncertainty',
             summaryText: 'Global latest-summary hit.',
             source: 'global-latest',
             retrievalScore: 0.52,
@@ -851,11 +1038,11 @@ describe('prepareInteractiveSessionMemory', () => {
   });
 
   it('touches only hashes that survive final recall packing', async () => {
-    const open = vi.spyOn(MemvidSessionStore.prototype, 'open').mockResolvedValue(undefined);
+    const open = vi.spyOn(FileSessionStore.prototype, 'open').mockResolvedValue(undefined);
     const globalOpen = vi.spyOn(GlobalMemoryStore.prototype, 'open').mockResolvedValue(undefined);
-    const readMeta = vi.spyOn(MemvidSessionStore.prototype, 'readMeta').mockResolvedValue({
+    const readMeta = vi.spyOn(FileSessionStore.prototype, 'readMeta').mockResolvedValue({
       version: 1,
-      engine: 'memvid-session-store',
+      engine: 'file-session-memory-store',
       sessionId: 'session_1',
       memoryPath: '/tmp/memory.json',
       metaPath: '/tmp/meta.json',
@@ -868,7 +1055,7 @@ describe('prepareInteractiveSessionMemory', () => {
     });
     const globalReadMeta = vi.spyOn(GlobalMemoryStore.prototype, 'readMeta').mockResolvedValue({
       version: 1,
-      engine: 'memvid-global-memory-store',
+      engine: 'file-global-memory-store',
       sessionId: 'user-global',
       memoryPath: '/tmp/global-memory.json',
       metaPath: '/tmp/global-meta.json',
@@ -880,7 +1067,7 @@ describe('prepareInteractiveSessionMemory', () => {
       accessStatsByHash: {}
     });
     const verifyOpen = vi.spyOn(sessionMemoryMaintenance, 'verifySessionStoreOnOpen').mockResolvedValue({ ok: true, verified: false });
-    const recall = vi.spyOn(MemvidSessionStore.prototype, 'recall')
+    const recall = vi.spyOn(FileSessionStore.prototype, 'recall')
       .mockResolvedValueOnce([
         createCandidate({
           hash: 'full123def456',
@@ -902,7 +1089,7 @@ describe('prepareInteractiveSessionMemory', () => {
         })
       ]);
     const globalRecall = vi.spyOn(GlobalMemoryStore.prototype, 'recall').mockResolvedValue([]);
-    const touchByHashes = vi.spyOn(MemvidSessionStore.prototype, 'touchByHashes').mockResolvedValue([]);
+    const touchByHashes = vi.spyOn(FileSessionStore.prototype, 'touchByHashes').mockResolvedValue([]);
     const globalTouchByHashes = vi.spyOn(GlobalMemoryStore.prototype, 'touchByHashes').mockResolvedValue([]);
 
     try {
@@ -932,10 +1119,10 @@ describe('prepareInteractiveSessionMemory', () => {
   });
 
   it('does not touch any hash when no memory is recalled', async () => {
-    const open = vi.spyOn(MemvidSessionStore.prototype, 'open').mockResolvedValue(undefined);
-    const readMeta = vi.spyOn(MemvidSessionStore.prototype, 'readMeta').mockResolvedValue({
+    const open = vi.spyOn(FileSessionStore.prototype, 'open').mockResolvedValue(undefined);
+    const readMeta = vi.spyOn(FileSessionStore.prototype, 'readMeta').mockResolvedValue({
       version: 1,
-      engine: 'memvid-session-store',
+      engine: 'file-session-memory-store',
       sessionId: 'session_1',
       memoryPath: '/tmp/memory.json',
       metaPath: '/tmp/meta.json',
@@ -947,8 +1134,24 @@ describe('prepareInteractiveSessionMemory', () => {
       accessStatsByHash: {}
     });
     const verifyOpen = vi.spyOn(sessionMemoryMaintenance, 'verifySessionStoreOnOpen').mockResolvedValue({ ok: true, verified: false });
-    const recall = vi.spyOn(MemvidSessionStore.prototype, 'recall').mockResolvedValue([]);
-    const touchByHashes = vi.spyOn(MemvidSessionStore.prototype, 'touchByHashes').mockResolvedValue([]);
+    const recall = vi.spyOn(FileSessionStore.prototype, 'recall').mockResolvedValue([]);
+    const touchByHashes = vi.spyOn(FileSessionStore.prototype, 'touchByHashes').mockResolvedValue([]);
+    const globalOpen = vi.spyOn(GlobalMemoryStore.prototype, 'open').mockResolvedValue(undefined);
+    const globalReadMeta = vi.spyOn(GlobalMemoryStore.prototype, 'readMeta').mockResolvedValue({
+      version: 1,
+      engine: 'file-global-memory-store',
+      sessionId: 'user-global',
+      memoryPath: '/tmp/global/index.json',
+      metaPath: '/tmp/global/meta.json',
+      totalEntries: 0,
+      lastCompactedAt: null,
+      lastVerifiedAt: null,
+      lastDoctorAt: null,
+      lastSealedAt: null,
+      accessStatsByHash: {}
+    });
+    const globalRecall = vi.spyOn(GlobalMemoryStore.prototype, 'recall').mockResolvedValue([]);
+    const globalTouchByHashes = vi.spyOn(GlobalMemoryStore.prototype, 'touchByHashes').mockResolvedValue([]);
 
     try {
       const result = await prepareInteractiveSessionMemory({
@@ -957,7 +1160,7 @@ describe('prepareInteractiveSessionMemory', () => {
         userInput: 'brand new question',
         checkpointState: {
           storeSessionId: 'session_1',
-          engine: 'memvid-session-store',
+          engine: 'file-session-memory-store',
           version: 1,
           memoryPath: '/tmp/memory.json',
           metaPath: '/tmp/meta.json',
@@ -974,12 +1177,17 @@ describe('prepareInteractiveSessionMemory', () => {
         latestSummaryText: 'remembered summary'
       });
       expect(touchByHashes).not.toHaveBeenCalled();
+      expect(globalTouchByHashes).not.toHaveBeenCalled();
     } finally {
       open.mockRestore();
       readMeta.mockRestore();
       verifyOpen.mockRestore();
       recall.mockRestore();
       touchByHashes.mockRestore();
+      globalOpen.mockRestore();
+      globalReadMeta.mockRestore();
+      globalRecall.mockRestore();
+      globalTouchByHashes.mockRestore();
     }
   });
 });
@@ -1036,7 +1244,7 @@ describe('recallSessionMemories', () => {
       candidates: [
         createCandidate({
           hash: 'fact123def456',
-          memoryType: 'fact',
+          kind: 'fact',
           retrievalScore: 0.95,
           importance: 0.9,
           explicitSave: true,
@@ -1045,7 +1253,7 @@ describe('recallSessionMemories', () => {
         }),
         createCandidate({
           hash: 'proc123def456',
-          memoryType: 'procedure',
+          kind: 'workflow',
           retrievalScore: 0.7,
           importance: 0.6,
           summaryText: 'Use Read on package.json to confirm the package version.',

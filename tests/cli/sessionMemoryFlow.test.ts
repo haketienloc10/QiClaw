@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { resolveBuiltinAgentPackage } from '../../src/agent/specRegistry.js';
 import { buildCli } from '../../src/cli/main.js';
@@ -12,8 +12,17 @@ import type { CaptureInteractiveTurnMemoryInput, PrepareInteractiveSessionMemory
 
 const tempDirs: string[] = [];
 const defaultResolvedPackage = resolveBuiltinAgentPackage('default');
+let previousGlobalMemoryDir: string | undefined;
+
+beforeEach(async () => {
+  previousGlobalMemoryDir = process.env.QICLAW_GLOBAL_MEMORY_DIR;
+  const isolatedGlobalDir = await mkdtemp(join(tmpdir(), 'qiclaw-global-memory-'));
+  tempDirs.push(isolatedGlobalDir);
+  process.env.QICLAW_GLOBAL_MEMORY_DIR = isolatedGlobalDir;
+});
 
 afterEach(async () => {
+  restoreEnv('QICLAW_GLOBAL_MEMORY_DIR', previousGlobalMemoryDir);
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -57,10 +66,10 @@ describe('interactive session memory flow', () => {
         recalled: [],
         checkpointState: {
           storeSessionId: 'session-memory-env',
-          engine: 'memvid-session-store',
+          engine: 'file-session-memory-store',
           version: 1,
-          memoryPath: '/tmp/memory.mv2',
-          metaPath: '/tmp/memory.meta.json',
+          memoryPath: '/tmp/memory/index.json',
+          metaPath: '/tmp/memory/meta.json',
           totalEntries: 0,
           lastCompactedAt: null
         }
@@ -78,10 +87,10 @@ describe('interactive session memory flow', () => {
         saved: false,
         checkpointState: {
           storeSessionId: 'session-memory-env',
-          engine: 'memvid-session-store',
+          engine: 'file-session-memory-store',
           version: 1,
-          memoryPath: '/tmp/memory.mv2',
-          metaPath: '/tmp/memory.meta.json',
+          memoryPath: '/tmp/memory/index.json',
+          metaPath: '/tmp/memory/meta.json',
           totalEntries: 0,
           lastCompactedAt: null
         }
@@ -222,13 +231,30 @@ describe('interactive session memory flow', () => {
           memoryText: input.memoryText
         });
 
-        const finalAnswer = input.userInput.includes('remember')
+        const firstTurn = input.userInput.includes('remember');
+        const finalAnswer = firstTurn
           ? 'I will remember that your favorite editor is neovim.'
           : 'You prefer neovim.';
 
         return {
           stopReason: 'completed',
           finalAnswer,
+          memoryCandidates: firstTurn
+            ? [
+                {
+                  operation: 'create' as const,
+                  target_memory_ids: '',
+                  kind: 'decision' as const,
+                  title: 'Default editor choice',
+                  summary: 'Your favorite editor is neovim.',
+                  keywords: 'decision | editor | neovim',
+                  confidence: 0.95,
+                  durability: 'durable' as const,
+                  speculative: false,
+                  novelty_basis: 'The user explicitly stated the preferred editor in this turn.'
+                }
+              ]
+            : [],
           history: [
             ...(input.history ?? []),
             { role: 'user', content: input.userInput },
@@ -909,10 +935,10 @@ describe('interactive session memory flow', () => {
         historySummary: 'tmux preference stored',
         sessionMemory: {
           storeSessionId: 'session-with-memory',
-          engine: 'memvid-session-store',
+          engine: 'file-session-memory-store',
           version: 1,
-          memoryPath: join(tempDir, '.qiclaw', 'sessions', 'session-with-memory', 'memory.mv2'),
-          metaPath: join(tempDir, '.qiclaw', 'sessions', 'session-with-memory', 'memory.meta.json'),
+          memoryPath: join(tempDir, '.qiclaw', 'sessions', 'session-with-memory', 'memory/index.json'),
+          metaPath: join(tempDir, '.qiclaw', 'sessions', 'session-with-memory', 'memory/meta.json'),
           totalEntries: 1,
           lastCompactedAt: null,
           latestSummaryText: 'prefer tmux'
@@ -1049,10 +1075,10 @@ describe('interactive session memory flow', () => {
         recalled: [],
         checkpointState: {
           storeSessionId: input.sessionId,
-          engine: 'memvid-session-store',
+          engine: 'file-session-memory-store',
           version: 1,
-          memoryPath: '/tmp/memory.mv2',
-          metaPath: '/tmp/memory.meta.json',
+          memoryPath: '/tmp/memory/index.json',
+          metaPath: '/tmp/memory/meta.json',
           totalEntries: 0,
           lastCompactedAt: null,
           latestSummaryText: input.historySummary
@@ -1060,10 +1086,10 @@ describe('interactive session memory flow', () => {
       }) as PrepareInteractiveSessionMemoryResult,
       captureTurnMemory: async (input) => ({ saved: false, checkpointState: {
         storeSessionId: input.sessionId,
-        engine: 'memvid-session-store',
+        engine: 'file-session-memory-store',
         version: 1,
-        memoryPath: '/tmp/memory.mv2',
-        metaPath: '/tmp/memory.meta.json',
+        memoryPath: '/tmp/memory/index.json',
+        metaPath: '/tmp/memory/meta.json',
         totalEntries: 0,
         lastCompactedAt: null
       } }),

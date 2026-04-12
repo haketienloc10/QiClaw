@@ -1,12 +1,20 @@
+import type { ModelMemoryCandidate } from '../agent/loop.js';
 import type { Message } from '../core/types.js';
 import { createSessionMemoryHash } from './hash.js';
 import type { SessionMemoryEntry, SessionMemoryType } from './sessionMemoryTypes.js';
+
+export interface CandidateMemoryAction {
+  operation: 'create' | 'refine' | 'invalidate';
+  targetHashes: string[];
+  entry?: SessionMemoryEntry;
+}
 
 export interface BuildInteractiveTurnMemoryEntryInput {
   sessionId: string;
   userInput: string;
   finalAnswer: string;
   history?: Message[];
+  memoryCandidates?: ModelMemoryCandidate[];
   sourceTurnId?: string;
   now?: string;
 }
@@ -22,11 +30,22 @@ export function buildInteractiveTurnMemoryEntry(
     return undefined;
   }
 
+  const candidateEntry = buildMemoryCandidateEntry({
+    sessionId: input.sessionId,
+    memoryCandidates: input.memoryCandidates,
+    sourceTurnId: input.sourceTurnId,
+    now
+  });
+
+  if (candidateEntry) {
+    return candidateEntry;
+  }
+
   if (isExplicitSaveRequest(trimmedUserInput)) {
     const statement = extractMemoryStatement(trimmedUserInput);
     return createEntry({
       sessionId: input.sessionId,
-      memoryType: 'fact',
+      kind: 'fact',
       summaryText: statement,
       essenceText: statement,
       fullText: `User asked to remember: ${statement}\nAssistant confirmed: ${trimmedFinalAnswer}`,
@@ -72,21 +91,109 @@ export function shouldCapture(memoryEntry: SessionMemoryEntry): boolean {
   }
 
   if (memoryEntry.explicitSave) {
-    return memoryEntry.memoryType === 'fact';
+    return memoryEntry.kind === 'fact';
   }
 
-  if (memoryEntry.memoryType === 'procedure') {
+  if (memoryEntry.kind === 'fact'
+    || memoryEntry.kind === 'heuristic'
+    || memoryEntry.kind === 'episode'
+    || memoryEntry.kind === 'decision') {
+    return memoryEntry.importance >= 0.72 && memoryEntry.tags.length >= 1;
+  }
+
+  if (memoryEntry.kind === 'workflow') {
     return memoryEntry.importance >= 0.72
       && memoryEntry.tags.length >= 1
       && PROCEDURE_CAPTURE_PATTERN.test(memoryEntry.summaryText);
   }
 
-  if (memoryEntry.memoryType === 'failure') {
+  if (memoryEntry.kind === 'uncertainty') {
     return memoryEntry.importance >= 0.78
       && RECOVERY_CAPTURE_PATTERN.test(memoryEntry.summaryText);
   }
 
   return false;
+}
+
+export function buildCandidateMemoryAction(input: {
+  sessionId: string;
+  memoryCandidates?: ModelMemoryCandidate[];
+  sourceTurnId?: string;
+  now: string;
+}): CandidateMemoryAction | undefined {
+  const candidate = input.memoryCandidates?.find((item) =>
+    item.operation === 'create' || item.operation === 'refine' || item.operation === 'invalidate'
+  );
+
+  if (!candidate) {
+    return undefined;
+  }
+
+  const targetHashes = normalizeCandidateTargetHashes(candidate.target_memory_ids);
+
+  if (candidate.operation === 'invalidate') {
+    return {
+      operation: 'invalidate',
+      targetHashes
+    };
+  }
+
+  const entry = createCandidateEntry(input.sessionId, candidate, input.sourceTurnId, input.now);
+
+  if (!entry) {
+    return undefined;
+  }
+
+  return {
+    operation: candidate.operation,
+    targetHashes,
+    entry
+  };
+}
+
+function buildMemoryCandidateEntry(input: {
+  sessionId: string;
+  memoryCandidates?: ModelMemoryCandidate[];
+  sourceTurnId?: string;
+  now: string;
+}): SessionMemoryEntry | undefined {
+  return buildCandidateMemoryAction(input)?.entry;
+}
+
+function createCandidateEntry(
+  sessionId: string,
+  candidate: ModelMemoryCandidate,
+  sourceTurnId: string | undefined,
+  now: string
+): SessionMemoryEntry | undefined {
+  const summaryText = sanitizeSentence(candidate.summary, 180);
+  const essenceText = sanitizeSentence(candidate.title, 140);
+
+  if (summaryText.length === 0 || essenceText.length === 0) {
+    return undefined;
+  }
+
+  return createEntry({
+    sessionId,
+    kind: candidate.kind,
+    summaryText,
+    essenceText,
+    fullText: [
+      `Title: ${essenceText}`,
+      `Summary: ${summaryText}`,
+      candidate.novelty_basis.length > 0 ? `Novelty basis: ${sanitizeSentence(candidate.novelty_basis, 180)}` : undefined,
+      candidate.operation !== 'create' && candidate.target_memory_ids.trim().length > 0
+        ? `Target memory ids: ${normalizeCandidateTargetHashes(candidate.target_memory_ids).join(', ')}`
+        : undefined,
+      `Operation: ${candidate.operation}`,
+      `Kind: ${candidate.kind}`
+    ].filter(isPresent).join('\n'),
+    sourceTurnId,
+    createdAt: now,
+    importance: clampImportance(candidate.confidence),
+    explicitSave: false,
+    tags: normalizeCandidateKeywords(candidate.keywords)
+  });
 }
 
 function buildProcedureMemoryEntry(input: {
@@ -118,7 +225,7 @@ function buildProcedureMemoryEntry(input: {
 
   return createEntry({
     sessionId: input.sessionId,
-    memoryType: 'procedure',
+    kind: 'workflow',
     summaryText,
     essenceText,
     fullText: [
@@ -156,7 +263,7 @@ function buildFailureMemoryEntry(input: {
 
   return createEntry({
     sessionId: input.sessionId,
-    memoryType: 'failure',
+    kind: 'uncertainty',
     summaryText,
     essenceText,
     fullText: `Tool failure: ${failedTool.content}\nRecovery: ${recovery}`,
@@ -170,7 +277,7 @@ function buildFailureMemoryEntry(input: {
 
 function createEntry(input: {
   sessionId: string;
-  memoryType: SessionMemoryType;
+  kind: SessionMemoryType;
   summaryText: string;
   essenceText: string;
   fullText: string;
@@ -185,9 +292,9 @@ function createEntry(input: {
   const fullText = normalizeWhitespace(input.fullText.replace(/\n/gu, ' \n ')).replace(/ \n /gu, '\n');
 
   return {
-    hash: createSessionMemoryHash(`${input.sessionId}\n${input.memoryType}\n${summaryText}\n${essenceText}`),
+    hash: createSessionMemoryHash(`${input.sessionId}\n${input.kind}\n${summaryText}\n${essenceText}`),
     sessionId: input.sessionId,
-    memoryType: input.memoryType,
+    kind: input.kind,
     fullText,
     summaryText,
     essenceText,
@@ -348,6 +455,25 @@ function extractTags(value: string): string[] {
   return Array.from(value.toLowerCase().matchAll(/[\p{L}\p{N}.]+/gu), (match) => match[0])
     .filter((token) => token.length >= 4)
     .slice(0, 6);
+}
+
+function clampImportance(confidence: number): number {
+  return Math.min(1, Math.max(0, confidence));
+}
+
+function normalizeCandidateKeywords(value: string): string[] {
+  return value
+    .split('|')
+    .map((item) => item.trim().toLowerCase())
+    .filter((item) => item.length >= 2)
+    .slice(0, 6);
+}
+
+function normalizeCandidateTargetHashes(value: string): string[] {
+  return value
+    .split('|')
+    .map((item) => item.trim().toLowerCase())
+    .filter((item) => item.length > 0);
 }
 
 function firstString(...values: unknown[]): string | undefined {

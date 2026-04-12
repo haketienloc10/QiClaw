@@ -1,10 +1,11 @@
-export type SessionMemoryType = 'fact' | 'procedure' | 'failure';
+export type SessionMemoryType = 'fact' | 'workflow' | 'heuristic' | 'episode' | 'decision' | 'uncertainty';
+export type SessionMemoryStatus = 'active' | 'superseded' | 'invalidated';
 export type SessionMemoryFidelity = 'full' | 'summary' | 'essence' | 'hash';
 
 export interface SessionMemoryEntry {
   hash: string;
   sessionId: string;
-  memoryType: SessionMemoryType;
+  kind: SessionMemoryType;
   fullText: string;
   summaryText: string;
   essenceText: string;
@@ -16,6 +17,20 @@ export interface SessionMemoryEntry {
   accessCount: number;
   importance: number;
   explicitSave: boolean;
+}
+
+export interface PersistedSessionMemoryRecord extends SessionMemoryEntry {
+  updatedAt: string;
+  invalidatedAt?: string;
+  status: SessionMemoryStatus;
+  markdownPath: string;
+}
+
+export interface BuildPersistedMemoryRecordInput extends SessionMemoryEntry {
+  updatedAt?: string;
+  invalidatedAt?: string;
+  status?: SessionMemoryStatus;
+  markdownPath: string;
 }
 
 export interface SessionMemoryAccessStat {
@@ -48,7 +63,7 @@ export interface SessionMemoryCheckpointMetadata {
   latestSummaryText?: string;
 }
 
-export interface SessionMemoryCandidate extends SessionMemoryEntry {
+export interface SessionMemoryCandidate extends PersistedSessionMemoryRecord {
   retrievalScore: number;
   finalScore: number;
   fidelity: SessionMemoryFidelity;
@@ -75,5 +90,30 @@ export function parseSessionMemoryUri(uri: string): SessionMemoryUriParts | unde
   return {
     sessionId: match[1],
     hash: match[2]
+  };
+}
+
+export function buildPersistedMemoryRecord(
+  input: BuildPersistedMemoryRecordInput
+): PersistedSessionMemoryRecord {
+  return {
+    ...input,
+    updatedAt: input.updatedAt ?? input.createdAt,
+    invalidatedAt: input.invalidatedAt ?? undefined,
+    status: input.status ?? 'active'
+  };
+}
+
+export function buildRecallCandidate(input: {
+  record: PersistedSessionMemoryRecord;
+  retrievalScore: number;
+  finalScore: number;
+  fidelity: SessionMemoryFidelity;
+}): SessionMemoryCandidate {
+  return {
+    ...buildPersistedMemoryRecord(input.record),
+    retrievalScore: input.retrievalScore,
+    finalScore: input.finalScore,
+    fidelity: input.fidelity
   };
 }

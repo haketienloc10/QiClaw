@@ -1,22 +1,11 @@
 import { existsSync } from 'node:fs';
 
-import {
-  lockNudge,
-  lockWho,
-  verifyMemvid,
-  doctorMemvid,
-  type Memvid
-} from '@memvid/sdk';
-
-import type { MemvidSessionStore } from './memvidSessionStore.js';
+import type { FileSessionStore } from './fileSessionStore.js';
 import type { GlobalMemoryStore } from './globalMemoryStore.js';
 import type { SessionMemoryMeta } from './sessionMemoryTypes.js';
 
-type VerifyOptions = Parameters<typeof verifyMemvid>[1];
-type DoctorOptions = Parameters<typeof doctorMemvid>[1];
-
 export interface SessionMemoryMaintenanceTarget {
-  store: MemvidSessionStore | GlobalMemoryStore;
+  store: FileSessionStore | GlobalMemoryStore;
   meta: Pick<SessionMemoryMeta, 'memoryPath'>;
   exists?: boolean;
   now?: string;
@@ -33,25 +22,20 @@ export interface SessionMemoryOpenVerifyResult extends SessionMemoryMaintenanceR
 
 export interface SessionMemoryDoctorOptions {
   memoryPath: string;
-  options?: DoctorOptions;
+  options?: {
+    dryRun?: boolean;
+  };
 }
 
 export async function verifySessionStoreOnOpen(
   input: SessionMemoryMaintenanceTarget,
-  options?: VerifyOptions
+  _options?: unknown
 ): Promise<SessionMemoryOpenVerifyResult> {
   const memoryPath = input.meta.memoryPath;
   const exists = input.exists ?? existsSync(memoryPath);
 
-  if (!exists) {
+  if (!exists || isFileBasedMemoryPath(memoryPath)) {
     return { ok: true, verified: false };
-  }
-
-  const memvid = input.store.memvidInstance();
-  if (memvid && typeof memvid.verify === 'function') {
-    await memvid.verify(options);
-  } else {
-    await verifyMemvid(memoryPath, options);
   }
 
   return {
@@ -67,32 +51,29 @@ export async function ensureSessionStoreWriteReady(input: SessionMemoryMaintenan
   const memoryPath = input.meta.memoryPath;
   const exists = input.exists ?? existsSync(memoryPath);
 
-  if (!exists) {
+  if (!exists || isFileBasedMemoryPath(memoryPath)) {
     return { ok: true };
   }
 
-  const lockState = await lockWho(memoryPath) as { locked?: boolean; owner?: string };
-  if (lockState?.locked) {
-    const nudged = await lockNudge(memoryPath);
-    if (!nudged) {
-      throw new Error(
-        typeof lockState.owner === 'string' && lockState.owner.length > 0
-          ? `Session memory is locked by ${lockState.owner}`
-          : 'Session memory is locked by another writer'
-      );
-    }
-  }
-
-  return { ok: true };
+  throw new Error(`Session memory path is not file-based: ${memoryPath}`);
 }
 
 export async function runSessionStoreDoctor(
   input: SessionMemoryDoctorOptions,
-  memvid?: Pick<Memvid, 'doctor'>
+  doctor?: { doctor(options?: { dryRun?: boolean }): Promise<unknown> | unknown }
 ): Promise<unknown> {
-  if (memvid && typeof memvid.doctor === 'function') {
-    return memvid.doctor(input.options);
+  if (doctor && typeof doctor.doctor === 'function') {
+    return doctor.doctor(input.options);
   }
 
-  return doctorMemvid(input.memoryPath, input.options);
+  return {
+    repaired: false,
+    skipped: true,
+    memoryPath: input.memoryPath,
+    dryRun: input.options?.dryRun ?? false
+  };
+}
+
+function isFileBasedMemoryPath(memoryPath: string): boolean {
+  return /(?:^|\/)index\.json$/u.test(memoryPath);
 }

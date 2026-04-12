@@ -67,7 +67,7 @@ it('does not persist a successful procedure memory when the current tool result 
 
   expect(result.saved).toBe(true);
   expect(result.entry).toMatchObject({
-    memoryType: 'failure',
+    kind: 'failure',
     explicitSave: false
   });
   expect(result.entry?.summaryText.toLowerCase()).toContain('try again');

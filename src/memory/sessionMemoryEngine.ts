@@ -2,18 +2,21 @@ import { existsSync } from 'node:fs';
 
 import { allocateContextBudget } from '../context/budgetManager.js';
 import type { Message } from '../core/types.js';
-import { MemvidSessionStore } from './memvidSessionStore.js';
+import { FileSessionStore } from './fileSessionStore.js';
 import { GlobalMemoryStore } from './globalMemoryStore.js';
 import { ensureSessionStoreWriteReady, verifySessionStoreOnOpen } from './sessionMemoryMaintenance.js';
 import { scoreSessionMemoryCandidate } from './decay.js';
 import { assignMemoryFidelity } from './fidelity.js';
-import { buildInteractiveTurnMemoryEntry, shouldCapture } from './capture.js';
+import { buildCandidateMemoryAction, buildInteractiveTurnMemoryEntry, shouldCapture } from './capture.js';
+import type { ModelMemoryCandidate } from '../agent/loop.js';
 import { shouldUseCompactMemoryRendering } from './recall.js';
 import type { MemoryEmbeddingConfig } from './memoryEmbeddingConfig.js';
-import type {
-  SessionMemoryCandidate,
-  SessionMemoryCheckpointMetadata,
-  SessionMemoryEntry
+import {
+  buildPersistedMemoryRecord,
+  type PersistedSessionMemoryRecord,
+  type SessionMemoryCandidate,
+  type SessionMemoryCheckpointMetadata,
+  type SessionMemoryEntry
 } from './sessionMemoryTypes.js';
 
 const DEFAULT_MEMORY_CONTEXT_TOTAL_CHARS = 4_000;
@@ -36,7 +39,7 @@ export interface RecallSessionMemoriesResult {
 export interface RecallDebugHit {
   hash: string;
   sessionId: string;
-  memoryType: SessionMemoryCandidate['memoryType'];
+  kind: SessionMemoryCandidate['kind'];
   summaryText: string;
   source: string;
   retrievalScore: number;
@@ -98,18 +101,19 @@ export interface PrepareInteractiveSessionMemoryInput {
 
 export interface PrepareInteractiveSessionMemoryResult {
   memoryText: string;
-  store: MemvidSessionStore;
+  store: FileSessionStore;
   globalStore?: GlobalMemoryStore;
   recalled: SessionMemoryCandidate[];
   checkpointState: SessionMemoryCheckpointState;
 }
 
 export interface CaptureInteractiveTurnMemoryInput {
-  store: MemvidSessionStore;
+  store: FileSessionStore;
   sessionId: string;
   userInput: string;
   finalAnswer: string;
   history?: Message[];
+  memoryCandidates?: ModelMemoryCandidate[];
   sourceTurnId?: string;
   now?: string;
   memoryConfig?: MemoryEmbeddingConfig;
@@ -117,14 +121,14 @@ export interface CaptureInteractiveTurnMemoryInput {
 
 export interface CaptureInteractiveTurnMemoryResult {
   saved: boolean;
-  entry?: SessionMemoryEntry;
+  entry?: PersistedSessionMemoryRecord;
   checkpointState: SessionMemoryCheckpointState;
 }
 
 export async function prepareInteractiveSessionMemory(
   input: PrepareInteractiveSessionMemoryInput
 ): Promise<PrepareInteractiveSessionMemoryResult> {
-  const store = new MemvidSessionStore({ cwd: input.cwd, sessionId: input.sessionId, memoryConfig: input.memoryConfig });
+  const store = new FileSessionStore({ cwd: input.cwd, sessionId: input.sessionId, memoryConfig: input.memoryConfig });
   const globalStore = new GlobalMemoryStore({ memoryConfig: input.memoryConfig });
   const memoryPath = store.paths().memoryPath;
   const hadExistingStore = Boolean(input.checkpointState?.memoryPath) || existsSync(memoryPath);
@@ -201,16 +205,53 @@ export async function prepareInteractiveSessionMemory(
 export async function captureInteractiveTurnMemory(
   input: CaptureInteractiveTurnMemoryInput
 ): Promise<CaptureInteractiveTurnMemoryResult> {
-  const entry = buildInteractiveTurnMemoryEntry({
+  const candidateAction = buildCandidateMemoryAction({
+    sessionId: input.sessionId,
+    memoryCandidates: input.memoryCandidates,
+    sourceTurnId: input.sourceTurnId,
+    now: input.now ?? new Date().toISOString()
+  });
+
+  const memoryPath = input.store.paths().memoryPath;
+
+  if (candidateAction?.operation === 'invalidate') {
+    await ensureSessionStoreWriteReady({
+      store: input.store,
+      meta: { memoryPath },
+      exists: existsSync(memoryPath),
+      now: input.now
+    });
+
+    if ('invalidateByHashes' in input.store && typeof input.store.invalidateByHashes === 'function') {
+      await input.store.invalidateByHashes(candidateAction.targetHashes, input.now ?? new Date().toISOString());
+    }
+
+    const meta = await input.store.readMeta();
+    return {
+      saved: false,
+      checkpointState: {
+        storeSessionId: input.sessionId,
+        engine: meta.engine,
+        version: meta.version,
+        memoryPath: meta.memoryPath,
+        metaPath: meta.metaPath,
+        totalEntries: meta.totalEntries,
+        lastCompactedAt: meta.lastCompactedAt
+      }
+    };
+  }
+
+  const rawEntry = candidateAction?.entry ?? buildInteractiveTurnMemoryEntry({
     sessionId: input.sessionId,
     userInput: input.userInput,
     finalAnswer: input.finalAnswer,
     history: input.history,
+    memoryCandidates: input.memoryCandidates,
     sourceTurnId: input.sourceTurnId,
     now: input.now
   });
 
-  if (!entry || !shouldCapture(entry)) {
+  if (!rawEntry || !shouldCapture(rawEntry)) {
     const meta = await input.store.readMeta();
 
     return {
@@ -227,7 +268,6 @@ export async function captureInteractiveTurnMemory(
     };
   }
 
-  const memoryPath = input.store.paths().memoryPath;
   await ensureSessionStoreWriteReady({
     store: input.store,
     meta: { memoryPath },
@@ -235,14 +275,26 @@ export async function captureInteractiveTurnMemory(
     now: input.now
   });
 
-  await input.store.put(entry);
+  const persistedEntry = buildPersistedMemoryRecord({
+    ...rawEntry,
+    markdownPath: buildPendingMarkdownPath(input.store.paths().directoryPath, rawEntry)
+  });
+
+  if (candidateAction?.operation === 'refine' && 'supersedeByHashes' in input.store && typeof input.store.supersedeByHashes === 'function') {
+    await input.store.supersedeByHashes(candidateAction.targetHashes, input.now ?? new Date().toISOString());
+  }
+
+  await input.store.put(rawEntry);
   await input.store.seal();
 
-  if (shouldCaptureGlobalMemory(entry)) {
+  if (shouldCaptureGlobalMemory(rawEntry)) {
     try {
       const globalStore = new GlobalMemoryStore({ memoryConfig: input.memoryConfig });
       await globalStore.open();
-      await globalStore.put(entry);
+      if (candidateAction?.operation === 'refine' && 'supersedeByHashes' in globalStore && typeof globalStore.supersedeByHashes === 'function') {
+        await globalStore.supersedeByHashes(candidateAction.targetHashes, input.now ?? new Date().toISOString());
+      }
+      await globalStore.put(rawEntry);
       await globalStore.seal();
     } catch {
       // Keep session memory capture best-effort even if global persistence fails.
@@ -253,7 +305,7 @@ export async function captureInteractiveTurnMemory(
 
   return {
     saved: true,
-    entry,
+    entry: persistedEntry,
     checkpointState: {
       storeSessionId: input.sessionId,
       engine: meta.engine,
@@ -262,7 +314,7 @@ export async function captureInteractiveTurnMemory(
       metaPath: meta.metaPath,
       totalEntries: meta.totalEntries,
       lastCompactedAt: meta.lastCompactedAt,
-      latestSummaryText: entry.summaryText
+      latestSummaryText: persistedEntry.summaryText
     }
   };
 }
@@ -414,7 +466,7 @@ function renderMemorySections(hot: string[], warm: string[], faded: string[], bu
 }
 
 async function recallInteractiveCandidates(input: {
-  store: MemvidSessionStore;
+  store: FileSessionStore;
   globalStore: GlobalMemoryStore;
   sessionId: string;
   userInput: string;
@@ -497,11 +549,14 @@ function shouldCaptureGlobalMemory(entry: SessionMemoryEntry): boolean {
     return true;
   }
 
-  if (entry.memoryType === 'fact') {
+  if (entry.kind === 'fact'
+    || entry.kind === 'heuristic'
+    || entry.kind === 'episode'
+    || entry.kind === 'decision') {
     return entry.importance >= 0.72;
   }
 
-  if (entry.memoryType === 'procedure') {
+  if (entry.kind === 'workflow') {
     return entry.importance >= 0.8;
   }
 
@@ -524,7 +579,7 @@ function toRecallDebugHit(candidate: SessionMemoryCandidate): RecallDebugHit {
   return {
     hash: candidate.hash,
     sessionId: candidate.sessionId,
-    memoryType: candidate.memoryType,
+    kind: candidate.kind,
     summaryText: candidate.summaryText,
     source: candidate.source,
     retrievalScore: candidate.retrievalScore,
@@ -535,6 +590,14 @@ function toRecallDebugHit(candidate: SessionMemoryCandidate): RecallDebugHit {
 
 function normalizeMemoryText(value: string): string {
   return value.replace(/\s+/gu, ' ').trim().toLowerCase();
+}
+
+function buildPendingMarkdownPath(directoryPath: string, entry: SessionMemoryEntry): string {
+  return `${directoryPath}/${toDateDirectory(entry.createdAt)}/${entry.kind}/${entry.hash}.md`;
+}
+
+function toDateDirectory(createdAt: string): string {
+  return /^\d{4}-\d{2}-\d{2}/u.test(createdAt) ? createdAt.slice(0, 10) : 'unknown-date';
 }
 
 function isPresent(value: string | undefined): value is string {

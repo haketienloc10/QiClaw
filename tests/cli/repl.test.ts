@@ -1511,13 +1511,17 @@ describe('buildCli', () => {
     expect(stripAnsi(writes.join(''))).toContain(' ✦ shell npm test\n');
   });
 
-  it('prefers --debug-log over QICLAW_DEBUG_LOG and writes JSONL events to the selected file', async () => {
+  it('prefers --debug-log over QICLAW_DEBUG_LOG and writes JSONL events to a day-scoped file derived from the selected path', async () => {
     await withProviderEnvSnapshot(async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-04-12T08:00:00.000Z'));
+
       const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-debug-log-'));
       tempDirs.push(tempDir);
 
       const envLogPath = join(tempDir, 'from-env', 'telemetry.jsonl');
       const flagLogPath = join(tempDir, 'from-flag', 'telemetry.jsonl');
+      const rotatedFlagLogPath = join(tempDir, 'from-flag', 'telemetry-2026-04-12.jsonl');
       process.env.QICLAW_DEBUG_LOG = envLogPath;
 
       const cli = buildCli({
@@ -1571,18 +1575,23 @@ describe('buildCli', () => {
 
       await expect(cli.run()).resolves.toBe(0);
 
-      const selectedLog = await readFile(flagLogPath, 'utf8');
+      const selectedLog = await readFile(rotatedFlagLogPath, 'utf8');
       expect(selectedLog).toContain('"type":"tool_call_started"');
+      await expect(readFile(flagLogPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
       await expect(readFile(envLogPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     });
   });
 
-  it('falls back to QICLAW_DEBUG_LOG when --debug-log is not provided', async () => {
+  it('falls back to QICLAW_DEBUG_LOG and writes to a day-scoped file when --debug-log is not provided', async () => {
     await withProviderEnvSnapshot(async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-04-12T09:00:00.000Z'));
+
       const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-debug-log-env-'));
       tempDirs.push(tempDir);
 
       const envLogPath = join(tempDir, 'from-env', 'telemetry.jsonl');
+      const rotatedEnvLogPath = join(tempDir, 'from-env', 'telemetry-2026-04-12.jsonl');
       process.env.QICLAW_DEBUG_LOG = envLogPath;
 
       const cli = buildCli({
@@ -1636,12 +1645,13 @@ describe('buildCli', () => {
 
       await expect(cli.run()).resolves.toBe(0);
 
-      const selectedLog = await readFile(envLogPath, 'utf8');
+      const selectedLog = await readFile(rotatedEnvLogPath, 'utf8');
       expect(selectedLog).toContain('"type":"turn_started"');
+      await expect(readFile(envLogPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     });
   });
 
-  it('records provider telemetry events to the debug JSONL log without changing prompt-mode stdout', async () => {
+  it('records provider telemetry events to the day-scoped debug JSONL log without changing prompt-mode stdout', async () => {
     await withProviderEnvSnapshot(async () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date('2026-03-31T12:34:56.000Z'));
@@ -1650,6 +1660,7 @@ describe('buildCli', () => {
       tempDirs.push(tempDir);
 
       const logPath = join(tempDir, 'provider', 'telemetry.jsonl');
+      const rotatedLogPath = join(tempDir, 'provider', 'telemetry-2026-03-31.jsonl');
       const stdoutWrites: string[] = [];
       const cli = buildCli({
         argv: ['--debug-log', logPath, '--prompt', 'inspect package.json'],
@@ -1748,7 +1759,7 @@ describe('buildCli', () => {
 
       await expect(cli.run()).resolves.toBe(0);
 
-      const selectedLog = await readFile(logPath, 'utf8');
+      const selectedLog = await readFile(rotatedLogPath, 'utf8');
       const events = selectedLog
         .trim()
         .split('\n')
@@ -5603,6 +5614,9 @@ describe('buildCli', () => {
   });
 
   it('continues interactive turns and logs debug telemetry when memory maintenance preflight fails on prepare or capture', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-12T10:00:00.000Z'));
+
     const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-memory-failure-'));
     tempDirs.push(tempDir);
 
@@ -5611,6 +5625,7 @@ describe('buildCli', () => {
     const stderrWrites: string[] = [];
     const runTurnInputs: Array<{ userInput: string; memoryText?: string }> = [];
     const logPath = join(tempDir, 'memory-fallback.jsonl');
+    const rotatedLogPath = join(tempDir, 'memory-fallback-2026-04-12.jsonl');
     const cli = buildCli({
       argv: ['--debug-log', logPath],
       cwd: tempDir,
@@ -5714,7 +5729,7 @@ describe('buildCli', () => {
     expect(stripAnsi(writes.join(''))).toContain('answer: remember my preference');
     expect(stderrWrites).toEqual([]);
 
-    const loggedEvents = (await readFile(logPath, 'utf8'))
+    const loggedEvents = (await readFile(rotatedLogPath, 'utf8'))
       .trim()
       .split('\n')
       .map((line) => JSON.parse(line))

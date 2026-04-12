@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import pc from 'picocolors';
 import { createAgentPackagePreview } from '../agent/packagePreview.js';
@@ -32,7 +32,7 @@ import {
   createCompactCliTelemetryObserver,
   type CompactCliTelemetryObserver
 } from '../telemetry/display.js';
-import { createJsonLineLogger, type JsonLineWriter } from '../telemetry/logger.js';
+import { createFileJsonLineWriter, createJsonLineLogger, type JsonLineWriter } from '../telemetry/logger.js';
 import { createInMemoryMetricsObserver } from '../telemetry/metrics.js';
 import type { TelemetryObserver } from '../telemetry/observer.js';
 import { createRepl } from './repl.js';
@@ -998,7 +998,7 @@ function createCliObserver(options: {
   if (selectedDebugLogPath) {
     const resolvedDebugLogPath = resolveCliPath(options.cwd, selectedDebugLogPath);
     mkdirSync(dirname(resolvedDebugLogPath), { recursive: true });
-    const debugWriter = createCliJsonLineWriter(resolvedDebugLogPath);
+    const debugWriter = createFileJsonLineWriter(resolvedDebugLogPath);
     recallInputsDebugWriter = debugWriter;
     observers.push(createJsonLineLogger(debugWriter));
   }
@@ -1034,16 +1034,6 @@ function createCliObserver(options: {
       return (record: RecallInputsDebugRecord) => {
         recallInputsDebugWriter?.appendLine(`${JSON.stringify(record)}\n`);
       };
-    }
-  };
-}
-
-function createCliJsonLineWriter(filePath: string): JsonLineWriter {
-  appendFileSync(filePath, '', 'utf8');
-
-  return {
-    appendLine(line: string) {
-      appendFileSync(filePath, line, 'utf8');
     }
   };
 }

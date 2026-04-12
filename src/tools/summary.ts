@@ -32,9 +32,22 @@ const WORKER_TIMEOUT_MS = 15_000;
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 const WORKER_PATH = resolve(MODULE_DIR, 'python', 'summary_worker.py');
 
+function formatSummaryActivityLabel(input: unknown): string {
+  if (!input || typeof input !== 'object') {
+    return 'summarize';
+  }
+
+  const mode = typeof (input as { mode?: unknown }).mode === 'string'
+    ? (input as { mode: string }).mode.trim()
+    : '';
+
+  return mode.length > 0 ? `summarize ${mode}` : 'summarize';
+}
+
 export const summaryTool: Tool<SummaryToolInput> = {
   name: 'summary_tool',
   description: 'Summarize text blocks via the Python summary worker wrapper.',
+  formatActivityLabel: formatSummaryActivityLabel,
   inputSchema: {
     type: 'object',
     properties: {

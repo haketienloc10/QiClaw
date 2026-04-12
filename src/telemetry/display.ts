@@ -1,5 +1,6 @@
 import pc from 'picocolors';
 
+import { formatToolActivityLabel as formatRegisteredToolActivityLabel } from '../tools/registry.js';
 import type {
   TelemetryEvent,
   TelemetryObserver,
@@ -96,7 +97,7 @@ export function createCompactCliTelemetryObserver(
   return {
     record(event: TelemetryEvent) {
       if (event.type === 'tool_call_started') {
-        const label = formatToolActivityLabel(event.data, mode);
+        const label = formatToolActivityLabel(event.data);
 
         if (label) {
           toolActivityLabels.set(event.data.toolCallId, label);
@@ -225,8 +226,7 @@ function formatToolActivityLine(
 }
 
 function formatToolActivityLabel(
-  data: ToolCallStartedTelemetryData,
-  mode: 'compact' | 'interactive'
+  data: ToolCallStartedTelemetryData
 ): string | undefined {
   const actionLabel = formatToolActionLabel(data);
 
@@ -238,15 +238,7 @@ function formatToolActivityLabel(
 }
 
 function formatToolActionLabel(data: ToolCallStartedTelemetryData): string | undefined {
-  if (data.toolName === 'shell') {
-    return `shell ${formatShellCommandLabel(data.inputRawRedacted)}`;
-  }
-
-  if (data.toolName === 'file') {
-    return formatFileToolActionLabel(data.inputRawRedacted);
-  }
-
-  return undefined;
+  return formatRegisteredToolActivityLabel(data.toolName, data.inputRawRedacted);
 }
 
 function formatToolCompletionLine(
@@ -275,108 +267,6 @@ function formatToolCompletionStatus(
   return data.isError ? 'fail' : 'done';
 }
 
-function formatShellCommandLabel(input: unknown): string {
-  if (!input || typeof input !== 'object') {
-    return 'command';
-  }
-
-  const command = typeof (input as { command?: unknown }).command === 'string'
-    ? (input as { command: string }).command.trim()
-    : '';
-  const args = Array.isArray((input as { args?: unknown }).args)
-    ? (input as { args: unknown[] }).args.filter((arg): arg is string => typeof arg === 'string' && arg.length > 0)
-    : [];
-  const label = [command, ...args].filter((part) => part.length > 0).join(' ').trim();
-
-  return label.length > 0 ? label : 'command';
-}
-
-function formatPathToolLabel(input: unknown, fallbackNoun: string): string {
-  if (!input || typeof input !== 'object') {
-    return fallbackNoun;
-  }
-
-  const path = typeof (input as { path?: unknown }).path === 'string'
-    ? (input as { path: string }).path.trim()
-    : '';
-
-  return path.length > 0 ? path : fallbackNoun;
-}
-
-function formatFileToolActionLabel(input: unknown): string {
-  if (!input || typeof input !== 'object') {
-    return 'file';
-  }
-
-  const action = typeof (input as { action?: unknown }).action === 'string'
-    ? (input as { action: string }).action.trim()
-    : '';
-
-  if (action === 'search') {
-    const query = formatSearchQueryValue(input);
-    return query ? `file search ${query}` : 'file search';
-  }
-
-  if (action === 'list') {
-    return `file list ${formatPathToolLabel(input, '.')}`;
-  }
-
-  if (action === 'read' || action === 'write') {
-    return `file ${action} ${formatPathToolLabel(input, 'file')}`;
-  }
-
-  return action.length > 0 ? `file ${action}` : 'file';
-}
-
-function formatSearchQueryValue(input: unknown): string | undefined {
-  if (!input || typeof input !== 'object') {
-    return undefined;
-  }
-
-  const query = typeof (input as { query?: unknown }).query === 'string'
-    ? (input as { query: string }).query.trim()
-    : '';
-
-  if (query.length > 0) {
-    return query;
-  }
-
-  const pattern = typeof (input as { pattern?: unknown }).pattern === 'string'
-    ? (input as { pattern: string }).pattern.trim()
-    : '';
-
-  return pattern.length > 0 ? pattern : undefined;
-}
-
-function formatSearchNumericOption(
-  input: unknown,
-  key: 'maxResults'
-): string | undefined {
-  if (!input || typeof input !== 'object') {
-    return undefined;
-  }
-
-  const value = (input as Record<string, unknown>)[key];
-
-  return typeof value === 'number' && Number.isFinite(value)
-    ? `${key}=${value}`
-    : undefined;
-}
-
-function formatSearchBooleanOption(
-  input: unknown,
-  key: 'includeContext'
-): string | undefined {
-  if (!input || typeof input !== 'object') {
-    return undefined;
-  }
-
-  const value = (input as Record<string, unknown>)[key];
-
-  return typeof value === 'boolean'
-    ? `${key}=${value}`
-    : undefined;
-}
 
 function formatFooterLine(
   summary: TurnSummaryTelemetryData,

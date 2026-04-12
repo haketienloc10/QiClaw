@@ -109,9 +109,22 @@ function assertBodySizeWithinLimit(content: string): void {
   }
 }
 
+function formatWebFetchActivityLabel(input: unknown): string {
+  if (!input || typeof input !== 'object') {
+    return 'web fetch';
+  }
+
+  const url = typeof (input as { url?: unknown }).url === 'string'
+    ? (input as { url: string }).url.trim()
+    : '';
+
+  return url.length > 0 ? `web fetch ${url}` : 'web fetch';
+}
+
 export const webFetchTool: Tool<WebFetchInput> = {
   name: 'web_fetch',
   description: 'Fetch a web resource by URL and return the response body.',
+  formatActivityLabel: formatWebFetchActivityLabel,
   inputSchema: {
     type: 'object',
     properties: {

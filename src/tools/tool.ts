@@ -21,6 +21,7 @@ export interface Tool<TInput = unknown> {
   name: string;
   description: string;
   inputSchema: JsonSchema;
+  formatActivityLabel?(input: unknown): string | undefined;
   execute(input: TInput, context: ToolContext): Promise<ToolResult>;
 }
 

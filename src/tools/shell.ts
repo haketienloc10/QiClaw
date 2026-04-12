@@ -323,9 +323,26 @@ async function executeShell(input: ShellInput, cwd: string): Promise<ToolResult>
   }
 }
 
+function formatShellActivityLabel(input: unknown): string {
+  if (!input || typeof input !== 'object') {
+    return 'shell command';
+  }
+
+  const command = typeof (input as { command?: unknown }).command === 'string'
+    ? (input as { command: string }).command.trim()
+    : '';
+  const args = Array.isArray((input as { args?: unknown }).args)
+    ? (input as { args: unknown[] }).args.filter((arg): arg is string => typeof arg === 'string' && arg.length > 0)
+    : [];
+  const label = [command, ...args].filter((part) => part.length > 0).join(' ').trim();
+
+  return label.length > 0 ? `shell ${label}` : 'shell command';
+}
+
 export const shellTool: Tool<ShellInput> = {
   name: 'shell',
   description: 'Run a single program with optional arguments inside the current working directory.',
+  formatActivityLabel: formatShellActivityLabel,
   inputSchema: {
     type: 'object',
     properties: {

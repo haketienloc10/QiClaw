@@ -535,7 +535,104 @@ describe('createCompactCliTelemetryObserver', () => {
     expect(redraws.get('call-turn-stopped')).toEqual(redrawHistoryAtCleanup);
   });
 
-  it('suppresses unknown tool activity lines', () => {
+  it('renders compact activity lines for git, web_fetch, and summary_tool', () => {
+    const lines: string[] = [];
+    const replaced = new Map<string, string>();
+    const observer = createCompactCliTelemetryObserver({
+      writeActivityLine(text) {
+        lines.push(text);
+      },
+      replaceActivityLine(toolCallId, text) {
+        replaced.set(toolCallId, text);
+      },
+      writeFooterLine(text) {
+        lines.push(text);
+      }
+    });
+
+    observer.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      toolName: 'git',
+      toolCallId: 'call-git',
+      inputPreview: '{"args":["status","--short","--branch"]}',
+      inputRawRedacted: { args: ['status', '--short', '--branch'] }
+    }));
+    observer.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      toolName: 'git',
+      toolCallId: 'call-git',
+      isError: false,
+      resultPreview: 'ok',
+      resultRawRedacted: { content: 'ok' },
+      durationMs: 4,
+      resultSizeChars: 2,
+      resultSizeBucket: 'small'
+    }));
+
+    observer.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      toolName: 'web_fetch',
+      toolCallId: 'call-web',
+      inputPreview: '{"url":"https://example.com/docs"}',
+      inputRawRedacted: { url: 'https://example.com/docs', prompt: 'secret prompt text' }
+    }));
+    observer.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      toolName: 'web_fetch',
+      toolCallId: 'call-web',
+      isError: false,
+      resultPreview: 'ok',
+      resultRawRedacted: { content: 'ok' },
+      durationMs: 6,
+      resultSizeChars: 2,
+      resultSizeBucket: 'small'
+    }));
+
+    observer.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      toolName: 'summary_tool',
+      toolCallId: 'call-summary',
+      inputPreview: '{"texts":["alpha","beta"],"mode":"memory"}',
+      inputRawRedacted: { texts: ['alpha', 'beta'], mode: 'memory', dedupeSentences: true }
+    }));
+    observer.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
+      turnId: 'turn-1',
+      providerRound: 1,
+      toolRound: 1,
+      toolName: 'summary_tool',
+      toolCallId: 'call-summary',
+      isError: false,
+      resultPreview: 'ok',
+      resultRawRedacted: { content: 'ok' },
+      durationMs: 8,
+      resultSizeChars: 2,
+      resultSizeBucket: 'small'
+    }));
+
+    expect(lines).toEqual([
+      '· git status --short --branch',
+      '· web fetch https://example.com/docs',
+      '· summarize memory'
+    ]);
+    expect(replaced).toEqual(new Map([
+      ['call-git', '· git status --short --branch | done (4ms)'],
+      ['call-web', '· web fetch https://example.com/docs | done (6ms)'],
+      ['call-summary', '· summarize memory | done (8ms)']
+    ]));
+    expect(lines.join('\n')).not.toContain('secret prompt text');
+  });
+
+  it('renders fallback activity lines for unknown tools', () => {
     const lines: string[] = [];
     const observer = createCompactCliTelemetryObserver({
       writeActivityLine(text) {
@@ -552,11 +649,11 @@ describe('createCompactCliTelemetryObserver', () => {
       toolRound: 1,
       toolName: 'Read',
       toolCallId: 'call-2',
-      inputPreview: '{"path":"secret.txt"}',
-      inputRawRedacted: { path: 'secret.txt' }
+      inputPreview: '{"action":"inspect","path":"secret.txt"}',
+      inputRawRedacted: { action: 'inspect', path: 'secret.txt' }
     }));
 
-    expect(lines).toEqual([]);
+    expect(lines).toEqual(['· Read inspect secret.txt']);
   });
 
   it('renders a minimal footer from turn summary and omits zero tools', () => {

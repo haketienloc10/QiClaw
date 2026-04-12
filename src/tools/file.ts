@@ -248,9 +248,67 @@ async function executeSearch(input: FileSearchInput, context: ToolContext): Prom
   }
 }
 
+function formatPathToolLabel(input: unknown, fallbackNoun: string): string {
+  if (!input || typeof input !== 'object') {
+    return fallbackNoun;
+  }
+
+  const path = typeof (input as { path?: unknown }).path === 'string'
+    ? (input as { path: string }).path.trim()
+    : '';
+
+  return path.length > 0 ? path : fallbackNoun;
+}
+
+function formatSearchQueryValue(input: unknown): string | undefined {
+  if (!input || typeof input !== 'object') {
+    return undefined;
+  }
+
+  const query = typeof (input as { query?: unknown }).query === 'string'
+    ? (input as { query: string }).query.trim()
+    : '';
+
+  if (query.length > 0) {
+    return query;
+  }
+
+  const pattern = typeof (input as { pattern?: unknown }).pattern === 'string'
+    ? (input as { pattern: string }).pattern.trim()
+    : '';
+
+  return pattern.length > 0 ? pattern : undefined;
+}
+
+function formatFileActivityLabel(input: unknown): string {
+  if (!input || typeof input !== 'object') {
+    return 'file';
+  }
+
+  const action = typeof (input as { action?: unknown }).action === 'string'
+    ? (input as { action: string }).action.trim()
+    : '';
+
+  if (action === 'search') {
+    const query = formatSearchQueryValue(input);
+    return query ? `file search ${query}` : 'file search';
+  }
+
+  if (action === 'list') {
+    return `file list ${formatPathToolLabel(input, '.')}`;
+  }
+
+  if (action === 'read' || action === 'write') {
+    return `file ${action} ${formatPathToolLabel(input, 'file')}`;
+  }
+
+  return action.length > 0 ? `file ${action}` : 'file';
+}
+
 export const fileTool: Tool<FileInput> = {
   name: 'file',
   description: 'Read, write, search, or list workspace files using an action-based interface.',
+  formatActivityLabel: formatFileActivityLabel,
   inputSchema: {
     type: 'object',
     properties: {

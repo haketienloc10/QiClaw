@@ -981,10 +981,10 @@ describe('buildCli', () => {
       '\nQiClaw\n',
       '  handled: inspect package.json\n'
     ]);
-    expect(output).not.toContain('  · read /tmp/package.json\n');
-    expect(output).not.toContain('  · edit /tmp/package.json\n');
-    expect(output).not.toContain('  · search package\n');
-    expect(output).not.toContain('  · read /tmp/package.json | done (1ms)\n');
+    expect(output).toContain('  · read_file /tmp/package.json\n');
+    expect(output).toContain('  · edit_file /tmp/package.json\n');
+    expect(output).toContain('  · search package\n');
+    expect(output).toContain('  · read_file /tmp/package.json | done (1ms)\n');
     expectExactlyOneBlankLineBeforeEachAssistantBlock(output);
     expect(output).not.toContain('Tool: Read');
     expect(output).not.toContain('secret payload');
@@ -1276,6 +1276,142 @@ describe('buildCli', () => {
     await expect(cli.run()).resolves.toBe(0);
     return writes;
   }
+
+  it('renders git and web_fetch tool activity in prompt transcript while preserving footer counts', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-git-web-'));
+    tempDirs.push(tempDir);
+
+    const { writes, cli } = createPromptCliTestHarness({
+      cwd: tempDir,
+      runTurn: async (input) => {
+        input.observer?.record(createTelemetryEvent('provider_called', 'provider_decision', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 0,
+          messageCount: 2,
+          promptRawChars: 42,
+          toolNames: ['git', 'web_fetch']
+        }));
+        input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          toolName: 'git',
+          toolCallId: 'toolu_git',
+          inputPreview: '{"args":["status","--short"]}',
+          inputRawRedacted: { args: ['status', '--short'] }
+        }));
+        input.observer?.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          toolName: 'git',
+          toolCallId: 'toolu_git',
+          isError: false,
+          resultPreview: 'ok',
+          resultRawRedacted: { content: 'ok' },
+          durationMs: 11,
+          resultSizeChars: 2,
+          resultSizeBucket: 'small'
+        }));
+        input.observer?.record(createTelemetryEvent('provider_called', 'provider_decision', {
+          turnId: 'turn-1',
+          providerRound: 2,
+          toolRound: 1,
+          messageCount: 4,
+          promptRawChars: 84,
+          toolNames: ['git', 'web_fetch']
+        }));
+        input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+          turnId: 'turn-1',
+          providerRound: 2,
+          toolRound: 2,
+          toolName: 'web_fetch',
+          toolCallId: 'toolu_web',
+          inputPreview: '{"url":"https://example.com/docs"}',
+          inputRawRedacted: { url: 'https://example.com/docs', prompt: 'secret prompt text' }
+        }));
+        input.observer?.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
+          turnId: 'turn-1',
+          providerRound: 2,
+          toolRound: 2,
+          toolName: 'web_fetch',
+          toolCallId: 'toolu_web',
+          isError: false,
+          resultPreview: 'ok',
+          resultRawRedacted: { content: 'ok' },
+          durationMs: 13,
+          resultSizeChars: 2,
+          resultSizeBucket: 'small'
+        }));
+        input.observer?.record(createTelemetryEvent('turn_completed', 'completion_check', {
+          turnId: 'turn-1',
+          providerRound: 2,
+          toolRound: 2,
+          stopReason: 'completed',
+          toolRoundsUsed: 2,
+          isVerified: true,
+          durationMs: 6300
+        }));
+        input.observer?.record(createTelemetryEvent('turn_summary', 'completion_check', {
+          turnId: 'turn-1',
+          providerRound: 2,
+          toolRound: 2,
+          providerRounds: 2,
+          toolRoundsUsed: 2,
+          toolCallsTotal: 2,
+          toolCallsByName: { git: 1, web_fetch: 1 },
+          inputTokensTotal: 185,
+          outputTokensTotal: 15,
+          cacheReadInputTokens: 0,
+          promptCharsMax: 100,
+          toolResultCharsInFinalPrompt: 0,
+          assistantToolCallCharsInFinalPrompt: 0,
+          toolResultPromptGrowthCharsTotal: 0,
+          toolResultCharsAddedAcrossTurn: 0,
+          turnCompleted: true,
+          stopReason: 'completed'
+        }));
+
+        return {
+          stopReason: 'completed',
+          finalAnswer: `handled: ${input.userInput}`,
+          history: [],
+          toolRoundsUsed: 2,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true as const,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
+            toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
+            toolMessagesCount: 2,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+    const output = writes.join('');
+    expectContainsInOrder(output, [
+      '\nQiClaw\n',
+      '✓ Responding\n',
+      '  · git status --short | done (11ms)\n',
+      '✓ Responding\n',
+      '  · web fetch https://example.com/docs | done (13ms)\n',
+      '  handled: inspect package.json\n'
+    ]);
+    expect(output).not.toContain('secret prompt text');
+    expect(output).toContain('─ completed • verified • 2 provider • 2 tool round • 2 tools • 185 in / 15 out • 6.3s\n\n');
+  });
 
   it('inserts interactive completion below the matching tool line on TTY output', async () => {
     const writes = await runInteractiveCompletionPlacementScenario({
@@ -2018,11 +2154,18 @@ describe('buildCli', () => {
     const output = writes.join('');
     const normalizedOutput = renderTerminalTranscript(output);
     expect(normalizedOutput.match(/(?:^|\n)QiClaw\n/g)).toHaveLength(1);
-    expect(normalizedOutput.match(/(?:^|\n)✓ Responding\n/g)).toHaveLength(3);
+    expect(normalizedOutput.match(/(?:^|\n)✓ Responding\n/g)).toHaveLength(5);
     expect(normalizedOutput).not.toContain('  ✓ Responding\n');
-    expect(normalizedOutput).not.toContain('  · shell:read git diff -- repl.ts | done (15ms)\n');
     expectContainsInOrder(normalizedOutput, [
       'QiClaw\n',
+      '✓ Responding\n',
+      '  · shell_readonly git diff -- repl.ts | done',
+      '✓ Responding\n',
+      '  · shell_readonly git diff -- repl.ts | done',
+      '✓ Responding\n',
+      '  · shell_readonly git diff -- repl.ts | done',
+      '✓ Responding\n',
+      '  · shell_readonly git diff -- repl.ts | done',
       '✓ Responding\n',
       '  handled: inspect package.json\n'
     ]);
@@ -4744,7 +4887,7 @@ describe('buildCli', () => {
     await expect(cli.run()).resolves.toBe(0);
     expectRenderedCliOutput(
       writes,
-      '\nQiClaw\n  Tóm tắt:\n  - handled\n─ completed • verified • 1 provider • 1 tool round • 1 tools • 185 in / 15 out • 6.3s\n\n'
+      '\nQiClaw\n  · read_file /tmp/package.json\n  Tóm tắt:\n  - handled\n─ completed • verified • 1 provider • 1 tool round • 1 tools • 185 in / 15 out • 6.3s\n\n'
     );
   });
 

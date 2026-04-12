@@ -661,7 +661,7 @@ export async function* runAgentTurnStream(
         createTelemetryEvent(
           'provider_responded',
           'provider_decision',
-          buildProviderRespondedTelemetry(response, {
+          buildProviderRespondedTelemetry(response, displayText, {
             ...buildTurnContext(telemetry),
             durationMs: Date.now() - providerStartedAt
           })
@@ -1000,11 +1000,16 @@ function countContentBlocks(content: string): number {
 
 function buildProviderRespondedTelemetry(
   response: ProviderResponse,
+  displayedText: string,
   context: TelemetryEventContextData & { durationMs: number }
 ) {
-  const responseContentBlockCount = response.responseMetrics?.contentBlockCount ?? countContentBlocks(response.message.content);
+  const displayedTextBlockCount = countContentBlocks(displayedText);
+  const responseContentBlockCount = Math.max(
+    response.responseMetrics?.contentBlockCount ?? countContentBlocks(response.message.content),
+    displayedTextBlockCount
+  );
   const toolCallCount = response.responseMetrics?.toolCallCount ?? response.toolCalls.length;
-  const hasTextOutput = response.responseMetrics?.hasTextOutput ?? response.message.content.length > 0;
+  const hasTextOutput = (response.responseMetrics?.hasTextOutput ?? response.message.content.length > 0) || displayedText.length > 0;
 
   return {
     ...context,

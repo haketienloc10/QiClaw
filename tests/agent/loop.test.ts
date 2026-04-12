@@ -2340,6 +2340,59 @@ describe('agent loop', () => {
     expect(runtime.resolvedPackage?.effectivePolicy).toEqual(readonlyResolvedPackage.effectivePolicy);
   });
 
+  it('records provider_responded telemetry using parsed assistant_response text visibility', async () => {
+    const observedEvents: TelemetryEvent[] = [];
+    const provider: ModelProvider = {
+      name: 'openai',
+      model: 'gpt-test',
+      async generate() {
+        return normalizeProviderResponse({
+          content: JSON.stringify({
+            assistant_response: 'Chào bạn',
+            memory_candidates: {
+              count: 0,
+              candidates: []
+            }
+          }),
+          responseMetrics: {
+            contentBlockCount: 0,
+            toolCallCount: 0,
+            hasTextOutput: false,
+            contentBlocksByType: {}
+          },
+          debug: {
+            responsePreviewRedacted: '[]',
+            responseContentBlocksByType: {}
+          }
+        });
+      }
+    };
+
+    const result = await runAgentTurn({
+      provider,
+      availableTools: [],
+      baseSystemPrompt: 'system',
+      userInput: 'say hi',
+      cwd: process.cwd(),
+      maxToolRounds: 1,
+      observer: {
+        record(event) {
+          observedEvents.push(event);
+        }
+      }
+    });
+
+    expect(result.finalAnswer).toBe('Chào bạn');
+    expect(observedEvents.find((event) => event.type === 'provider_responded')).toMatchObject({
+      type: 'provider_responded',
+      data: {
+        toolCallCount: 0,
+        hasTextOutput: true,
+        responseContentBlockCount: 1
+      }
+    });
+  });
+
   it('records deterministic telemetry events while a turn runs', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'agent-loop-telemetry-'));
     await writeFile(join(workspace, 'note.txt'), 'agent note', 'utf8');

@@ -100,7 +100,7 @@ describe('specRegistry builtin parity', () => {
 
     expect(resolved.extendsChain).toEqual(['readonly', 'default']);
     expect(resolved.effectivePromptOrder).toEqual(['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'USER.md']);
-    expect(resolved.effectivePromptFiles['AGENT.md']?.content).toContain('Inspect the project surface and report findings without making edits.');
+    expect(resolved.effectivePromptFiles['AGENT.md']?.content).toContain('# AGENTS.md - Your Workspace');
     expect(resolved.effectivePromptFiles['USER.md']?.content).toContain('Readonly user instructions');
     expect(resolved.effectivePolicy.allowedCapabilityClasses).toEqual(['read']);
     expect(resolved.effectivePolicy.requiresToolEvidence).toBe(true);

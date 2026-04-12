@@ -349,7 +349,7 @@ describe('createCompactCliTelemetryObserver', () => {
     expect(redrawsAtCompletion).toEqual(redrawHistoryAtCompletion);
     expect(activityLines).toEqual([
       originalToolLine,
-      expect.stringContaining('Success')
+      ' └─ ✔ Success (5ms)'
     ]);
 
     vi.advanceTimersByTime(postCompletionWaitMs);
@@ -357,7 +357,7 @@ describe('createCompactCliTelemetryObserver', () => {
     expect(redraws.get('call-completed')).toEqual(redrawsAtCompletion);
     expect(activityLines).toEqual([
       originalToolLine,
-      expect.stringContaining('Success')
+      ' └─ ✔ Success (5ms)'
     ]);
   });
 

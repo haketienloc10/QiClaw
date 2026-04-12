@@ -1160,7 +1160,8 @@ describe('agent loop', () => {
         id: 'call-read-stream-1',
         name: 'file',
         resultPreview: '{"content":"read:note.txt"}',
-        isError: false
+        isError: false,
+        durationMs: expect.any(Number)
       },
       { type: 'provider_started', provider: 'openai', model: 'gpt-test' },
       { type: 'assistant_text_delta', text: 'Done reading note' },
@@ -1300,7 +1301,8 @@ describe('agent loop', () => {
         id: 'call-read-stream-history',
         name: 'file',
         resultPreview: '{"content":"read:note.txt"}',
-        isError: false
+        isError: false,
+        durationMs: expect.any(Number)
       },
       { type: 'provider_started', provider: 'openai', model: 'gpt-test' },
       { type: 'assistant_text_delta', text: 'Done reading note' },
@@ -1443,7 +1445,8 @@ describe('agent loop', () => {
         id: 'call-read-stream-structured',
         name: 'file',
         resultPreview: '{"content":"read:note.txt"}',
-        isError: false
+        isError: false,
+        durationMs: expect.any(Number)
       },
       { type: 'provider_started', provider: 'openai', model: 'gpt-test' },
       { type: 'assistant_text_delta', text: 'Done\n' },

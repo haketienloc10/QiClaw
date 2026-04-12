@@ -16,6 +16,8 @@ import { createNoopObserver, createTelemetryEvent, type TelemetryObserver } from
 import { searchTool } from '../../src/tools/search.js';
 import type { Tool } from '../../src/tools/tool.js';
 
+const INTERACTIVE_PULSE_SETTLE_MS = 240;
+
 const tempDirs: string[] = [];
 const providerEnvKeys = [
   'MODEL',
@@ -1409,6 +1411,104 @@ describe('buildCli', () => {
     expect(output).not.toContain(' ✳ ');
     expect(output).not.toContain(' ✴ ');
     expect(output).not.toContain(' ✦ read src/cli/main.ts\n');
+  });
+
+  it('rewrites the active interactive tool line multiple times on TTY while a tool is still running', async () => {
+    vi.useFakeTimers();
+
+    let moveCursorCalls = 0;
+    let clearLineCalls = 0;
+    const writes: string[] = [];
+    const cli = buildCli({
+      argv: [],
+      cwd: '/tmp/qiclaw-interactive-tool-tty-rewrite-count',
+      readLine: (() => {
+        const inputs = ['inspect package.json', '/exit'];
+        return async () => inputs.shift();
+      })(),
+      stdout: {
+        isTTY: true,
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        },
+        moveCursor() {
+          moveCursorCalls += 1;
+          return true;
+        },
+        clearLine() {
+          clearLineCalls += 1;
+          return true;
+        }
+      } as Pick<NodeJS.WriteStream, 'write' | 'moveCursor' | 'clearLine'> & { isTTY: boolean },
+      createRuntime: (runtimeOptions) => ({
+        provider: createNoopTestProvider(),
+        availableTools: [],
+        cwd: '/tmp/qiclaw-interactive-tool-tty-rewrite-count',
+        observer: runtimeOptions.observer ?? createNoopObserver(),
+        resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      runTurn: async (input) => {
+        input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          toolName: 'shell',
+          toolCallId: 'toolu_tty_rewrite',
+          inputPreview: '{"command":"npm","args":["test"]}',
+          inputRawRedacted: { command: 'npm', args: ['test'] }
+        }));
+
+        await vi.advanceTimersByTimeAsync(INTERACTIVE_PULSE_SETTLE_MS);
+
+        input.observer?.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
+          turnId: 'turn-1',
+          providerRound: 1,
+          toolRound: 1,
+          toolName: 'shell',
+          toolCallId: 'toolu_tty_rewrite',
+          isError: false,
+          resultPreview: 'ok',
+          resultRawRedacted: { content: 'ok' },
+          durationMs: 5,
+          resultSizeChars: 2,
+          resultSizeBucket: 'small'
+        }));
+
+        return {
+          stopReason: 'completed',
+          finalAnswer: `handled: ${input.userInput}`,
+          history: [],
+          toolRoundsUsed: 1,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true as const,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
+            toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
+            toolMessagesCount: 1,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+
+    expect(writes.join('')).toContain('\u001b[1A\u001b[2K');
+    expect(moveCursorCalls).toBe(0);
+    expect(clearLineCalls).toBe(0);
+    expect(stripAnsi(writes.join(''))).toContain(' ✦ shell npm test\n');
   });
 
   it('prefers --debug-log over QICLAW_DEBUG_LOG and writes JSONL events to the selected file', async () => {
@@ -2958,6 +3058,222 @@ describe('buildCli', () => {
     ]);
   });
 
+  it('falls back to raw ANSI line rewrites for interactive tool activity even when cursor methods exist', async () => {
+    vi.useFakeTimers();
+
+    const writes: string[] = [];
+    let moveCursorCalls = 0;
+    let clearLineCalls = 0;
+    const cwd = join(tmpdir(), `qiclaw-interactive-ansi-rewrite-${Math.random().toString(36).slice(2)}`);
+    const cli = buildCli({
+      argv: [],
+      cwd,
+      readLine: (() => {
+        const inputs = ['run tool please', '/exit'];
+        return async () => inputs.shift();
+      })(),
+      stdout: {
+        isTTY: true,
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        },
+        moveCursor() {
+          moveCursorCalls += 1;
+          return true;
+        },
+        clearLine() {
+          clearLineCalls += 1;
+          return true;
+        }
+      } as Pick<NodeJS.WriteStream, 'write' | 'moveCursor' | 'clearLine'> & {
+        isTTY: boolean;
+      },
+      createRuntime: (runtimeOptions) => createTestRuntime(cwd, runtimeOptions.observer),
+      runTurn: async (input) => ({
+        stopReason: 'completed',
+        finalAnswer: '',
+        history: [],
+        toolRoundsUsed: 1,
+        doneCriteria: {
+          goal: input.userInput,
+          checklist: [input.userInput],
+          requiresNonEmptyFinalAnswer: true as const,
+          requiresToolEvidence: false,
+          requiresSubstantiveFinalAnswer: false,
+          forbidSuccessAfterToolErrors: false
+        },
+        verification: {
+          isVerified: true,
+          finalAnswerIsNonEmpty: true,
+          finalAnswerIsSubstantive: true,
+          toolEvidenceSatisfied: true,
+          noUnresolvedToolErrors: true,
+          toolMessagesCount: 1,
+          checks: []
+        },
+        turnStream: (async function* () {
+          yield { type: 'turn_started' } satisfies TurnEvent;
+          input.observer?.record(createTelemetryEvent('provider_called', 'provider_decision', {
+            turnId: 'turn-ansi-rewrite',
+            providerRound: 1,
+            toolRound: 0,
+            messageCount: 2,
+            promptRawChars: 42,
+            toolNames: [],
+            messageSummaries: [
+              { role: 'system', rawChars: 12, contentBlockCount: 1, messageSource: 'system' },
+              { role: 'user', rawChars: 20, contentBlockCount: 1, messageSource: 'user' }
+            ],
+            totalContentBlockCount: 2,
+            hasSystemPrompt: true,
+            promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"}]}'
+          }));
+          input.observer?.record(createTelemetryEvent('provider_responded', 'provider_decision', {
+            turnId: 'turn-ansi-rewrite',
+            providerRound: 1,
+            toolRound: 0,
+            stopReason: 'tool_use',
+            usage: { inputTokens: 12, outputTokens: 8, totalTokens: 20 },
+            responseContentBlockCount: 1,
+            toolCallCount: 1,
+            hasTextOutput: false,
+            responseContentBlocksByType: { tool_use: 1 },
+            toolCallSummaries: [],
+            providerUsageRawRedacted: { input_tokens: 12, output_tokens: 8 },
+            providerStopDetails: { stop_reason: 'tool_use' },
+            responsePreviewRedacted: '[{"type":"tool_use"}]',
+            durationMs: 20
+          }));
+          input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+            turnId: 'turn-ansi-rewrite',
+            providerRound: 1,
+            toolRound: 1,
+            toolName: 'shell',
+            toolCallId: 'toolu_ansi',
+            inputPreview: '{"command":"npm","args":["test"]}',
+            inputRawRedacted: { command: 'npm', args: ['test'] }
+          }));
+
+          await vi.advanceTimersByTimeAsync(INTERACTIVE_PULSE_SETTLE_MS);
+
+          input.observer?.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
+            turnId: 'turn-ansi-rewrite',
+            providerRound: 1,
+            toolRound: 1,
+            toolName: 'shell',
+            toolCallId: 'toolu_ansi',
+            isError: false,
+            resultPreview: 'ok',
+            resultRawRedacted: { content: 'ok' },
+            durationMs: 5,
+            resultSizeChars: 2,
+            resultSizeBucket: 'small'
+          }));
+          yield {
+            type: 'turn_completed',
+            finalAnswer: '',
+            stopReason: 'completed',
+            history: [],
+            toolRoundsUsed: 1,
+            doneCriteria: {
+              goal: input.userInput,
+              checklist: [input.userInput],
+              requiresNonEmptyFinalAnswer: true as const,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            },
+            turnCompleted: true
+          } satisfies TurnEvent;
+        })()
+      })
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+
+    const output = writes.join('');
+    expect(output).toContain('\u001b[1A\u001b[2K');
+    expect(moveCursorCalls).toBe(0);
+    expect(clearLineCalls).toBe(0);
+  });
+
+  it('shows interactive fallback failure duration when tool events include durationMs', async () => {
+    const writes: string[] = [];
+    const cwd = join(tmpdir(), `qiclaw-interactive-fallback-duration-${Math.random().toString(36).slice(2)}`);
+    const cli = buildCli({
+      argv: [],
+      cwd,
+      readLine: (() => {
+        const inputs = ['run tool please'];
+        return async () => inputs.shift();
+      })(),
+      stdout: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      stderr: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      createRuntime: (runtimeOptions) => createTestRuntime(cwd, runtimeOptions.observer),
+      runTurn: async () => ({
+        stopReason: 'completed',
+        finalAnswer: '',
+        history: [],
+        toolRoundsUsed: 1,
+        doneCriteria: {
+          goal: 'run tool please',
+          checklist: ['run tool please'],
+          requiresNonEmptyFinalAnswer: true as const,
+          requiresToolEvidence: true,
+          requiresSubstantiveFinalAnswer: false,
+          forbidSuccessAfterToolErrors: false
+        },
+        verification: {
+          isVerified: false,
+          finalAnswerIsNonEmpty: false,
+          finalAnswerIsSubstantive: false,
+          toolEvidenceSatisfied: false,
+          noUnresolvedToolErrors: false,
+          toolMessagesCount: 1,
+          checks: []
+        },
+        turnStream: (async function* () {
+          yield { type: 'turn_started' } satisfies TurnEvent;
+          yield {
+            type: 'tool_call_started',
+            id: 'toolu_1',
+            name: 'shell',
+            input: { command: 'npm', args: ['test'] }
+          } satisfies TurnEvent;
+          yield {
+            type: 'tool_call_completed',
+            id: 'toolu_1',
+            name: 'shell',
+            resultPreview: 'permission denied',
+            isError: true,
+            durationMs: 15
+          } satisfies TurnEvent & { durationMs: number };
+          yield {
+            type: 'turn_failed',
+            error: new Error('Tool crashed')
+          } satisfies TurnEvent;
+          throw new Error('Tool crashed');
+        })()
+      })
+    });
+
+    await expect(cli.run()).resolves.toBe(1);
+
+    const output = stripAnsi(writes.join(''));
+    expect(output).toContain(' └─ ✖ Fail (15ms)\n');
+  });
+
   it('streams real runtime tool activity in prompt mode without duplicate telemetry render', async () => {
     const writes: string[] = [];
     const cwd = join(tmpdir(), `qiclaw-prompt-real-stream-${Math.random().toString(36).slice(2)}`);
@@ -3338,12 +3654,14 @@ describe('buildCli', () => {
       '┌────────────────────────────────────────────────────┐\n',
       '│ ⚡QiClaw                      🤖 Model: test-model │\n',
       '└────────────────────────────────────────────────────┘\n',
-      ' └─ ✖ Fail\n',
+      ' ✦ file read src/cli/main.ts\n',
+      ' └─ ✖ Fail',
       '  permission denied\n',
       '──────────────────────────────────────────────────────\n',
       '✖ FAIL: Tool crashed\n'
     ]);
-    expect(output).not.toContain(' ✦ read src/cli/main.ts\n');
+    expect(output).toContain(' ✦ file read src/cli/main.ts\n');
+    expect(output.match(/ ✦ file read src\/cli\/main\.ts\n/g)).toHaveLength(1);
     expect(output.match(/Tool crashed\n/g)).toHaveLength(1);
   });
 
@@ -3423,12 +3741,14 @@ describe('buildCli', () => {
       '┌────────────────────────────────────────────────────┐\n',
       '│ ⚡QiClaw                      🤖 Model: test-model │\n',
       '└────────────────────────────────────────────────────┘\n',
-      ' └─ ✔ Success\n',
+      ' ✦ file read src/cli/main.ts\n',
+      ' └─ ✔ Success',
       '  export function buildCli\n',
       '──────────────────────────────────────────────────────\n',
       '✖ FAIL: Tool crashed\n'
     ]);
-    expect(output).not.toContain(' ✦ read src/cli/main.ts\n');
+    expect(output).toContain(' ✦ file read src/cli/main.ts\n');
+    expect(output.match(/ ✦ file read src\/cli\/main\.ts\n/g)).toHaveLength(1);
     expect(output.match(/Tool crashed\n/g)).toHaveLength(1);
   });
 

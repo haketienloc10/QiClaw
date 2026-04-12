@@ -62,7 +62,7 @@ export type TurnEvent =
   | { type: 'provider_started'; provider: string; model: string }
   | { type: 'assistant_text_delta'; text: string }
   | { type: 'tool_call_started'; id: string; name: string; input: Record<string, unknown> }
-  | { type: 'tool_call_completed'; id: string; name: string; resultPreview: string; isError: boolean }
+  | { type: 'tool_call_completed'; id: string; name: string; resultPreview: string; isError: boolean; durationMs?: number }
   | { type: 'assistant_message_completed'; text: string; toolCalls?: ToolCallRequest[] }
   | {
       type: 'turn_completed';
@@ -771,7 +771,8 @@ export async function* runAgentTurnStream(
           id: toolCall.id,
           name: toolCall.name,
           resultPreview: buildTelemetryPreview({ content: toolResult.content }, 120),
-          isError: toolResult.isError
+          isError: toolResult.isError,
+          durationMs: Date.now() - toolStartedAt
         };
       }
 

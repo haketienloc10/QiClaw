@@ -189,7 +189,6 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
           debugLogPath: parsed.debugLogPath,
           envDebugLogPath: process.env.QICLAW_DEBUG_LOG,
           showCompactToolStatus: true,
-          suppressTelemetryToolActivity: !options.runTurn,
           assistantBlockWriter,
           mode: parsed.prompt ? 'compact' : 'interactive'
         });
@@ -213,7 +212,9 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
               });
             },
             async onTurnEvent(event) {
-              handleCliTurnEvent(event, assistantBlockWriter, 'compact');
+              handleCliTurnEvent(event, assistantBlockWriter, 'compact', {
+                allowTurnEventToolActivityFallback: Boolean(options.runTurn)
+              });
             },
             writeLine(text) {
               stdout.write(`${text}\n`);
@@ -268,7 +269,9 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
           multilineDiscardedText: formatInteractiveInfoLine('Multiline draft discarded.'),
           readLine: options.readLine,
           async onTurnEvent(event) {
-            handleCliTurnEvent(event, assistantBlockWriter, 'interactive');
+            handleCliTurnEvent(event, assistantBlockWriter, 'interactive', {
+              allowTurnEventToolActivityFallback: Boolean(options.runTurn)
+            });
           },
           async runTurn(userInput) {
             let preparedMemory:
@@ -438,7 +441,10 @@ function recordInteractiveMemoryFallback(
 function handleCliTurnEvent(
   event: TurnEvent,
   assistantBlockWriter: AssistantBlockWriter | undefined,
-  mode: CliDisplayMode
+  mode: CliDisplayMode,
+  options: {
+    allowTurnEventToolActivityFallback?: boolean;
+  } = {}
 ): void {
   if (event.type === 'assistant_text_delta') {
     assistantBlockWriter?.writeAssistantTextDelta(event.text);
@@ -451,6 +457,10 @@ function handleCliTurnEvent(
   }
 
   if (event.type === 'tool_call_started') {
+    if (!options.allowTurnEventToolActivityFallback) {
+      return;
+    }
+
     const activityLine = formatTurnEventToolActivityLine(event, mode);
     if (activityLine) {
       assistantBlockWriter?.writeAssistantLine(activityLine, event.id);
@@ -459,6 +469,10 @@ function handleCliTurnEvent(
   }
 
   if (event.type === 'tool_call_completed') {
+    if (!options.allowTurnEventToolActivityFallback) {
+      return;
+    }
+
     if (mode === 'interactive') {
       assistantBlockWriter?.writeAssistantLineBelow(event.id, formatTurnEventToolCompletionLine(event));
     } else {
@@ -493,9 +507,13 @@ function formatTurnEventToolActivityLine(
 function formatTurnEventToolCompletionLine(
   event: Extract<TurnEvent, { type: 'tool_call_completed' }>
 ): string {
-  return event.isError
-    ? ` └─ ${pc.red('✖')} ${pc.red('Fail')}`
-    : ` └─ ${pc.green('✔')} ${pc.green('Success')}`;
+  const status = event.isError
+    ? `${pc.red('✖')} ${pc.red('Fail')}`
+    : `${pc.green('✔')} ${pc.green('Success')}`;
+
+  return typeof event.durationMs === 'number'
+    ? ` └─ ${status} (${event.durationMs}ms)`
+    : ` └─ ${status}`;
 }
 
 function formatTurnEventToolPreviewLine(resultPreview: string, mode: CliDisplayMode): string | undefined {
@@ -529,6 +547,15 @@ function formatTurnEventToolLabel(toolName: string, input: Record<string, unknow
     }
 
     return action.length > 0 ? `file ${action}` : 'file';
+  }
+
+  if (toolName === 'read_file' || toolName === 'edit_file') {
+    const action = toolName === 'read_file' ? 'read' : 'write';
+    return `file ${action} ${formatTurnEventPathLabel(input, 'file')}`;
+  }
+
+  if (toolName === 'search') {
+    return `file search ${formatTurnEventSearchLabel(input)}`;
   }
 
   return undefined;
@@ -635,12 +662,6 @@ function createAssistantBlockWriter(stdout: CliStdout, mode: CliDisplayMode): As
 
   function rewritePreviousLine(): void {
     if (!stdout.isTTY) {
-      return;
-    }
-
-    if (canRewriteTerminalLines()) {
-      stdout.moveCursor?.(0, -1);
-      stdout.clearLine?.(0);
       return;
     }
 
@@ -927,7 +948,6 @@ function createCliObserver(options: {
   debugLogPath?: string;
   envDebugLogPath?: string;
   showCompactToolStatus?: boolean;
-  suppressTelemetryToolActivity?: boolean;
   assistantBlockWriter: AssistantBlockWriter;
   mode?: 'compact' | 'interactive';
 }): {
@@ -943,24 +963,12 @@ function createCliObserver(options: {
     compactObserver = createCompactCliTelemetryObserver({
       mode: options.mode,
       writeActivityLine(text, toolCallId) {
-        if (options.suppressTelemetryToolActivity) {
-          return;
-        }
-
         options.assistantBlockWriter.writeAssistantLine(text, toolCallId);
       },
       writeActivityLineBelow(toolCallId, text) {
-        if (options.suppressTelemetryToolActivity) {
-          return;
-        }
-
         options.assistantBlockWriter.writeAssistantLineBelow(toolCallId, text);
       },
       replaceActivityLine(toolCallId, text) {
-        if (options.suppressTelemetryToolActivity) {
-          return;
-        }
-
         options.assistantBlockWriter.replaceAssistantLine(toolCallId, text);
       },
       writeFooterLine(text) {

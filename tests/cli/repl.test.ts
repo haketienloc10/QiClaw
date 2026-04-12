@@ -1797,6 +1797,7 @@ describe('buildCli', () => {
               novelty_basis: 'User explicitly stated this preference in the current turn.'
             }
           ],
+          structuredOutputParsed: true,
           toolRoundsUsed: 0,
           doneCriteria: {
             goal: input.userInput,
@@ -1824,9 +1825,107 @@ describe('buildCli', () => {
       expect(selectedLog).toContain('"type":"memory_candidates"');
       expect(selectedLog).toContain('"sessionId":"session-memory-debug"');
       expect(selectedLog).toContain('"title":"User prefers Vietnamese"');
+      expect(selectedLog).toContain('"parsed":true');
+      expect(selectedLog).toContain('"parseFallbackUsed":false');
     });
   });
 
+  it('logs parsed true with zero candidates when structured output parsing succeeded', async () => {
+    await withProviderEnvSnapshot(async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-04-12T10:30:00.000Z'));
+
+      const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-memory-candidates-empty-log-'));
+      tempDirs.push(tempDir);
+
+      const debugLogPath = join(tempDir, 'debug', 'telemetry.jsonl');
+      const rotatedLogPath = join(tempDir, 'debug', 'telemetry-2026-04-12.jsonl');
+
+      const cli = buildCli({
+        argv: ['--debug-log', debugLogPath],
+        cwd: tempDir,
+        createSessionId: () => 'session-memory-debug-empty',
+        readLine: (() => {
+          const inputs = ['remember my language preference', '/exit'];
+          return async () => inputs.shift();
+        })(),
+        stdout: { write() { return true; } },
+        createRuntime: (runtimeOptions) => ({
+          provider: createNoopTestProvider(),
+          availableTools: [],
+          cwd: tempDir,
+          observer: runtimeOptions.observer ?? createNoopObserver(),
+          resolvedPackage: defaultResolvedPackage,
+          systemPrompt: 'Test prompt',
+          maxToolRounds: 3
+        }),
+        prepareSessionMemory: async () => ({
+          memoryText: '',
+          store: {} as never,
+          globalStore: undefined,
+          recalled: [],
+          checkpointState: {
+            storeSessionId: 'session-memory-debug-empty',
+            engine: 'file-session-memory-store',
+            version: 1,
+            memoryPath: '/tmp/memory/index.json',
+            metaPath: '/tmp/memory/meta.json',
+            totalEntries: 0,
+            lastCompactedAt: null
+          }
+        }),
+        captureTurnMemory: async () => ({
+          saved: false,
+          checkpointState: {
+            storeSessionId: 'session-memory-debug-empty',
+            engine: 'file-session-memory-store',
+            version: 1,
+            memoryPath: '/tmp/memory/index.json',
+            metaPath: '/tmp/memory/meta.json',
+            totalEntries: 0,
+            lastCompactedAt: null
+          }
+        }),
+        runTurn: async (input) => ({
+          stopReason: 'completed',
+          finalAnswer: 'Đã hiểu.',
+          history: [
+            { role: 'user', content: input.userInput },
+            { role: 'assistant', content: 'Đã hiểu.' }
+          ],
+          memoryCandidates: [],
+          structuredOutputParsed: true,
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true as const,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
+            toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
+            toolMessagesCount: 0,
+            checks: []
+          }
+        })
+      });
+
+      await expect(cli.run()).resolves.toBe(0);
+
+      const selectedLog = await readFile(rotatedLogPath, 'utf8');
+      expect(selectedLog).toContain('"type":"memory_candidates"');
+      expect(selectedLog).toContain('"sessionId":"session-memory-debug-empty"');
+      expect(selectedLog).toContain('"count":0');
+      expect(selectedLog).toContain('"parsed":true');
+      expect(selectedLog).toContain('"parseFallbackUsed":false');
+    });
+  });
   it('falls back to QICLAW_DEBUG_LOG and writes to a day-scoped file when --debug-log is not provided', async () => {
     await withProviderEnvSnapshot(async () => {
       vi.useFakeTimers();

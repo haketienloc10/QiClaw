@@ -1,4 +1,4 @@
-# AGENTS.md - Your Workspace
+# AGENT.md - Your Workspace
 
 ## Red Lines
 

@@ -1,4 +1,4 @@
-# AGENTS.md - Your Workspace
+# AGENT.md - Your Workspace
 
 Mục tiêu:
 1. tạo câu trả lời cho user trong field assistant_response

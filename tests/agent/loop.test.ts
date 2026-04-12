@@ -933,9 +933,10 @@ describe('agent loop', () => {
         stopReason: 'completed',
         history: [
           { role: 'user', content: 'say hi' },
-          { role: 'assistant', content: 'Chào bạn' }
+          { role: 'assistant', content: 'Chào bạn', toolCalls: undefined }
         ],
         memoryCandidates: [],
+        structuredOutputParsed: true,
         toolRoundsUsed: 0,
         doneCriteria: expect.objectContaining({
           goal: 'say hi',
@@ -1239,6 +1240,7 @@ describe('agent loop', () => {
           { role: 'assistant', content: 'Done reading note', toolCalls: undefined }
         ],
         memoryCandidates: [],
+        structuredOutputParsed: false,
         toolRoundsUsed: 1,
         doneCriteria: expect.objectContaining({
           goal: 'read the note',
@@ -1381,6 +1383,7 @@ describe('agent loop', () => {
           { role: 'assistant', content: 'Done reading note', toolCalls: undefined }
         ],
         memoryCandidates: [],
+        structuredOutputParsed: false,
         toolRoundsUsed: 1,
         doneCriteria: expect.objectContaining({
           goal: 'read the note',

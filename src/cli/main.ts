@@ -335,16 +335,17 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
                   historySummary = readTurnHistorySummary(settledResult) ?? historyContext.historySummary;
 
                   const memoryCandidates = settledResult.memoryCandidates ?? [];
+                  const structuredOutputParsed = settledResult.structuredOutputParsed === true;
 
                 if (debugMemoryCandidates) {
                   debugMemoryCandidates({
                     type: 'memory_candidates',
                     timestamp: new Date().toISOString(),
                     sessionId: sessionMemoryState?.storeSessionId ?? sessionId,
-                    parsed: memoryCandidates.length > 0,
+                    parsed: structuredOutputParsed,
                     count: memoryCandidates.length,
                     candidates: memoryCandidates,
-                    parseFallbackUsed: memoryCandidates.length === 0
+                    parseFallbackUsed: !structuredOutputParsed
                   });
                 }
 

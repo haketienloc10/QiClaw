@@ -61,6 +61,7 @@ export interface RunAgentTurnResult {
   finalAnswer: string;
   history: Message[];
   memoryCandidates: ModelMemoryCandidate[];
+  structuredOutputParsed?: boolean;
   toolRoundsUsed: number;
   doneCriteria: DoneCriteria;
   verification: AgentTurnVerification;
@@ -84,6 +85,7 @@ export type TurnEvent =
       stopReason: AgentTurnStopReason;
       history: Message[];
       memoryCandidates: ModelMemoryCandidate[];
+      structuredOutputParsed: boolean;
       toolRoundsUsed: number;
       doneCriteria: DoneCriteria;
       turnCompleted: boolean;
@@ -95,6 +97,7 @@ interface CollectedTurnState {
   finalAnswer: string;
   history: Message[];
   memoryCandidates: ModelMemoryCandidate[];
+  structuredOutputParsed: boolean;
   toolRoundsUsed: number;
   doneCriteria: DoneCriteria;
   turnCompleted: boolean;
@@ -444,6 +447,7 @@ export function createRunAgentTurnExecution(input: RunAgentTurnInput): RunAgentT
             finalAnswer: event.finalAnswer,
             history: event.history,
             memoryCandidates: event.memoryCandidates,
+            structuredOutputParsed: event.structuredOutputParsed,
             toolRoundsUsed: event.toolRoundsUsed,
             doneCriteria: event.doneCriteria,
             turnCompleted: event.turnCompleted
@@ -492,6 +496,7 @@ export async function collectCompletedTurn(stream: AsyncIterable<TurnEvent>): Pr
         finalAnswer: event.finalAnswer,
         history: event.history,
         memoryCandidates: event.memoryCandidates,
+        structuredOutputParsed: event.structuredOutputParsed,
         toolRoundsUsed: event.toolRoundsUsed,
         doneCriteria: event.doneCriteria,
         turnCompleted: event.turnCompleted
@@ -563,6 +568,7 @@ export async function* runAgentTurnStream(
   const telemetry = state?.telemetry ?? createTurnTelemetryState();
   let finalAnswer = '';
   let finalMemoryCandidates: ModelMemoryCandidate[] = [];
+  let finalStructuredOutputParsed = false;
 
   yield { type: 'turn_started' };
 
@@ -707,6 +713,7 @@ export async function* runAgentTurnStream(
 
       const extractedAssistantResponse = extractStructuredAssistantResponse(response.message.content);
       finalMemoryCandidates = extractedAssistantResponse.memoryCandidates;
+      finalStructuredOutputParsed = extractedAssistantResponse.parsed;
       displayText = extractedAssistantResponse.parsed ? extractedAssistantResponse.text : response.message.content;
       if (typeof input.provider.stream !== 'function' && displayText.length > 0) {
         yield { type: 'assistant_text_delta', text: displayText };
@@ -749,6 +756,7 @@ export async function* runAgentTurnStream(
           stopReason: 'completed',
           history,
           memoryCandidates: finalMemoryCandidates,
+          structuredOutputParsed: finalStructuredOutputParsed,
           toolRoundsUsed: telemetry.toolRound,
           doneCriteria,
           turnCompleted: true
@@ -762,6 +770,7 @@ export async function* runAgentTurnStream(
           stopReason: 'max_tool_rounds_reached',
           history,
           memoryCandidates: finalMemoryCandidates,
+          structuredOutputParsed: finalStructuredOutputParsed,
           toolRoundsUsed: telemetry.toolRound,
           doneCriteria,
           turnCompleted: false
@@ -852,6 +861,7 @@ export async function* runAgentTurnStream(
           stopReason: 'max_tool_rounds_reached',
           history,
           memoryCandidates: finalMemoryCandidates,
+          structuredOutputParsed: finalStructuredOutputParsed,
           toolRoundsUsed: telemetry.toolRound,
           doneCriteria,
           turnCompleted: false
@@ -871,7 +881,7 @@ function buildResult(
   collected: CollectedTurnState,
   maxToolRounds: number
 ): RunAgentTurnResult {
-  const { stopReason, finalAnswer, history, memoryCandidates, toolRoundsUsed, doneCriteria, turnCompleted } = collected;
+  const { stopReason, finalAnswer, history, memoryCandidates, structuredOutputParsed, toolRoundsUsed, doneCriteria, turnCompleted } = collected;
   const verification = verifyAgentTurn({
     criteria: doneCriteria,
     finalAnswer,
@@ -933,6 +943,7 @@ function buildResult(
     finalAnswer,
     history,
     memoryCandidates,
+    structuredOutputParsed,
     toolRoundsUsed,
     doneCriteria,
     verification
@@ -946,6 +957,7 @@ function buildTurnCompletedEvent(input: Omit<Extract<TurnEvent, { type: 'turn_co
     stopReason: input.stopReason,
     history: [...input.history],
     memoryCandidates: [...input.memoryCandidates],
+    structuredOutputParsed: input.structuredOutputParsed,
     toolRoundsUsed: input.toolRoundsUsed,
     doneCriteria: input.doneCriteria,
     turnCompleted: input.turnCompleted

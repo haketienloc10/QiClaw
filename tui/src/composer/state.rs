@@ -4,7 +4,7 @@ use crate::protocol::SlashCatalogEntry;
 
 use super::command_popup::PopupListState;
 use super::file_completion::complete_paths;
-use super::history_search::{HistorySearchMatch, HistorySearchState};
+use super::history_search::HistorySearchState;
 use super::slash_commands::filter_commands;
 use super::textarea::TextAreaState;
 
@@ -258,6 +258,7 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+    use crate::composer::history_search::HistorySearchMatch;
     use crate::protocol::{SlashCatalogKind, SlashCatalogEntry};
 
     fn catalog() -> Vec<SlashCatalogEntry> {

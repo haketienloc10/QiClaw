@@ -9,10 +9,16 @@ pub struct TranscriptLayout {
 }
 
 pub fn split_root(area: Rect, popup_height: u16) -> TranscriptLayout {
+    let composer_height = if popup_height == 0 {
+        3
+    } else {
+        4 + popup_height.min(6)
+    };
+
     let vertical = Layout::vertical([
         Constraint::Min(5),
         Constraint::Length(1),
-        Constraint::Length(4 + popup_height.min(6)),
+        Constraint::Length(composer_height),
     ])
     .split(area);
 
@@ -52,5 +58,22 @@ mod tests {
         assert_eq!(layout.footer.height, 1);
         assert_eq!(layout.composer.height, 9);
         assert!(layout.popup.height <= layout.composer.height);
+    }
+
+    #[test]
+    fn keeps_bottom_pane_compact_when_popup_is_closed() {
+        let layout = split_root(
+            Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 18,
+            },
+            0,
+        );
+
+        assert_eq!(layout.footer.height, 1);
+        assert_eq!(layout.composer.height, 3);
+        assert_eq!(layout.transcript.height, 14);
     }
 }

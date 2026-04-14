@@ -32,7 +32,7 @@ impl TranscriptEntry {
         Self {
             id: message_id,
             kind: TranscriptCellKind::Assistant,
-            title: Some("Assistant".into()),
+            title: Some("working".into()),
             text: String::new(),
             tool_name: None,
             is_error: false,
@@ -60,16 +60,18 @@ impl TranscriptEntry {
         self.streaming = false;
         self.is_error = status == ToolStatus::Error;
         let status_label = match status {
-            ToolStatus::Success => "Completed",
-            ToolStatus::Error => "Failed",
+            ToolStatus::Success => "completed",
+            ToolStatus::Error => "failed",
         };
         let duration = duration_ms
             .map(|value| format!(" in {value}ms"))
             .unwrap_or_default();
-        self.text = if result_preview.trim().is_empty() {
-            format!("{status_label}{duration}")
+        let detail = self.title.clone().or_else(|| self.tool_name.clone()).unwrap_or_default();
+        self.title = if detail.trim().is_empty() {
+            Some(format!("{status_label}{duration}"))
         } else {
-            format!("{status_label}{duration}\n{}", result_preview.trim())
+            Some(format!("{detail} · {status_label}{duration}"))
         };
+        self.text = result_preview.trim().to_string();
     }
 }

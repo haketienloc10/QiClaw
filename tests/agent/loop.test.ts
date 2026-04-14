@@ -2184,7 +2184,7 @@ describe('agent loop', () => {
         redactionSensitivity: 'standard'
       }
     });
-    expect(runtime.systemPrompt).toContain('# AGENTS.md - Your Workspace');
+    expect(runtime.systemPrompt).toContain('# AGENT.md - Your Workspace');
     expect(runtime.systemPrompt).toContain('- Allowed capability classes: read, write');
     expect(runtime.systemPrompt).toContain('Runtime constraints summary');
     expect(runtime.systemPrompt).not.toContain('Purpose: Handle a single bounded task inside the QiClaw CLI runtime.');

@@ -288,7 +288,8 @@ mod tests {
 
         assert_eq!(transcript.entries.len(), 1);
         assert!(transcript.entries[0].is_error);
-        assert!(transcript.entries[0].text.contains("permission denied"));
+        assert_eq!(transcript.entries[0].title.as_deref(), Some("git status · failed in 42ms"));
+        assert_eq!(transcript.entries[0].text, "permission denied");
         assert!(!transcript.entries[0].streaming);
     }
 

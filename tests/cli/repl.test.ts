@@ -3178,7 +3178,7 @@ describe('buildCli', () => {
     const writes: string[] = [];
     const cwd = join(tmpdir(), `qiclaw-interactive-live-text-tty-${Math.random().toString(36).slice(2)}`);
     const cli = buildCli({
-      argv: [],
+      argv: ['--plain'],
       cwd,
       readLine: (() => {
         const inputs = ['live text please', '/exit'];
@@ -3286,7 +3286,7 @@ describe('buildCli', () => {
     const writes: string[] = [];
     const cwd = join(tmpdir(), `qiclaw-interactive-text-tool-text-tool-tty-${Math.random().toString(36).slice(2)}`);
     const cli = buildCli({
-      argv: [],
+      argv: ['--plain'],
       cwd,
       readLine: (() => {
         const inputs = ['trace transcript please', '/exit'];
@@ -3428,7 +3428,7 @@ describe('buildCli', () => {
     let clearLineCalls = 0;
     const cwd = join(tmpdir(), `qiclaw-interactive-ansi-rewrite-${Math.random().toString(36).slice(2)}`);
     const cli = buildCli({
-      argv: [],
+      argv: ['--plain'],
       cwd,
       readLine: (() => {
         const inputs = ['run tool please', '/exit'];

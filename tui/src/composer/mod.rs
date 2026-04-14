@@ -23,11 +23,11 @@ pub fn popup_height(state: &ComposerState) -> u16 {
 
 pub fn render(frame: &mut Frame<'_>, area: Rect, state: &ComposerState, catalog: &[SlashCatalogEntry]) {
     let title = match state.mode {
-        ComposerMode::Shell => "Composer • shell",
-        ComposerMode::Slash => "Composer • slash",
-        ComposerMode::FileCompletion => "Composer • file",
-        ComposerMode::HistorySearch => "Composer • history",
-        ComposerMode::Normal => "Composer",
+        ComposerMode::Shell => "Prompt • shell",
+        ComposerMode::Slash => "Prompt • slash",
+        ComposerMode::FileCompletion => "Prompt • file",
+        ComposerMode::HistorySearch => "Prompt • history",
+        ComposerMode::Normal => "Prompt",
     };
 
     let paragraph = Paragraph::new(state.textarea.text.as_str())
@@ -88,8 +88,15 @@ fn render_popup(frame: &mut Frame<'_>, area: Rect, state: &ComposerState, catalo
         }
     };
 
+    let popup_title = match state.mode {
+        ComposerMode::Slash => "Commands",
+        ComposerMode::FileCompletion => "Paths",
+        ComposerMode::HistorySearch => "History",
+        _ => "Suggestions",
+    };
+
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title("Suggestions"))
+        .block(Block::default().borders(Borders::ALL).title(popup_title))
         .highlight_style(Style::default().bg(Color::Blue).fg(Color::Black))
         .highlight_symbol("> ");
     let mut list_state = ratatui::widgets::ListState::default();
@@ -132,6 +139,69 @@ mod tests {
             .collect();
         let rendered = rendered_lines.join("\n");
         assert!(rendered.contains("/status"));
-        assert!(rendered.contains("Suggestions"));
+        assert!(rendered.contains("Commands"));
+    }
+
+    #[test]
+    fn renders_codex_like_composer_title_for_slash_mode() {
+        let backend = TestBackend::new(40, 6);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut state = ComposerState::default();
+        let catalog = vec![SlashCatalogEntry {
+            name: "/status".into(),
+            description: "Show status".into(),
+            usage: Some("/status".into()),
+            kind: SlashCatalogKind::Direct,
+        }];
+        state.textarea.set_text("/st".into());
+        state.refresh_modes(&catalog, std::path::Path::new("."));
+        state.popup.close();
+
+        terminal
+            .draw(|frame| render(frame, frame.area(), &state, &catalog))
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer().clone();
+        let rendered = (0..6)
+            .map(|y| {
+                (0..40)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Prompt"));
+        assert!(rendered.contains("slash"));
+    }
+
+    #[test]
+    fn renders_contextual_popup_title_for_slash_mode() {
+        let backend = TestBackend::new(40, 8);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut state = ComposerState::default();
+        let catalog = vec![SlashCatalogEntry {
+            name: "/status".into(),
+            description: "Show status".into(),
+            usage: Some("/status".into()),
+            kind: SlashCatalogKind::Direct,
+        }];
+        state.textarea.set_text("/st".into());
+        state.refresh_modes(&catalog, std::path::Path::new("."));
+
+        terminal
+            .draw(|frame| render(frame, frame.area(), &state, &catalog))
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer().clone();
+        let rendered = (0..8)
+            .map(|y| {
+                (0..40)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Commands"));
+        assert!(!rendered.contains("Suggestions"));
     }
 }

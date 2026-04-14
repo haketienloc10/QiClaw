@@ -47,7 +47,11 @@ describe('parseInteractiveCheckpointJson', () => {
         totalEntries: 4,
         lastCompactedAt: '2026-04-06T00:00:00.000Z',
         latestSummaryText: 'package summary'
-      }
+      },
+      transcriptCells: [
+        { id: 'user-1', kind: 'user', text: '/status' },
+        { id: 'shell-1', kind: 'shell', text: 'On branch main', title: 'git status' }
+      ]
     });
 
     const parsed = parseInteractiveCheckpointJson(checkpointJson);
@@ -85,7 +89,11 @@ describe('parseInteractiveCheckpointJson', () => {
         totalEntries: 4,
         lastCompactedAt: '2026-04-06T00:00:00.000Z',
         latestSummaryText: 'package summary'
-      }
+      },
+      transcriptCells: [
+        { id: 'user-1', kind: 'user', text: '/status' },
+        { id: 'shell-1', kind: 'shell', text: 'On branch main', title: 'git status' }
+      ]
     });
     expect(parsed?.sessionMemory?.storeSessionId).toBe('session-memory-1');
     expect(parsed?.sessionMemory?.memoryPath).toContain('.qiclaw');
@@ -124,6 +132,18 @@ describe('parseInteractiveCheckpointJson', () => {
         metaPath: '/tmp/memory/meta.json',
         totalEntries: 4
       }
+    });
+
+    expect(parseInteractiveCheckpointJson(checkpointJson)).toBeUndefined();
+  });
+
+  it('rejects malformed transcript cells when restoring checkpoints', () => {
+    const checkpointJson = JSON.stringify({
+      version: 1,
+      history: [],
+      transcriptCells: [
+        { id: 'user-1', kind: 'unknown', text: '/status' }
+      ]
     });
 
     expect(parseInteractiveCheckpointJson(checkpointJson)).toBeUndefined();

@@ -2,12 +2,14 @@ import { join } from 'node:path';
 
 import type { Message } from '../core/types.js';
 import type { SessionMemoryCheckpointMetadata } from '../memory/sessionMemoryTypes.js';
+import type { TranscriptCell } from '../cli/tuiProtocol.js';
 
 export interface InteractiveCheckpointPayload {
   version: 1;
   history: Message[];
   historySummary?: string;
   sessionMemory?: SessionMemoryCheckpointMetadata;
+  transcriptCells?: TranscriptCell[];
 }
 
 export function createSessionId() {
@@ -79,7 +81,37 @@ function isInteractiveCheckpointPayload(value: unknown): value is InteractiveChe
     }
   }
 
+  if (payload.transcriptCells !== undefined) {
+    if (!Array.isArray(payload.transcriptCells) || payload.transcriptCells.some((cell) => !isTranscriptCell(cell))) {
+      return false;
+    }
+  }
+
   return payload.history.every(isMessage);
+}
+
+function isTranscriptCell(value: unknown): value is TranscriptCell {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const cell = value as Record<string, unknown>;
+  return typeof cell.id === 'string'
+    && isTranscriptCellKind(cell.kind)
+    && typeof cell.text === 'string'
+    && (cell.title === undefined || typeof cell.title === 'string')
+    && (cell.toolName === undefined || typeof cell.toolName === 'string')
+    && (cell.isError === undefined || typeof cell.isError === 'boolean');
+}
+
+function isTranscriptCellKind(value: unknown): value is TranscriptCell['kind'] {
+  return value === 'user'
+    || value === 'assistant'
+    || value === 'tool'
+    || value === 'status'
+    || value === 'diff'
+    || value === 'shell'
+    || value === 'summary';
 }
 
 function isMessage(value: unknown): value is Message {

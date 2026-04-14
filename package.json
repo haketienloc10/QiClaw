@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-agent-assets.mjs",
+    "build:tui": "cargo build --manifest-path tui/Cargo.toml",
     "dev": "tsx src/cli/main.ts",
     "test": "vitest run",
+    "test:tui": "cargo test --manifest-path tui/Cargo.toml",
     "typecheck:test": "tsc -p tsconfig.test.json",
     "summary:smoke": "python3 src/tools/python/summary_worker.py",
     "summary:integration": "npm run test -- tests/tools/summary.test.ts"

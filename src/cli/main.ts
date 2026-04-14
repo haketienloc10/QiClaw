@@ -39,6 +39,9 @@ import type { TelemetryObserver } from '../telemetry/observer.js';
 import { createRepl } from './repl.js';
 import { createTelemetryEvent } from '../telemetry/observer.js';
 import type { Message } from '../core/types.js';
+import { createTuiController, type TuiController } from './tuiController.js';
+import { launchTui as launchTuiFrontend, type TuiLaunchOptions } from './tuiLauncher.js';
+import { parseBridgeMessage, type HostEvent } from './tuiProtocol.js';
 
 export type Cli = {
   run(): Promise<number>;
@@ -68,7 +71,7 @@ interface InteractiveStartupLinesOptions extends InteractiveChromeOptions {
   restored: boolean;
 }
 
-type CliDisplayMode = 'compact' | 'interactive';
+type CliDisplayMode = 'compact' | 'plain' | 'interactive';
 
 interface PendingFooterRenderState {
   isVerified: boolean;
@@ -103,7 +106,7 @@ export type CliRunTurnResult = RunAgentTurnResult & {
 export interface BuildCliOptions {
   argv?: string[];
   cwd?: string;
-  stdout?: Pick<NodeJS.WriteStream, 'write'>;
+  stdout?: Pick<NodeJS.WriteStream, 'write'> & { isTTY?: boolean };
   stderr?: Pick<NodeJS.WriteStream, 'write'>;
   readLine?: (promptLabel: string) => Promise<string | undefined>;
   createRuntime?: (options: ResolvedProviderConfig & {
@@ -117,6 +120,8 @@ export interface BuildCliOptions {
   runTurn?: (input: CliRunTurnInput) => Promise<CliRunTurnResult>;
   prepareSessionMemory?: typeof prepareInteractiveSessionMemory;
   captureTurnMemory?: typeof captureInteractiveTurnMemory;
+  createTuiController?: (options: Parameters<typeof createTuiController>[0]) => TuiController;
+  launchTui?: (options: TuiLaunchOptions) => Promise<number>;
 }
 
 export function buildCli(options: BuildCliOptions = {}): Cli {
@@ -130,6 +135,8 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
   const sessionIdFactory = options.createSessionId ?? createSessionId;
   const prepareSessionMemory = options.prepareSessionMemory ?? prepareInteractiveSessionMemory;
   const captureTurnMemory = options.captureTurnMemory ?? captureInteractiveTurnMemory;
+  const tuiControllerFactory = options.createTuiController ?? ((controllerOptions: Parameters<typeof createTuiController>[0]) => createTuiController(controllerOptions));
+  const launchTui = options.launchTui ?? ((launchOptions: TuiLaunchOptions) => launchTuiFrontend(launchOptions));
   const executeTurn: (input: CliRunTurnInput) => Promise<CliRunTurnResult & { finalResult?: Promise<CliRunTurnResult> }> = options.runTurn
     ? options.runTurn
     : async ({ sessionId: _sessionId, ...input }) => {
@@ -140,6 +147,8 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
           stopReason: 'completed',
           finalAnswer: '',
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 0,
           doneCriteria: {
             goal: input.userInput,
@@ -193,8 +202,88 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
           resolvedPackage
         });
         const memoryConfig = resolveMemoryEmbeddingConfig(process.env);
+        const displayMode: CliDisplayMode = parsed.prompt
+          ? 'compact'
+          : (!stdout.isTTY || parsed.plain ? 'plain' : 'interactive');
 
-        assistantBlockWriter = createAssistantBlockWriter(stdout, parsed.prompt ? 'compact' : 'interactive');
+        if (displayMode === 'interactive') {
+          try {
+            const checkpointStorePath = getCheckpointStorePath(runtime.cwd);
+            mkdirSync(dirname(checkpointStorePath), { recursive: true });
+            const checkpointStore = checkpointStoreFactory(checkpointStorePath);
+            let controllerSend: ((event: HostEvent) => void) | undefined;
+            const controller = tuiControllerFactory({
+              cwd,
+              runtime,
+              checkpointStore,
+              executeTurn,
+              prepareSessionMemory,
+              captureTurnMemory,
+              createSessionId: sessionIdFactory,
+              updateModel(argsText) {
+                const trimmed = argsText.trim();
+                const separatorIndex = trimmed.indexOf(':');
+                const provider = separatorIndex >= 0
+                  ? parseProviderId(trimmed.slice(0, separatorIndex).trim())
+                  : parseProviderId(runtime.provider.name);
+                const model = separatorIndex >= 0
+                  ? trimmed.slice(separatorIndex + 1).trim()
+                  : trimmed;
+
+                if (model.length === 0) {
+                  throw new Error('Model name is required. Use /model <model> or /model <provider:model>.');
+                }
+
+                const nextConfig = resolveProviderConfig({ provider, model });
+                const nextRuntime = createRuntime({
+                  ...nextConfig,
+                  cwd: runtime.cwd,
+                  observer: runtime.observer,
+                  resolvedPackage: runtime.resolvedPackage
+                });
+
+                runtime.provider = nextRuntime.provider;
+                runtime.availableTools = nextRuntime.availableTools;
+                runtime.systemPrompt = nextRuntime.systemPrompt;
+                runtime.maxToolRounds = nextRuntime.maxToolRounds;
+                runtime.resolvedPackage = nextRuntime.resolvedPackage;
+                runtime.observer = nextRuntime.observer;
+
+                return {
+                  provider: runtime.provider.name,
+                  model: runtime.provider.model
+                };
+              },
+              emit(message) {
+                const event = parseBridgeMessage(message);
+                if (event.type === 'submit_prompt'
+                  || event.type === 'run_slash_command'
+                  || event.type === 'run_shell_command'
+                  || event.type === 'request_status'
+                  || event.type === 'clear_session'
+                  || event.type === 'quit') {
+                  throw new Error('TUI controller emitted a frontend action instead of a host event.');
+                }
+                controllerSend?.(event);
+              }
+            });
+
+            return await launchTui({
+              cwd,
+              async onReady(bridge) {
+                controllerSend = (event) => bridge.send(event);
+                await controller.start();
+              },
+              async onAction(action) {
+                return controller.handleAction(action);
+              }
+            });
+          } catch (error) {
+            stderr.write(`Falling back to plain mode: ${formatCliError(error)}\n`);
+          }
+        }
+
+        assistantBlockWriter = createAssistantBlockWriter(stdout, displayMode === 'compact' ? 'compact' : 'interactive');
         const cliObserver = createCliObserver({
           cwd,
           metrics,
@@ -202,7 +291,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
           envDebugLogPath: process.env.QICLAW_DEBUG_LOG,
           showCompactToolStatus: true,
           assistantBlockWriter,
-          mode: parsed.prompt ? 'compact' : 'interactive'
+          mode: displayMode === 'compact' ? 'compact' : 'interactive'
         });
         const debugRecallInputs = cliObserver.createRecallInputsDebugLogger();
         const debugMemoryCandidates = cliObserver.createMemoryCandidatesDebugLogger();
@@ -1188,6 +1277,7 @@ async function resolveAgentPackageForCliExecution(agentSpecName: string, cwd: st
 
 function parseArgs(argv: string[]): {
   prompt?: string;
+  plain: boolean;
   provider: ProviderId;
   model?: string;
   baseUrl?: string;
@@ -1197,6 +1287,7 @@ function parseArgs(argv: string[]): {
   agentSpecPreviewName?: string;
 } {
   let prompt: string | undefined;
+  let plain = false;
   let provider = resolveDefaultProviderFromEnv();
   let model: string | undefined;
   let baseUrl: string | undefined;
@@ -1217,6 +1308,11 @@ function parseArgs(argv: string[]): {
 
       prompt = value;
       index += 1;
+      continue;
+    }
+
+    if (token === '--plain') {
+      plain = true;
       continue;
     }
 
@@ -1313,6 +1409,7 @@ function parseArgs(argv: string[]): {
 
   return {
     prompt,
+    plain,
     provider,
     model,
     baseUrl,

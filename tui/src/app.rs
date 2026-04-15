@@ -96,9 +96,11 @@ impl App {
                     layout.transcript,
                     &self.transcript.entries,
                     self.transcript.render_scroll(layout.transcript.height.saturating_sub(2)),
+                    self.spinner.frame(),
                 );
-                crate::footer::render::render(frame, layout.footer, &self.footer);
-                composer::render(frame, layout.composer, &self.composer, &self.slash_catalog);
+                crate::footer::render::render_status_strip(frame, layout.status, &self.footer);
+                composer::render(frame, layout.composer, layout.popup, &self.composer, &self.slash_catalog);
+                crate::footer::render::render_footer_rail(frame, layout.footer, &self.footer);
             })?;
 
             let timeout = Duration::from_millis(50);
@@ -294,7 +296,7 @@ impl App {
             status_text = "Scrolled".into();
         } else if self.footer.busy {
             let model = self.model.clone().unwrap_or_else(|| "agent".into());
-            status_text = format!("{} Waiting on {}", self.spinner.frame(), model);
+            status_text = format!("{} Working · {model}", self.spinner.frame());
         }
 
         self.footer.status_text = status_text;

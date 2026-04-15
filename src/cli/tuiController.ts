@@ -492,6 +492,11 @@ export function createTuiController(options: TuiControllerOptions): TuiControlle
 
       transcriptCells = restored?.transcriptCells ?? createTranscriptSeed(history, historySummary);
       transcriptCellOrdinal = transcriptCells.length;
+      turnOrdinal = history.filter((message) => message.role === 'user').length;
+      assistantMessageOrdinal = Math.max(
+        history.filter((message) => message.role === 'assistant').length,
+        transcriptCells.filter((cell) => cell.kind === 'assistant').length
+      );
 
       emit({
         type: 'hello',

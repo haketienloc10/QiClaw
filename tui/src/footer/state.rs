@@ -26,21 +26,21 @@ impl Default for FooterState {
 impl FooterState {
     pub fn primary_hints(&self) -> Vec<&'static str> {
         if self.transcript_scrolled {
-            return vec!["↓ follow live", "PgDn bottom", "↑↓ scroll"];
+            return vec!["PgDn follow", "↑↓ scroll"];
         }
 
         if self.busy {
-            return vec!["↑↓ scroll", "PgDn bottom", "Ctrl+C quit"];
+            return vec!["↑↓ scroll", "PgDn latest"];
         }
 
         match self.mode {
-            ComposerMode::HistorySearch => vec!["Type query", "↑↓ choose", "Enter restore", "Esc cancel"],
-            ComposerMode::Shell => vec!["Enter run shell", "Shift+Enter newline", "Esc clear"],
+            ComposerMode::HistorySearch => vec!["Type query", "Enter restore", "Esc cancel"],
+            ComposerMode::Shell => vec!["Enter run", "Shift+Enter newline", "Esc clear"],
             ComposerMode::Slash | ComposerMode::FileCompletion if self.popup_open => {
-                vec!["Tab accept", "↑↓ choose", "Enter send", "Esc close"]
+                vec!["Tab accept", "↑↓ choose", "Esc close"]
             }
-            _ if !self.draft_present => vec!["? shortcuts", "Enter send", "/ slash", "Ctrl+R history"],
-            _ => vec!["Enter send", "Shift+Enter newline", "Ctrl+R history", "Esc clear"],
+            _ if !self.draft_present => vec!["Enter send", "/ commands", "Ctrl+R history"],
+            _ => vec!["Enter send", "Shift+Enter newline", "Esc clear"],
         }
     }
 }
@@ -52,20 +52,20 @@ mod tests {
     #[test]
     fn switches_hints_by_mode() {
         let empty = FooterState::default();
-        assert_eq!(empty.primary_hints()[0], "? shortcuts");
+        assert_eq!(empty.primary_hints()[0], "Enter send");
 
         let busy = FooterState { busy: true, ..FooterState::default() };
         assert_eq!(busy.primary_hints()[0], "↑↓ scroll");
 
         let scrolled = FooterState { transcript_scrolled: true, ..FooterState::default() };
-        assert_eq!(scrolled.primary_hints()[0], "↓ follow live");
+        assert_eq!(scrolled.primary_hints()[0], "PgDn follow");
 
         let shell = FooterState {
             mode: ComposerMode::Shell,
             draft_present: true,
             ..FooterState::default()
         };
-        assert_eq!(shell.primary_hints()[0], "Enter run shell");
+        assert_eq!(shell.primary_hints()[0], "Enter run");
     }
 
     #[test]
@@ -77,7 +77,7 @@ mod tests {
 
         assert_eq!(
             draft.primary_hints(),
-            vec!["Enter send", "Shift+Enter newline", "Ctrl+R history", "Esc clear"]
+            vec!["Enter send", "Shift+Enter newline", "Esc clear"]
         );
     }
 
@@ -91,7 +91,7 @@ mod tests {
 
         assert_eq!(
             state.primary_hints(),
-            vec!["Type query", "↑↓ choose", "Enter restore", "Esc cancel"]
+            vec!["Type query", "Enter restore", "Esc cancel"]
         );
     }
 }

@@ -166,9 +166,9 @@ describe('tuiController', () => {
     expect(emitted[0]).toMatchObject({ type: 'hello', protocolVersion: 1, sessionId: 'session-restored' });
     expect(emitted).toContainEqual(expect.objectContaining({ type: 'transcript_seed', cells: expect.any(Array) }));
     expect(emitted).toContainEqual(expect.objectContaining({ type: 'slash_catalog', commands: expect.any(Array) }));
-    expect(emitted).toContainEqual({ type: 'assistant_delta', turnId: 'turn-1', messageId: 'assistant-1', text: 'new ' });
-    expect(emitted).toContainEqual({ type: 'assistant_completed', turnId: 'turn-1', messageId: 'assistant-1', text: 'new answer' });
-    expect(emitted).toContainEqual(expect.objectContaining({ type: 'turn_completed', turnId: 'turn-1', stopReason: 'completed' }));
+    expect(emitted).toContainEqual({ type: 'assistant_delta', turnId: 'turn-2', messageId: 'assistant-2', text: 'new ' });
+    expect(emitted).toContainEqual({ type: 'assistant_completed', turnId: 'turn-2', messageId: 'assistant-2', text: 'new answer' });
+    expect(emitted).toContainEqual(expect.objectContaining({ type: 'turn_completed', turnId: 'turn-2', stopReason: 'completed' }));
     expect(savedRecords).toHaveLength(5);
   });
 
@@ -1359,6 +1359,140 @@ describe('tuiController', () => {
     expect(finalParsed?.history).toEqual([
       { role: 'user', content: 'follow-up question' },
       { role: 'assistant', content: 'follow-up answer' }
+    ]);
+  });
+
+  it('drops stale partial assistant transcript cells when restoring before the next turn', async () => {
+    const savedRecords: Array<{ sessionId: string; taskId: string; status: 'running' | 'completed'; checkpointJson: string }> = [];
+    const initialCheckpoint = createInteractiveCheckpointJson({
+      version: 1,
+      history: [
+        { role: 'user', content: 'xin chào' }
+      ],
+      historySummary: undefined,
+      sessionMemory: undefined,
+      transcriptCells: [
+        { id: 'user-live-1', kind: 'user', text: 'xin chào' },
+        { id: 'assistant-live-2', kind: 'assistant', text: 'Ch' }
+      ]
+    });
+    const emitted: HostEvent[] = [];
+
+    const controller = createTuiController({
+      cwd: '/tmp/qiclaw-controller-restore-ordinals',
+      runtime: {
+        provider: { name: 'openai', model: 'gpt-test' },
+        availableTools: [],
+        systemPrompt: 'system prompt',
+        cwd: '/tmp/qiclaw-controller-restore-ordinals',
+        maxToolRounds: 3,
+        observer: { record() {} }
+      },
+      checkpointStore: {
+        getLatest() {
+          return {
+            sessionId: 'session-restore-ordinals',
+            taskId: 'interactive',
+            status: 'running',
+            checkpointJson: initialCheckpoint,
+            createdAt: new Date().toISOString()
+          };
+        },
+        save(record) {
+          savedRecords.push(record);
+        }
+      },
+      prepareSessionMemory: vi.fn(async () => undefined),
+      captureTurnMemory: vi.fn(async () => ({ saved: false, checkpointState: undefined })),
+      createSessionId: () => 'session-restore-ordinals-fallback',
+      executeTurn: vi.fn(async () => ({
+        stopReason: 'completed',
+        finalAnswer: 'Chào Đại ca.',
+        history: [
+          { role: 'user', content: 'tiếp tục' },
+          { role: 'assistant', content: 'Chào Đại ca.' }
+        ],
+        memoryCandidates: [],
+        structuredOutputParsed: false,
+        toolRoundsUsed: 0,
+        doneCriteria: {
+          goal: 'tiếp tục',
+          checklist: ['tiếp tục'],
+          requiresNonEmptyFinalAnswer: true,
+          requiresToolEvidence: false,
+          requiresSubstantiveFinalAnswer: false,
+          forbidSuccessAfterToolErrors: false
+        },
+        verification: {
+          isVerified: true,
+          finalAnswerIsNonEmpty: true,
+          finalAnswerIsSubstantive: true,
+          toolEvidenceSatisfied: true,
+          noUnresolvedToolErrors: true,
+          toolMessagesCount: 0,
+          checks: []
+        },
+        turnStream: (async function* () {
+          yield { type: 'assistant_text_delta', text: 'Chào Đại ca.' } as const;
+          yield { type: 'assistant_message_completed', text: 'Chào Đại ca.' } as const;
+          yield {
+            type: 'turn_completed',
+            stopReason: 'completed',
+            finalAnswer: 'Chào Đại ca.',
+            history: [
+              { role: 'user', content: 'tiếp tục' },
+              { role: 'assistant', content: 'Chào Đại ca.' }
+            ],
+            memoryCandidates: [],
+            structuredOutputParsed: false,
+            toolRoundsUsed: 0,
+            doneCriteria: {
+              goal: 'tiếp tục',
+              checklist: ['tiếp tục'],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            },
+            turnCompleted: true,
+            verification: {
+              isVerified: true,
+              finalAnswerIsNonEmpty: true,
+              finalAnswerIsSubstantive: true,
+              toolEvidenceSatisfied: true,
+              noUnresolvedToolErrors: true,
+              toolMessagesCount: 0,
+              checks: []
+            }
+          } as const;
+        })()
+      })),
+      emit(message) {
+        emitted.push(parseBridgeMessage(message));
+      }
+    });
+
+    await controller.start();
+
+    const restoredSeed = emitted.find((event) => event.type === 'transcript_seed');
+    expect(restoredSeed).toEqual({
+      type: 'transcript_seed',
+      cells: [
+        { id: 'user-live-1', kind: 'user', text: 'xin chào' }
+      ]
+    });
+
+    await controller.handleAction({ type: 'submit_prompt', prompt: 'tiếp tục' });
+
+    expect(emitted).toContainEqual({ type: 'assistant_delta', turnId: 'turn-2', messageId: 'assistant-2', text: 'Chào Đại ca.' });
+    expect(emitted).toContainEqual({ type: 'assistant_completed', turnId: 'turn-2', messageId: 'assistant-2', text: 'Chào Đại ca.' });
+    expect(emitted).toContainEqual(expect.objectContaining({ type: 'turn_completed', turnId: 'turn-2' }));
+
+    const finalCheckpoint = parseInteractiveCheckpointJson(savedRecords.at(-1)!.checkpointJson);
+    expect(finalCheckpoint?.transcriptCells).toEqual([
+      { id: 'user-live-1', kind: 'user', text: 'xin chào' },
+      { id: 'user-live-2', kind: 'user', text: 'tiếp tục' },
+      { id: 'assistant-live-3', kind: 'assistant', text: 'Chào Đại ca.' }
     ]);
   });
 

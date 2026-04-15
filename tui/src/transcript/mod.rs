@@ -3,7 +3,7 @@ pub mod layout;
 pub mod render;
 
 use cell::TranscriptEntry;
-use render::body_lines;
+use render::render_rows;
 
 use crate::protocol::{HostEvent, TranscriptCellKind};
 
@@ -148,14 +148,7 @@ impl TranscriptState {
     fn content_height(&self) -> u16 {
         self.entries
             .iter()
-            .map(|entry| {
-                let body_lines = if entry.text.is_empty() {
-                    0
-                } else {
-                    body_lines(&entry.text).count() as u16
-                };
-                1 + body_lines + 1
-            })
+            .map(|entry| render_rows(std::slice::from_ref(entry), "•").len() as u16)
             .sum()
     }
 
@@ -343,7 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_entry_height_matches_rendered_lines() {
+    fn empty_conversation_entry_height_matches_rendered_lines() {
         let mut transcript = TranscriptState::default();
         transcript.apply(&HostEvent::TranscriptAppend {
             cells: vec![TranscriptCell {
@@ -356,8 +349,8 @@ mod tests {
             }],
         });
 
-        assert_eq!(transcript.content_height(), 2);
-        assert_eq!(transcript.render_scroll(1), 1);
+        assert_eq!(transcript.content_height(), 3);
+        assert_eq!(transcript.render_scroll(1), 2);
     }
 
     #[test]
@@ -376,6 +369,49 @@ mod tests {
 
         assert_eq!(transcript.content_height(), 5);
         assert_eq!(transcript.render_scroll(3), 2);
+    }
+
+    #[test]
+    fn tool_entries_do_not_add_separator_height() {
+        let mut transcript = TranscriptState::default();
+        transcript.apply(&HostEvent::ToolStarted {
+            turn_id: "turn-1".into(),
+            tool_call_id: "call-1".into(),
+            tool_name: "shell".into(),
+            label: "git status".into(),
+        });
+        transcript.apply(&HostEvent::ToolCompleted {
+            turn_id: "turn-1".into(),
+            tool_call_id: "call-1".into(),
+            tool_name: "shell".into(),
+            status: ToolStatus::Success,
+            result_preview: "On branch main".into(),
+            duration_ms: None,
+        });
+
+        assert_eq!(transcript.content_height(), 2);
+        assert_eq!(transcript.render_scroll(1), 1);
+    }
+
+    #[test]
+    fn mixed_conversation_and_work_log_height_matches_rendered_spacing() {
+        let mut transcript = TranscriptState::default();
+        transcript.apply(&HostEvent::TranscriptAppend {
+            cells: vec![TranscriptCell {
+                id: "assistant-1".into(),
+                kind: TranscriptCellKind::Assistant,
+                text: "hello".into(),
+                title: Some("Assistant".into()),
+                tool_name: None,
+                is_error: None,
+            }],
+        });
+        transcript.apply(&HostEvent::Status {
+            text: "Indexing workspace".into(),
+        });
+
+        assert_eq!(transcript.content_height(), 5);
+        assert_eq!(transcript.render_scroll(2), 3);
     }
 
     fn tall_transcript() -> TranscriptState {
@@ -434,14 +470,14 @@ mod tests {
         });
 
         assert!(!transcript.is_auto_following());
-        assert_eq!(transcript.render_scroll(4), 7);
+        assert_eq!(transcript.render_scroll(4), 6);
 
         transcript.scroll_down(1);
         assert!(!transcript.is_auto_following());
-        assert_eq!(transcript.render_scroll(4), 8);
+        assert_eq!(transcript.render_scroll(4), 7);
 
         transcript.scroll_down(1);
         assert!(transcript.is_auto_following());
-        assert_eq!(transcript.render_scroll(4), 9);
+        assert_eq!(transcript.render_scroll(4), 8);
     }
 }

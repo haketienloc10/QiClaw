@@ -95,7 +95,10 @@ impl App {
                     frame,
                     layout.transcript,
                     &self.transcript.entries,
-                    self.transcript.render_scroll(layout.transcript.height.saturating_sub(2)),
+                    self.transcript.render_scroll(
+                        layout.transcript.height.saturating_sub(2),
+                        layout.transcript.width,
+                    ),
                     self.spinner.frame(),
                 );
                 crate::footer::render::render_status_strip(frame, layout.status, &self.footer);

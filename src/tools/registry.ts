@@ -48,7 +48,9 @@ function formatFallbackToolActivityLabel(toolName: string, input: unknown): stri
   }
 
   const action = readStringField(input, 'action');
-  const path = readStringField(input, 'path');
+  const path = readStringField(input, 'path')
+    ?? readStringField(input, 'file_path')
+    ?? readStringField(input, 'notebook_path');
   const url = readStringField(input, 'url');
   const query = readStringField(input, 'query') ?? readStringField(input, 'pattern');
   const commandLabel = formatCommandFields(input);

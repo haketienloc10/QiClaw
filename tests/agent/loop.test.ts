@@ -1206,7 +1206,7 @@ describe('agent loop', () => {
         type: 'tool_call_completed',
         id: 'call-read-stream-1',
         name: 'file',
-        resultPreview: '{"content":"read:note.txt"}',
+        resultPreview: 'read:note.txt',
         isError: false,
         durationMs: expect.any(Number)
       },
@@ -1349,7 +1349,7 @@ describe('agent loop', () => {
         type: 'tool_call_completed',
         id: 'call-read-stream-history',
         name: 'file',
-        resultPreview: '{"content":"read:note.txt"}',
+        resultPreview: 'read:note.txt',
         isError: false,
         durationMs: expect.any(Number)
       },
@@ -1495,7 +1495,7 @@ describe('agent loop', () => {
         type: 'tool_call_completed',
         id: 'call-read-stream-structured',
         name: 'file',
-        resultPreview: '{"content":"read:note.txt"}',
+        resultPreview: 'read:note.txt',
         isError: false,
         durationMs: expect.any(Number)
       },

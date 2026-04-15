@@ -825,6 +825,432 @@ describe('tuiController', () => {
     }));
   });
 
+  it('emits a new assistant message id after tool activity in the same turn', async () => {
+    const emitted: HostEvent[] = [];
+    const savedRecords: Array<{ sessionId: string; checkpointJson: string; status?: string }> = [];
+
+    const controller = createTuiController({
+      cwd: '/tmp/qiclaw-controller-multi-assistant-turn',
+      runtime: {
+        provider: { name: 'openai', model: 'gpt-test' },
+        availableTools: [],
+        systemPrompt: 'system prompt',
+        cwd: '/tmp/qiclaw-controller-multi-assistant-turn',
+        maxToolRounds: 3,
+        observer: { record() {} }
+      },
+      checkpointStore: {
+        getLatest() {
+          return undefined;
+        },
+        save(record) {
+          savedRecords.push({ sessionId: record.sessionId, checkpointJson: record.checkpointJson, status: record.status });
+        }
+      },
+      prepareSessionMemory: vi.fn(async () => undefined),
+      captureTurnMemory: vi.fn(async () => ({ saved: false, checkpointState: undefined })),
+      createSessionId: () => 'session-multi-assistant-turn',
+      executeTurn: vi.fn(async () => ({
+        stopReason: 'completed',
+        finalAnswer: 'Kết luận cuối',
+        history: [
+          { role: 'user', content: 'review code diff' },
+          { role: 'assistant', content: 'Review nhanh theo git diff' },
+          { role: 'tool', name: 'git', toolCallId: 'tool-1', content: '1 file changed', isError: false },
+          { role: 'assistant', content: 'Kết luận cuối' }
+        ],
+        memoryCandidates: [],
+        structuredOutputParsed: false,
+        toolRoundsUsed: 1,
+        doneCriteria: {
+          goal: 'review code diff',
+          checklist: ['review code diff'],
+          requiresNonEmptyFinalAnswer: true,
+          requiresToolEvidence: false,
+          requiresSubstantiveFinalAnswer: false,
+          forbidSuccessAfterToolErrors: false
+        },
+        verification: {
+          isVerified: true,
+          finalAnswerIsNonEmpty: true,
+          finalAnswerIsSubstantive: true,
+          toolEvidenceSatisfied: true,
+          noUnresolvedToolErrors: true,
+          toolMessagesCount: 1,
+          checks: []
+        },
+        turnStream: (async function* (): AsyncIterable<TurnEvent> {
+          yield { type: 'assistant_text_delta', text: 'Review nhanh theo git diff' };
+          yield { type: 'assistant_message_completed', text: 'Review nhanh theo git diff' };
+          yield { type: 'tool_call_started', id: 'tool-1', name: 'git', input: { command: 'git diff --stat' } };
+          yield { type: 'tool_call_completed', id: 'tool-1', name: 'git', isError: false, resultPreview: '1 file changed', durationMs: 12 };
+          yield { type: 'assistant_text_delta', text: 'Kết luận cuối' };
+          yield { type: 'assistant_message_completed', text: 'Kết luận cuối' };
+          yield {
+            type: 'turn_completed',
+            finalAnswer: 'Kết luận cuối',
+            stopReason: 'completed',
+            history: [
+              { role: 'user', content: 'review code diff' },
+              { role: 'assistant', content: 'Review nhanh theo git diff' },
+              { role: 'tool', name: 'git', toolCallId: 'tool-1', content: '1 file changed', isError: false },
+              { role: 'assistant', content: 'Kết luận cuối' }
+            ],
+            memoryCandidates: [],
+            structuredOutputParsed: false,
+            toolRoundsUsed: 1,
+            doneCriteria: {
+              goal: 'review code diff',
+              checklist: ['review code diff'],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            },
+            turnCompleted: true,
+            verification: {
+              isVerified: true,
+              finalAnswerIsNonEmpty: true,
+              finalAnswerIsSubstantive: true,
+              toolEvidenceSatisfied: true,
+              noUnresolvedToolErrors: true,
+              toolMessagesCount: 1,
+              checks: []
+            }
+          };
+        })(),
+        finalResult: Promise.resolve({
+          stopReason: 'completed',
+          finalAnswer: 'Kết luận cuối',
+          history: [
+            { role: 'user', content: 'review code diff' },
+            { role: 'assistant', content: 'Review nhanh theo git diff' },
+            { role: 'tool', name: 'git', toolCallId: 'tool-1', content: '1 file changed', isError: false },
+            { role: 'assistant', content: 'Kết luận cuối' }
+          ],
+          historySummary: undefined,
+          memoryCandidates: [],
+          structuredOutputParsed: false,
+          toolRoundsUsed: 1,
+          doneCriteria: {
+            goal: 'review code diff',
+            checklist: ['review code diff'],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
+            toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
+            toolMessagesCount: 1,
+            checks: []
+          }
+        })
+      })),
+      emit(message) {
+        emitted.push(parseBridgeMessage(message));
+      }
+    });
+
+    await controller.start();
+    await controller.handleAction({ type: 'submit_prompt', prompt: 'review code diff' });
+
+    expect(emitted).toContainEqual({ type: 'assistant_completed', turnId: 'turn-1', messageId: 'assistant-1', text: 'Review nhanh theo git diff' });
+    expect(emitted).toContainEqual({ type: 'assistant_completed', turnId: 'turn-1', messageId: 'assistant-2', text: 'Kết luận cuối' });
+
+    const finalCheckpoint = parseInteractiveCheckpointJson(savedRecords.at(-1)!.checkpointJson);
+    expect(finalCheckpoint?.transcriptCells).toEqual([
+      { id: 'user-live-1', kind: 'user', text: 'review code diff' },
+      { id: 'assistant-live-2', kind: 'assistant', text: 'Review nhanh theo git diff' },
+      { id: 'tool-live-3', kind: 'tool', text: '1 file changed', title: 'git', toolName: 'git', isError: false, streaming: false, turnId: 'turn-1', toolCallId: 'tool-1', durationMs: 12 },
+      { id: 'assistant-live-4', kind: 'assistant', text: 'Kết luận cuối' }
+    ]);
+  });
+
+  it('keeps a single assistant live cell while a long completion text arrives in chunks', async () => {
+    const emitted: HostEvent[] = [];
+    const savedRecords: Array<{ sessionId: string; checkpointJson: string; status?: string }> = [];
+
+    const controller = createTuiController({
+      cwd: '/tmp/qiclaw-controller-long-assistant',
+      runtime: {
+        provider: { name: 'openai', model: 'gpt-test' },
+        availableTools: [],
+        systemPrompt: 'system prompt',
+        cwd: '/tmp/qiclaw-controller-long-assistant',
+        maxToolRounds: 3,
+        observer: { record() {} }
+      },
+      checkpointStore: {
+        getLatest() {
+          return undefined;
+        },
+        save(record) {
+          savedRecords.push({ sessionId: record.sessionId, checkpointJson: record.checkpointJson, status: record.status });
+        }
+      },
+      prepareSessionMemory: vi.fn(async () => undefined),
+      captureTurnMemory: vi.fn(async () => ({ saved: false, checkpointState: undefined })),
+      createSessionId: () => 'session-long-assistant',
+      executeTurn: vi.fn(async () => ({
+        stopReason: 'completed',
+        finalAnswer: 'Chuẩn, Đại ca. Lần này em đi quá sâu vào file nên chậm.',
+        history: [
+          { role: 'user', content: 'review cho lẹ' },
+          { role: 'assistant', content: 'Chuẩn, Đại ca. Lần này em đi quá sâu vào file nên chậm.' }
+        ],
+        memoryCandidates: [],
+        structuredOutputParsed: false,
+        toolRoundsUsed: 0,
+        doneCriteria: {
+          goal: 'review cho lẹ',
+          checklist: ['review cho lẹ'],
+          requiresNonEmptyFinalAnswer: true,
+          requiresToolEvidence: false,
+          requiresSubstantiveFinalAnswer: false,
+          forbidSuccessAfterToolErrors: false
+        },
+        verification: {
+          isVerified: true,
+          finalAnswerIsNonEmpty: true,
+          finalAnswerIsSubstantive: true,
+          toolEvidenceSatisfied: true,
+          noUnresolvedToolErrors: true,
+          toolMessagesCount: 0,
+          checks: []
+        },
+        turnStream: (async function* (): AsyncIterable<TurnEvent> {
+          yield { type: 'assistant_text_delta', text: 'Chu' };
+          yield { type: 'assistant_text_delta', text: 'ẩn, Đại ca. Lần này em đi quá sâu vào file nên chậm.' };
+          yield {
+            type: 'assistant_message_completed',
+            text: 'Chuẩn, Đại ca. Lần này em đi quá sâu vào file nên chậm.'
+          };
+          yield {
+            type: 'turn_completed',
+            finalAnswer: 'Chuẩn, Đại ca. Lần này em đi quá sâu vào file nên chậm.',
+            stopReason: 'completed',
+            history: [
+              { role: 'user', content: 'review cho lẹ' },
+              { role: 'assistant', content: 'Chuẩn, Đại ca. Lần này em đi quá sâu vào file nên chậm.' }
+            ],
+            memoryCandidates: [],
+            structuredOutputParsed: false,
+            toolRoundsUsed: 0,
+            doneCriteria: {
+              goal: 'review cho lẹ',
+              checklist: ['review cho lẹ'],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            },
+            turnCompleted: true,
+            verification: {
+              isVerified: true,
+              finalAnswerIsNonEmpty: true,
+              finalAnswerIsSubstantive: true,
+              toolEvidenceSatisfied: true,
+              noUnresolvedToolErrors: true,
+              toolMessagesCount: 0,
+              checks: []
+            }
+          };
+        })(),
+        finalResult: Promise.resolve({
+          stopReason: 'completed',
+          finalAnswer: 'Chuẩn, Đại ca. Lần này em đi quá sâu vào file nên chậm.',
+          history: [
+            { role: 'user', content: 'review cho lẹ' },
+            { role: 'assistant', content: 'Chuẩn, Đại ca. Lần này em đi quá sâu vào file nên chậm.' }
+          ],
+          historySummary: undefined,
+          memoryCandidates: [],
+          structuredOutputParsed: false,
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: 'review cho lẹ',
+            checklist: ['review cho lẹ'],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
+            toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
+            toolMessagesCount: 0,
+            checks: []
+          }
+        })
+      })),
+      emit(message) {
+        emitted.push(parseBridgeMessage(message));
+      }
+    });
+
+    await controller.start();
+    await controller.handleAction({ type: 'submit_prompt', prompt: 'review cho lẹ' });
+
+    expect(emitted.filter((event) => event.type === 'assistant_completed')).toEqual([
+      {
+        type: 'assistant_completed',
+        turnId: 'turn-1',
+        messageId: 'assistant-1',
+        text: 'Chuẩn, Đại ca. Lần này em đi quá sâu vào file nên chậm.'
+      }
+    ]);
+
+    const finalCheckpoint = parseInteractiveCheckpointJson(savedRecords.at(-1)!.checkpointJson);
+    expect(finalCheckpoint?.transcriptCells).toEqual([
+      { id: 'user-live-1', kind: 'user', text: 'review cho lẹ' },
+      { id: 'assistant-live-2', kind: 'assistant', text: 'Chuẩn, Đại ca. Lần này em đi quá sâu vào file nên chậm.' }
+    ]);
+  });
+
+  it('does not duplicate a short assistant fragment when completion arrives for the same turn', async () => {
+    const emitted: HostEvent[] = [];
+    const savedRecords: Array<{ sessionId: string; checkpointJson: string; status?: string }> = [];
+    const finalAnswer = 'Chào Đại ca, em đây. Cần em làm gì?';
+
+    const controller = createTuiController({
+      cwd: '/tmp/qiclaw-controller-short-fragment',
+      runtime: {
+        provider: { name: 'openai', model: 'gpt-test' },
+        availableTools: [],
+        systemPrompt: 'system prompt',
+        cwd: '/tmp/qiclaw-controller-short-fragment',
+        maxToolRounds: 3,
+        observer: { record() {} }
+      },
+      checkpointStore: {
+        getLatest() {
+          return undefined;
+        },
+        save(record) {
+          savedRecords.push({ sessionId: record.sessionId, checkpointJson: record.checkpointJson, status: record.status });
+        }
+      },
+      prepareSessionMemory: vi.fn(async () => undefined),
+      captureTurnMemory: vi.fn(async () => ({ saved: false, checkpointState: undefined })),
+      createSessionId: () => 'session-short-fragment',
+      executeTurn: vi.fn(async () => ({
+        stopReason: 'completed',
+        finalAnswer,
+        history: [
+          { role: 'user', content: 'xin chào' },
+          { role: 'assistant', content: finalAnswer }
+        ],
+        memoryCandidates: [],
+        structuredOutputParsed: false,
+        toolRoundsUsed: 0,
+        doneCriteria: {
+          goal: 'xin chào',
+          checklist: ['xin chào'],
+          requiresNonEmptyFinalAnswer: true,
+          requiresToolEvidence: false,
+          requiresSubstantiveFinalAnswer: false,
+          forbidSuccessAfterToolErrors: false
+        },
+        verification: {
+          isVerified: true,
+          finalAnswerIsNonEmpty: true,
+          finalAnswerIsSubstantive: true,
+          toolEvidenceSatisfied: true,
+          noUnresolvedToolErrors: true,
+          toolMessagesCount: 0,
+          checks: []
+        },
+        turnStream: (async function* (): AsyncIterable<TurnEvent> {
+          yield { type: 'assistant_text_delta', text: 'Ch' };
+          yield { type: 'assistant_message_completed', text: finalAnswer };
+          yield {
+            type: 'turn_completed',
+            finalAnswer,
+            stopReason: 'completed',
+            history: [
+              { role: 'user', content: 'xin chào' },
+              { role: 'assistant', content: finalAnswer }
+            ],
+            memoryCandidates: [],
+            structuredOutputParsed: false,
+            toolRoundsUsed: 0,
+            doneCriteria: {
+              goal: 'xin chào',
+              checklist: ['xin chào'],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            },
+            turnCompleted: true,
+            verification: {
+              isVerified: true,
+              finalAnswerIsNonEmpty: true,
+              finalAnswerIsSubstantive: true,
+              toolEvidenceSatisfied: true,
+              noUnresolvedToolErrors: true,
+              toolMessagesCount: 0,
+              checks: []
+            }
+          };
+        })(),
+        finalResult: Promise.resolve({
+          stopReason: 'completed',
+          finalAnswer,
+          history: [
+            { role: 'user', content: 'xin chào' },
+            { role: 'assistant', content: finalAnswer }
+          ],
+          historySummary: undefined,
+          memoryCandidates: [],
+          structuredOutputParsed: false,
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: 'xin chào',
+            checklist: ['xin chào'],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
+            toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
+            toolMessagesCount: 0,
+            checks: []
+          }
+        })
+      })),
+      emit(message) {
+        emitted.push(parseBridgeMessage(message));
+      }
+    });
+
+    await controller.start();
+    await controller.handleAction({ type: 'submit_prompt', prompt: 'xin chào' });
+
+    expect(emitted.filter((event) => event.type === 'assistant_completed')).toEqual([
+      { type: 'assistant_completed', turnId: 'turn-1', messageId: 'assistant-1', text: finalAnswer }
+    ]);
+
+    const finalCheckpoint = parseInteractiveCheckpointJson(savedRecords.at(-1)!.checkpointJson);
+    expect(finalCheckpoint?.transcriptCells).toEqual([
+      { id: 'user-live-1', kind: 'user', text: 'xin chào' },
+      { id: 'assistant-live-2', kind: 'assistant', text: finalAnswer }
+    ]);
+  });
+
   it('persists and restores provider-backed tool activity transcript state', async () => {
     const savedRecords: Array<{ sessionId: string; checkpointJson: string }> = [];
 
@@ -948,9 +1374,19 @@ describe('tuiController', () => {
     const parsed = parseInteractiveCheckpointJson(latest!.checkpointJson);
     expect(parsed?.transcriptCells).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'user', text: 'use tool' }),
-      expect.objectContaining({ kind: 'tool', toolName: 'read_file', text: 'file contents' }),
+      expect.objectContaining({
+        kind: 'tool',
+        toolName: 'read_file',
+        title: 'read_file /tmp/demo.txt',
+        text: 'file contents',
+        toolCallId: 'tool-1',
+        turnId: 'turn-1',
+        streaming: false,
+        durationMs: 12
+      }),
       expect.objectContaining({ kind: 'assistant', text: 'done' })
     ]));
+    expect(parsed?.transcriptCells?.filter((cell) => cell.kind === 'tool' && cell.toolCallId === 'tool-1')).toHaveLength(1);
 
     const restoredEmitted: HostEvent[] = [];
     const restoredController = createTuiController({
@@ -995,7 +1431,16 @@ describe('tuiController', () => {
     expect(restoredEmitted).toContainEqual(expect.objectContaining({
       type: 'transcript_seed',
       cells: expect.arrayContaining([
-        expect.objectContaining({ kind: 'tool', toolName: 'read_file', text: 'file contents' })
+        expect.objectContaining({
+          kind: 'tool',
+          toolName: 'read_file',
+          title: 'read_file /tmp/demo.txt',
+          text: 'file contents',
+          toolCallId: 'tool-1',
+          turnId: 'turn-1',
+          streaming: false,
+          durationMs: 12
+        })
       ])
     }));
   });
@@ -1095,7 +1540,16 @@ describe('tuiController', () => {
     expect(parsed?.transcriptCells).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'user', text: 'question' }),
       expect.objectContaining({ kind: 'assistant', text: 'partial ' }),
-      expect.objectContaining({ kind: 'tool', toolName: 'read_file', text: 'file contents' }),
+      expect.objectContaining({
+        kind: 'tool',
+        toolName: 'read_file',
+        title: 'read_file /tmp/demo.txt',
+        text: 'file contents',
+        toolCallId: 'tool-1',
+        turnId: 'turn-1',
+        streaming: false,
+        durationMs: 12
+      }),
       expect.objectContaining({ kind: 'status', title: 'Error', text: 'provider stream failed', isError: true })
     ]));
   });
@@ -1194,11 +1648,11 @@ describe('tuiController', () => {
 
     const failedParsed = parseInteractiveCheckpointJson(failedCheckpoint!.checkpointJson);
     expect(failedParsed?.history).toEqual([]);
-    expect(failedParsed?.transcriptCells?.map(({ kind, text, title, toolName, isError }) => ({ kind, text, title, toolName, isError }))).toEqual([
-      { kind: 'user', text: 'question', title: undefined, toolName: undefined, isError: undefined },
-      { kind: 'assistant', text: 'partial ', title: undefined, toolName: undefined, isError: undefined },
-      { kind: 'tool', text: 'file contents', title: 'read_file', toolName: 'read_file', isError: false },
-      { kind: 'status', text: 'provider stream failed', title: 'Error', toolName: undefined, isError: true }
+    expect(failedParsed?.transcriptCells?.map(({ kind, text, title, toolName, isError, streaming, turnId, toolCallId, durationMs }) => ({ kind, text, title, toolName, isError, streaming, turnId, toolCallId, durationMs }))).toEqual([
+      { kind: 'user', text: 'question', title: undefined, toolName: undefined, isError: undefined, streaming: undefined, turnId: undefined, toolCallId: undefined, durationMs: undefined },
+      { kind: 'assistant', text: 'partial ', title: undefined, toolName: undefined, isError: undefined, streaming: undefined, turnId: undefined, toolCallId: undefined, durationMs: undefined },
+      { kind: 'tool', text: 'file contents', title: 'read_file /tmp/demo.txt', toolName: 'read_file', isError: false, streaming: false, turnId: 'turn-1', toolCallId: 'tool-1', durationMs: 12 },
+      { kind: 'status', text: 'provider stream failed', title: 'Error', toolName: undefined, isError: true, streaming: undefined, turnId: undefined, toolCallId: undefined, durationMs: undefined }
     ]);
 
     const restoredExecuteTurn = vi.fn(async ({ userInput, history, historySummary }) => {
@@ -1335,7 +1789,7 @@ describe('tuiController', () => {
       cells: [
         { id: 'user-live-1', kind: 'user', text: 'question' },
         { id: 'assistant-live-2', kind: 'assistant', text: 'partial ' },
-        { id: 'tool-live-3', kind: 'tool', text: 'file contents', title: 'read_file', toolName: 'read_file', isError: false },
+        { id: 'tool-live-3', kind: 'tool', text: 'file contents', title: 'read_file /tmp/demo.txt', toolName: 'read_file', isError: false, streaming: false, turnId: 'turn-1', toolCallId: 'tool-1', durationMs: 12 },
         { id: 'error-live-4', kind: 'status', text: 'provider stream failed', title: 'Error', isError: true }
       ]
     });
@@ -1348,13 +1802,13 @@ describe('tuiController', () => {
     expect(finalCheckpoint?.status).toBe('completed');
 
     const finalParsed = parseInteractiveCheckpointJson(finalCheckpoint!.checkpointJson);
-    expect(finalParsed?.transcriptCells?.map(({ kind, text, title, toolName, isError }) => ({ kind, text, title, toolName, isError }))).toEqual([
-      { kind: 'user', text: 'question', title: undefined, toolName: undefined, isError: undefined },
-      { kind: 'assistant', text: 'partial ', title: undefined, toolName: undefined, isError: undefined },
-      { kind: 'tool', text: 'file contents', title: 'read_file', toolName: 'read_file', isError: false },
-      { kind: 'status', text: 'provider stream failed', title: 'Error', toolName: undefined, isError: true },
-      { kind: 'user', text: 'follow-up question', title: undefined, toolName: undefined, isError: undefined },
-      { kind: 'assistant', text: 'follow-up answer', title: undefined, toolName: undefined, isError: undefined }
+    expect(finalParsed?.transcriptCells?.map(({ kind, text, title, toolName, isError, streaming, turnId, toolCallId, durationMs }) => ({ kind, text, title, toolName, isError, streaming, turnId, toolCallId, durationMs }))).toEqual([
+      { kind: 'user', text: 'question', title: undefined, toolName: undefined, isError: undefined, streaming: undefined, turnId: undefined, toolCallId: undefined, durationMs: undefined },
+      { kind: 'assistant', text: 'partial ', title: undefined, toolName: undefined, isError: undefined, streaming: undefined, turnId: undefined, toolCallId: undefined, durationMs: undefined },
+      { kind: 'tool', text: 'file contents', title: 'read_file /tmp/demo.txt', toolName: 'read_file', isError: false, streaming: false, turnId: 'turn-1', toolCallId: 'tool-1', durationMs: 12 },
+      { kind: 'status', text: 'provider stream failed', title: 'Error', toolName: undefined, isError: true, streaming: undefined, turnId: undefined, toolCallId: undefined, durationMs: undefined },
+      { kind: 'user', text: 'follow-up question', title: undefined, toolName: undefined, isError: undefined, streaming: undefined, turnId: undefined, toolCallId: undefined, durationMs: undefined },
+      { kind: 'assistant', text: 'follow-up answer', title: undefined, toolName: undefined, isError: undefined, streaming: undefined, turnId: undefined, toolCallId: undefined, durationMs: undefined }
     ]);
     expect(finalParsed?.history).toEqual([
       { role: 'user', content: 'follow-up question' },
@@ -1484,8 +1938,8 @@ describe('tuiController', () => {
 
     await controller.handleAction({ type: 'submit_prompt', prompt: 'tiếp tục' });
 
-    expect(emitted).toContainEqual({ type: 'assistant_delta', turnId: 'turn-2', messageId: 'assistant-2', text: 'Chào Đại ca.' });
-    expect(emitted).toContainEqual({ type: 'assistant_completed', turnId: 'turn-2', messageId: 'assistant-2', text: 'Chào Đại ca.' });
+    expect(emitted).toContainEqual({ type: 'assistant_delta', turnId: 'turn-2', messageId: 'assistant-1', text: 'Chào Đại ca.' });
+    expect(emitted).toContainEqual({ type: 'assistant_completed', turnId: 'turn-2', messageId: 'assistant-1', text: 'Chào Đại ca.' });
     expect(emitted).toContainEqual(expect.objectContaining({ type: 'turn_completed', turnId: 'turn-2' }));
 
     const finalCheckpoint = parseInteractiveCheckpointJson(savedRecords.at(-1)!.checkpointJson);

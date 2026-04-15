@@ -7,6 +7,10 @@ export interface TranscriptCell {
   title?: string;
   toolName?: string;
   isError?: boolean;
+  streaming?: boolean;
+  turnId?: string;
+  toolCallId?: string;
+  durationMs?: number;
 }
 
 export interface SlashCatalogEntry {
@@ -134,7 +138,11 @@ function isTranscriptCell(value: unknown): value is TranscriptCell {
     && typeof cell.text === 'string'
     && (cell.title === undefined || typeof cell.title === 'string')
     && (cell.toolName === undefined || typeof cell.toolName === 'string')
-    && (cell.isError === undefined || typeof cell.isError === 'boolean');
+    && (cell.isError === undefined || typeof cell.isError === 'boolean')
+    && (cell.streaming === undefined || typeof cell.streaming === 'boolean')
+    && (cell.turnId === undefined || typeof cell.turnId === 'string')
+    && (cell.toolCallId === undefined || typeof cell.toolCallId === 'string')
+    && (cell.durationMs === undefined || typeof cell.durationMs === 'number');
 }
 
 function isTranscriptCellKind(value: unknown): value is TranscriptCellKind {

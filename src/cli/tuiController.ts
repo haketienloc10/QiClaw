@@ -163,11 +163,61 @@ export function createTuiController(options: TuiControllerOptions): TuiControlle
     };
   }
 
+  function pruneStalePartialAssistantCells(cells: TranscriptCell[], currentHistory: Message[]): TranscriptCell[] {
+    const assistantCountFromHistory = currentHistory.filter((message) => message.role === 'assistant').length;
+    const assistantCellIndexes = cells
+      .map((cell, index) => ({ cell, index }))
+      .filter(({ cell }) => cell.kind === 'assistant');
+
+    if (assistantCellIndexes.length <= assistantCountFromHistory) {
+      return cells;
+    }
+
+    const trailingAssistant = assistantCellIndexes.at(-1);
+    if (!trailingAssistant || trailingAssistant.index !== cells.length - 1) {
+      return cells;
+    }
+
+    return cells.filter((_, index) => index !== trailingAssistant.index);
+  }
+
+  function pruneTransientAssistantCells(cells: TranscriptCell[]): TranscriptCell[] {
+    const lastUserIndex = cells.map((cell) => cell.kind).lastIndexOf('user');
+    if (lastUserIndex < 0) {
+      return cells;
+    }
+
+    const assistantIndexesAfterLastUser = cells
+      .map((cell, index) => ({ cell, index }))
+      .filter(({ cell, index }) => index > lastUserIndex && cell.kind === 'assistant');
+
+    if (assistantIndexesAfterLastUser.length <= 1) {
+      return cells;
+    }
+
+    const keepIndex = assistantIndexesAfterLastUser.at(-1)?.index;
+    return cells.filter((cell, index) => {
+      if (cell.kind !== 'assistant' || index <= lastUserIndex) {
+        return true;
+      }
+      return index === keepIndex;
+    });
+  }
+
   function persistProviderTranscriptEvent(
     event: HostEvent,
     state: LiveTurnTranscriptState
   ): void {
+    const recoverTrailingAssistantCellId = (): string | undefined => {
+      const trailing = transcriptCells.at(-1);
+      return trailing?.kind === 'assistant' ? trailing.id : undefined;
+    };
+
     if (event.type === 'assistant_delta') {
+      if (!state.assistantCellId) {
+        state.assistantCellId = recoverTrailingAssistantCellId();
+      }
+
       if (!state.assistantCellId) {
         transcriptCellOrdinal += 1;
         state.assistantCellId = `assistant-live-${transcriptCellOrdinal}`;
@@ -182,6 +232,10 @@ export function createTuiController(options: TuiControllerOptions): TuiControlle
 
     if (event.type === 'assistant_completed') {
       if (!state.assistantCellId) {
+        state.assistantCellId = recoverTrailingAssistantCellId();
+      }
+
+      if (!state.assistantCellId) {
         transcriptCellOrdinal += 1;
         state.assistantCellId = `assistant-live-${transcriptCellOrdinal}`;
         appendTranscriptCell({ id: state.assistantCellId, kind: 'assistant', text: event.text });
@@ -193,15 +247,19 @@ export function createTuiController(options: TuiControllerOptions): TuiControlle
     }
 
     if (event.type === 'tool_started') {
+      state.assistantCellId = undefined;
       transcriptCellOrdinal += 1;
       const toolCellId = `tool-live-${transcriptCellOrdinal}`;
       state.startedToolCellIds.set(event.toolCallId, toolCellId);
       appendTranscriptCell({
         id: toolCellId,
         kind: 'tool',
-        text: event.label,
-        title: event.toolName,
-        toolName: event.toolName
+        text: 'collecting output…',
+        title: event.label,
+        toolName: event.toolName,
+        streaming: true,
+        turnId: event.turnId,
+        toolCallId: event.toolCallId
       });
       return;
     }
@@ -211,7 +269,9 @@ export function createTuiController(options: TuiControllerOptions): TuiControlle
       if (existingToolCellId) {
         updateTranscriptCell(existingToolCellId, {
           text: event.resultPreview,
-          isError: event.status === 'error'
+          isError: event.status === 'error',
+          streaming: false,
+          durationMs: event.durationMs
         });
         return;
       }
@@ -223,7 +283,11 @@ export function createTuiController(options: TuiControllerOptions): TuiControlle
         text: event.resultPreview,
         title: event.toolName,
         toolName: event.toolName,
-        isError: event.status === 'error'
+        isError: event.status === 'error',
+        streaming: false,
+        turnId: event.turnId,
+        toolCallId: event.toolCallId,
+        durationMs: event.durationMs
       });
       return;
     }
@@ -302,6 +366,9 @@ export function createTuiController(options: TuiControllerOptions): TuiControlle
             persistProviderTranscriptEvent(mapped, liveTranscriptState);
             emit(mapped);
             await saveCheckpoint('running');
+            if (mapped.type === 'assistant_completed') {
+              assistantMessageOrdinal += 1;
+            }
           }
         }
       }
@@ -490,7 +557,12 @@ export function createTuiController(options: TuiControllerOptions): TuiControlle
         sessionMemoryState = restored.sessionMemory;
       }
 
-      transcriptCells = restored?.transcriptCells ?? createTranscriptSeed(history, historySummary);
+      transcriptCells = pruneTransientAssistantCells(
+        pruneStalePartialAssistantCells(
+          restored?.transcriptCells ?? createTranscriptSeed(history, historySummary),
+          history
+        )
+      );
       transcriptCellOrdinal = transcriptCells.length;
       turnOrdinal = history.filter((message) => message.role === 'user').length;
       assistantMessageOrdinal = Math.max(

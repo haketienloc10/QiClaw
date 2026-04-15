@@ -842,7 +842,7 @@ export async function* runAgentTurnStream(
           type: 'tool_call_completed',
           id: toolCall.id,
           name: toolCall.name,
-          resultPreview: buildTelemetryPreview({ content: toolResult.content }, 120),
+          resultPreview: buildToolResultPreview(toolResult.content, 120),
           isError: toolResult.isError,
           durationMs: Date.now() - toolStartedAt
         };
@@ -1131,6 +1131,13 @@ function parseToolResultContent(content: string): unknown {
   } catch {
     return content;
   }
+}
+
+function buildToolResultPreview(content: string, maxLength = 120): string {
+  const parsed = parseToolResultContent(content);
+  return typeof parsed === 'string'
+    ? (parsed.length <= maxLength ? parsed : `${parsed.slice(0, Math.max(0, maxLength - 3))}...`)
+    : buildTelemetryPreview(parsed, maxLength);
 }
 
 function buildTurnContext(telemetry: TurnTelemetryState): TelemetryEventContextData {

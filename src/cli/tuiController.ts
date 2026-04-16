@@ -47,6 +47,8 @@ export interface TuiController {
 interface TurnSummaryMetrics {
   providerCalls: number;
   toolCalls: number;
+  inputTokens: number;
+  outputTokens: number;
   durationMs: number;
 }
 
@@ -72,11 +74,31 @@ function formatTurnDuration(durationMs: number): string {
   return `${Math.max(1, Math.round(durationMs / 1000))}s`;
 }
 
+function formatCompactMetric(value: number): string {
+  const rounded = Math.max(0, Math.round(value));
+  if (rounded < 1000) {
+    return `${rounded}`;
+  }
+
+  if (rounded >= 10_000) {
+    return `${Math.round(rounded / 1000)}k`;
+  }
+
+  const compact = Math.round((rounded / 1000) * 10) / 10;
+  if (Number.isInteger(compact)) {
+    return `${compact}k`;
+  }
+
+  return `${compact.toFixed(1)}k`;
+}
+
 function formatFooterSummary(args: {
   stopReason: string;
   isVerified: boolean;
   providerCalls: number;
   toolCalls: number;
+  inputTokens: number;
+  outputTokens: number;
   durationMs: number;
 }): string {
   const parts = [
@@ -84,6 +106,8 @@ function formatFooterSummary(args: {
     ...(args.isVerified ? ['verified'] : []),
     pluralize(args.providerCalls, 'provider', 'providers'),
     pluralize(args.toolCalls, 'tool', 'tools'),
+    `${formatCompactMetric(args.inputTokens)} in`,
+    `${formatCompactMetric(args.outputTokens)} out`,
     formatTurnDuration(args.durationMs)
   ];
 
@@ -368,12 +392,18 @@ export function createTuiController(options: TuiControllerOptions): TuiControlle
     const turnSummaryMetrics: TurnSummaryMetrics = {
       providerCalls: 0,
       toolCalls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
       durationMs: 0
     };
     const countingObserver = {
       record(event: Parameters<NonNullable<typeof options.runtime.observer>['record']>[0]) {
         if (event.type === 'provider_called') {
           turnSummaryMetrics.providerCalls += 1;
+        }
+        if (event.type === 'provider_responded') {
+          turnSummaryMetrics.inputTokens += event.data.usage?.inputTokens ?? 0;
+          turnSummaryMetrics.outputTokens += event.data.usage?.outputTokens ?? 0;
         }
         options.runtime.observer?.record(event);
       }
@@ -474,6 +504,8 @@ export function createTuiController(options: TuiControllerOptions): TuiControlle
           isVerified: settled.verification.isVerified,
           providerCalls: turnSummaryMetrics.providerCalls,
           toolCalls: turnSummaryMetrics.toolCalls,
+          inputTokens: turnSummaryMetrics.inputTokens,
+          outputTokens: turnSummaryMetrics.outputTokens,
           durationMs: turnSummaryMetrics.durationMs
         })
       });

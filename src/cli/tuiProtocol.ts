@@ -31,6 +31,7 @@ export type HostEvent =
   | { type: 'tool_completed'; turnId: string; toolCallId: string; toolName: string; status: 'success' | 'error'; resultPreview: string; durationMs?: number }
   | { type: 'status'; text: string }
   | { type: 'footer'; text: string }
+  | { type: 'footer_summary'; text: string }
   | { type: 'warning'; text: string }
   | { type: 'error'; text: string }
   | { type: 'turn_completed'; turnId: string; stopReason: string; finalAnswer: string }
@@ -105,6 +106,7 @@ function hasRequiredFields(value: BridgeMessage): boolean {
         && (value.durationMs === undefined || typeof value.durationMs === 'number');
     case 'status':
     case 'footer':
+    case 'footer_summary':
     case 'warning':
     case 'error':
       return typeof value.text === 'string';
@@ -182,6 +184,7 @@ const bridgeMessageTypes = new Set<string>([
   'tool_completed',
   'status',
   'footer',
+  'footer_summary',
   'warning',
   'error',
   'turn_completed',

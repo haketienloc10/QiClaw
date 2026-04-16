@@ -1955,6 +1955,342 @@ describe('tuiController', () => {
     ]);
   });
 
+  it('formats completed footer summary with verification, provider count, tool count, and seconds', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValueOnce(0);
+    nowSpy.mockReturnValueOnce(18_000);
+
+    const emitted: HostEvent[] = [];
+
+    try {
+      const controller = createTuiController({
+        cwd: '/tmp/qiclaw-controller-footer-summary',
+        runtime: {
+          provider: { name: 'openai', model: 'gpt-test' },
+          availableTools: [],
+          systemPrompt: 'system prompt',
+          cwd: '/tmp/qiclaw-controller-footer-summary',
+          maxToolRounds: 3,
+          observer: { record() {} }
+        },
+        checkpointStore: {
+          getLatest() {
+            return undefined;
+          },
+          save() {}
+        },
+        prepareSessionMemory: vi.fn(async () => undefined),
+        captureTurnMemory: vi.fn(async () => ({ saved: false, checkpointState: undefined })),
+        createSessionId: () => 'session-footer-summary',
+        executeTurn: vi.fn(async (input) => {
+          input.observer?.record({
+            type: 'provider_called',
+            timestamp: '2026-04-16T10:00:01.000Z',
+            stage: 'provider_decision',
+            data: {
+              turnId: 'turn-1',
+              providerRound: 1,
+              toolRound: 0,
+              messageCount: 1,
+              promptRawChars: 14,
+              toolNames: [],
+              messageSummaries: [],
+              totalContentBlockCount: 1,
+              hasSystemPrompt: true,
+              promptRawPreviewRedacted: 'summarize turn'
+            }
+          });
+
+          return {
+            stopReason: 'completed',
+            finalAnswer: 'done',
+            history: [
+              { role: 'user', content: 'summarize turn' },
+              { role: 'assistant', content: 'done' }
+            ],
+            historySummary: undefined,
+            memoryCandidates: [],
+            structuredOutputParsed: false,
+            toolRoundsUsed: 1,
+            doneCriteria: {
+              goal: 'summarize turn',
+              checklist: ['summarize turn'],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            },
+            verification: {
+              isVerified: true,
+              finalAnswerIsNonEmpty: true,
+              finalAnswerIsSubstantive: true,
+              toolEvidenceSatisfied: true,
+              noUnresolvedToolErrors: true,
+              toolMessagesCount: 0,
+              checks: []
+            },
+            turnStream: (async function* (): AsyncIterable<TurnEvent> {
+              yield { type: 'provider_started' };
+              yield { type: 'tool_call_started', id: 'tool-1', name: 'read_file', input: { filePath: 'a' } };
+              yield { type: 'tool_call_completed', id: 'tool-1', name: 'read_file', resultPreview: 'ok', isError: false, durationMs: 10 };
+              yield { type: 'tool_call_started', id: 'tool-2', name: 'grep', input: { pattern: 'x' } };
+              yield { type: 'tool_call_completed', id: 'tool-2', name: 'grep', resultPreview: 'ok', isError: false, durationMs: 10 };
+              yield { type: 'assistant_message_completed', text: 'done' };
+              yield {
+                type: 'turn_completed',
+                finalAnswer: 'done',
+                stopReason: 'completed',
+                history: [
+                  { role: 'user', content: 'summarize turn' },
+                  { role: 'assistant', content: 'done' }
+                ],
+                memoryCandidates: [],
+                structuredOutputParsed: false,
+                toolRoundsUsed: 1,
+                doneCriteria: {
+                  goal: 'summarize turn',
+                  checklist: ['summarize turn'],
+                  requiresNonEmptyFinalAnswer: true,
+                  requiresToolEvidence: false,
+                  requiresSubstantiveFinalAnswer: false,
+                  forbidSuccessAfterToolErrors: false
+                },
+                turnCompleted: true,
+                verification: {
+                  isVerified: true,
+                  finalAnswerIsNonEmpty: true,
+                  finalAnswerIsSubstantive: true,
+                  toolEvidenceSatisfied: true,
+                  noUnresolvedToolErrors: true,
+                  toolMessagesCount: 0,
+                  checks: []
+                }
+              };
+            })(),
+            finalResult: Promise.resolve({
+              stopReason: 'completed',
+              finalAnswer: 'done',
+              history: [
+                { role: 'user', content: 'summarize turn' },
+                { role: 'assistant', content: 'done' }
+              ],
+              historySummary: undefined,
+              memoryCandidates: [],
+              structuredOutputParsed: false,
+              toolRoundsUsed: 1,
+              doneCriteria: {
+                goal: 'summarize turn',
+                checklist: ['summarize turn'],
+                requiresNonEmptyFinalAnswer: true,
+                requiresToolEvidence: false,
+                requiresSubstantiveFinalAnswer: false,
+                forbidSuccessAfterToolErrors: false
+              },
+              verification: {
+                isVerified: true,
+                finalAnswerIsNonEmpty: true,
+                finalAnswerIsSubstantive: true,
+                toolEvidenceSatisfied: true,
+                noUnresolvedToolErrors: true,
+                toolMessagesCount: 0,
+                checks: []
+              }
+            })
+          };
+        }),
+        emit(message) {
+          emitted.push(parseBridgeMessage(message));
+        }
+      });
+
+      await controller.start();
+      await controller.handleAction({ type: 'submit_prompt', prompt: 'summarize turn' });
+
+      const assistantCompletedIndex = emitted.findIndex((event) => event.type === 'assistant_completed');
+      const turnCompletedIndex = emitted.findIndex((event) => event.type === 'turn_completed');
+      const footerSummaries = emitted.filter((event): event is Extract<HostEvent, { type: 'footer_summary' }> => event.type === 'footer_summary');
+      const footerSummaryIndex = emitted.findIndex((event) => event.type === 'footer_summary');
+
+      expect(assistantCompletedIndex).toBeGreaterThanOrEqual(0);
+      expect(turnCompletedIndex).toBeGreaterThan(assistantCompletedIndex);
+      expect(footerSummaries).toHaveLength(1);
+      expect(footerSummaries[0]).toEqual({
+        type: 'footer_summary',
+        text: 'completed • verified • 1 provider • 2 tools • 18s'
+      });
+      expect(footerSummaryIndex).toBeGreaterThan(turnCompletedIndex);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('formats max-tools footer summary with actual tool calls and millisecond duration', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValueOnce(0);
+    nowSpy.mockReturnValueOnce(842);
+
+    const emitted: HostEvent[] = [];
+
+    try {
+      const controller = createTuiController({
+        cwd: '/tmp/qiclaw-controller-footer-summary-max-tools',
+        runtime: {
+          provider: { name: 'openai', model: 'gpt-test' },
+          availableTools: [],
+          systemPrompt: 'system prompt',
+          cwd: '/tmp/qiclaw-controller-footer-summary-max-tools',
+          maxToolRounds: 3,
+          observer: { record() {} }
+        },
+        checkpointStore: {
+          getLatest() {
+            return undefined;
+          },
+          save() {}
+        },
+        prepareSessionMemory: vi.fn(async () => undefined),
+        captureTurnMemory: vi.fn(async () => ({ saved: false, checkpointState: undefined })),
+        createSessionId: () => 'session-footer-summary-max-tools',
+        executeTurn: vi.fn(async (input) => {
+          input.observer?.record({
+            type: 'provider_called',
+            timestamp: '2026-04-16T11:00:00.010Z',
+            stage: 'provider_decision',
+            data: {
+              turnId: 'turn-1',
+              providerRound: 1,
+              toolRound: 0,
+              messageCount: 1,
+              promptRawChars: 9,
+              toolNames: ['read_file'],
+              messageSummaries: [],
+              totalContentBlockCount: 1,
+              hasSystemPrompt: true,
+              promptRawPreviewRedacted: 'max tools'
+            }
+          });
+          input.observer?.record({
+            type: 'provider_called',
+            timestamp: '2026-04-16T11:00:00.020Z',
+            stage: 'provider_decision',
+            data: {
+              turnId: 'turn-1',
+              providerRound: 2,
+              toolRound: 1,
+              messageCount: 2,
+              promptRawChars: 18,
+              toolNames: ['read_file'],
+              messageSummaries: [],
+              totalContentBlockCount: 1,
+              hasSystemPrompt: true,
+              promptRawPreviewRedacted: 'max tools retry'
+            }
+          });
+
+          return {
+            stopReason: 'max_tool_rounds_reached',
+            finalAnswer: 'stopped',
+            history: [],
+            historySummary: undefined,
+            memoryCandidates: [],
+            structuredOutputParsed: false,
+            toolRoundsUsed: 3,
+            doneCriteria: {
+              goal: 'max tools',
+              checklist: ['max tools'],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            },
+            verification: {
+              isVerified: false,
+              finalAnswerIsNonEmpty: true,
+              finalAnswerIsSubstantive: true,
+              toolEvidenceSatisfied: true,
+              noUnresolvedToolErrors: true,
+              toolMessagesCount: 1,
+              checks: []
+            },
+            turnStream: (async function* (): AsyncIterable<TurnEvent> {
+              yield { type: 'tool_call_started', id: 'tool-1', name: 'read_file', input: { filePath: 'a' } };
+              yield { type: 'tool_call_completed', id: 'tool-1', name: 'read_file', resultPreview: 'ok', isError: false, durationMs: 10 };
+              yield { type: 'assistant_message_completed', text: 'stopped' };
+              yield {
+                type: 'turn_completed',
+                finalAnswer: 'stopped',
+                stopReason: 'max_tool_rounds_reached',
+                history: [],
+                memoryCandidates: [],
+                structuredOutputParsed: false,
+                toolRoundsUsed: 3,
+                doneCriteria: {
+                  goal: 'max tools',
+                  checklist: ['max tools'],
+                  requiresNonEmptyFinalAnswer: true,
+                  requiresToolEvidence: false,
+                  requiresSubstantiveFinalAnswer: false,
+                  forbidSuccessAfterToolErrors: false
+                },
+                turnCompleted: false,
+                verification: {
+                  isVerified: false,
+                  finalAnswerIsNonEmpty: true,
+                  finalAnswerIsSubstantive: true,
+                  toolEvidenceSatisfied: true,
+                  noUnresolvedToolErrors: true,
+                  toolMessagesCount: 1,
+                  checks: []
+                }
+              };
+            })(),
+            finalResult: Promise.resolve({
+              stopReason: 'max_tool_rounds_reached',
+              finalAnswer: 'stopped',
+              history: [],
+              historySummary: undefined,
+              memoryCandidates: [],
+              structuredOutputParsed: false,
+              toolRoundsUsed: 3,
+              doneCriteria: {
+                goal: 'max tools',
+                checklist: ['max tools'],
+                requiresNonEmptyFinalAnswer: true,
+                requiresToolEvidence: false,
+                requiresSubstantiveFinalAnswer: false,
+                forbidSuccessAfterToolErrors: false
+              },
+              verification: {
+                isVerified: false,
+                finalAnswerIsNonEmpty: true,
+                finalAnswerIsSubstantive: true,
+                toolEvidenceSatisfied: true,
+                noUnresolvedToolErrors: true,
+                toolMessagesCount: 1,
+                checks: []
+              }
+            })
+          };
+        }),
+        emit(message) {
+          emitted.push(parseBridgeMessage(message));
+        }
+      });
+
+      await controller.start();
+      await controller.handleAction({ type: 'submit_prompt', prompt: 'max tools' });
+
+      const footerSummaries = emitted.filter((event): event is Extract<HostEvent, { type: 'footer_summary' }> => event.type === 'footer_summary');
+      expect(footerSummaries).toHaveLength(1);
+      expect(footerSummaries[0]).toEqual({
+        type: 'footer_summary',
+        text: 'max tools • 2 providers • 1 tool • 842ms'
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('shows current model and updates model when the session is still clean', async () => {
     const emitted: HostEvent[] = [];
     const updateModel = vi.fn((argsText: string) => {

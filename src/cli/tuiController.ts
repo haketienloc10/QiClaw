@@ -44,6 +44,52 @@ export interface TuiController {
   handleAction(action: FrontendAction): Promise<boolean>;
 }
 
+interface TurnSummaryMetrics {
+  providerCalls: number;
+  toolCalls: number;
+  durationMs: number;
+}
+
+function summarizeStopReason(stopReason: string): string {
+  if (stopReason === 'completed') {
+    return 'completed';
+  }
+  if (stopReason === 'max_tool_rounds_reached') {
+    return 'max tools';
+  }
+  return 'stopped';
+}
+
+function pluralize(count: number, singular: string, plural: string): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function formatTurnDuration(durationMs: number): string {
+  if (durationMs < 1000) {
+    return `${Math.max(1, Math.round(durationMs))}ms`;
+  }
+
+  return `${Math.max(1, Math.round(durationMs / 1000))}s`;
+}
+
+function formatFooterSummary(args: {
+  stopReason: string;
+  isVerified: boolean;
+  providerCalls: number;
+  toolCalls: number;
+  durationMs: number;
+}): string {
+  const parts = [
+    summarizeStopReason(args.stopReason),
+    ...(args.isVerified ? ['verified'] : []),
+    pluralize(args.providerCalls, 'provider', 'providers'),
+    pluralize(args.toolCalls, 'tool', 'tools'),
+    formatTurnDuration(args.durationMs)
+  ];
+
+  return parts.join(' • ');
+}
+
 export function createTuiController(options: TuiControllerOptions): TuiController {
   const emit = (event: HostEvent) => {
     if (event.type === 'status' || event.type === 'warning' || event.type === 'error') {
@@ -318,6 +364,20 @@ export function createTuiController(options: TuiControllerOptions): TuiControlle
     turnOrdinal += 1;
     assistantMessageOrdinal += 1;
     const liveTranscriptState = createLiveTurnTranscriptState();
+    const turnStartedAt = Date.now();
+    const turnSummaryMetrics: TurnSummaryMetrics = {
+      providerCalls: 0,
+      toolCalls: 0,
+      durationMs: 0
+    };
+    const countingObserver = {
+      record(event: Parameters<NonNullable<typeof options.runtime.observer>['record']>[0]) {
+        if (event.type === 'provider_called') {
+          turnSummaryMetrics.providerCalls += 1;
+        }
+        options.runtime.observer?.record(event);
+      }
+    };
     let preparedMemory: PrepareInteractiveSessionMemoryResult | undefined;
 
     try {
@@ -344,7 +404,7 @@ export function createTuiController(options: TuiControllerOptions): TuiControlle
         cwd: options.runtime.cwd,
         maxToolRounds: options.runtime.maxToolRounds,
         resolvedPackage: options.runtime.resolvedPackage,
-        observer: options.runtime.observer,
+        observer: countingObserver,
         history: historyContext.history,
         historySummary: historyContext.historySummary,
         memoryText: preparedMemory?.memoryText ?? '',
@@ -360,6 +420,10 @@ export function createTuiController(options: TuiControllerOptions): TuiControlle
 
       if (resultWithSummary.turnStream) {
         for await (const event of resultWithSummary.turnStream) {
+          if (event.type === 'tool_call_completed') {
+            turnSummaryMetrics.toolCalls += 1;
+          }
+
           const mapped = mapTurnEventToBridgeEvent(event, {
             turnOrdinal,
             assistantMessageOrdinal
@@ -377,6 +441,7 @@ export function createTuiController(options: TuiControllerOptions): TuiControlle
       }
 
       const settled = finalResultPromise ? await finalResultPromise : resultWithSummary;
+      turnSummaryMetrics.durationMs = Date.now() - turnStartedAt;
 
       if (settled.stopReason === 'completed' || settled.stopReason === 'max_tool_rounds_reached') {
         const newTurnMessages = settled.history.slice(historyContext.history.length);
@@ -401,6 +466,17 @@ export function createTuiController(options: TuiControllerOptions): TuiControlle
           emit({ type: 'warning', text: error instanceof Error ? error.message : String(error) });
         }
       }
+
+      emit({
+        type: 'footer_summary',
+        text: formatFooterSummary({
+          stopReason: settled.stopReason,
+          isVerified: settled.verification.isVerified,
+          providerCalls: turnSummaryMetrics.providerCalls,
+          toolCalls: turnSummaryMetrics.toolCalls,
+          durationMs: turnSummaryMetrics.durationMs
+        })
+      });
 
       await saveCheckpoint(settled.stopReason === 'completed' ? 'completed' : 'running');
     } catch (error) {

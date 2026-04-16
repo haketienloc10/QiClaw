@@ -3,6 +3,8 @@ use crate::composer::ComposerMode;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FooterState {
     pub status_text: String,
+    pub turn_summary_text: Option<String>,
+    pub model_text: String,
     pub mode: ComposerMode,
     pub draft_present: bool,
     pub popup_open: bool,
@@ -15,6 +17,8 @@ impl Default for FooterState {
     fn default() -> Self {
         Self {
             status_text: "Ready".into(),
+            turn_summary_text: None,
+            model_text: String::new(),
             mode: ComposerMode::Normal,
             draft_present: false,
             popup_open: false,

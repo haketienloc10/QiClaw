@@ -124,6 +124,7 @@ impl TranscriptState {
             HostEvent::Hello { .. }
             | HostEvent::SessionLoaded { .. }
             | HostEvent::Footer { .. }
+            | HostEvent::FooterSummary { .. }
             | HostEvent::SlashCatalog { .. } => {}
         }
 
@@ -257,7 +258,6 @@ impl TranscriptState {
 mod tests {
     use super::*;
     use crate::protocol::{HostEvent, ToolStatus, TranscriptCell, TranscriptCellKind};
-    use ratatui::text::Line;
 
     #[test]
     fn replaces_seed_and_appends_cells() {
@@ -793,8 +793,8 @@ mod tests {
             }],
         });
 
-        assert_eq!(transcript.content_height(80), 5);
-        assert_eq!(transcript.render_scroll(3, 80), 2);
+        assert_eq!(transcript.content_height(80), 4);
+        assert_eq!(transcript.render_scroll(3, 80), 1);
     }
 
     #[test]
@@ -896,7 +896,7 @@ mod tests {
             .iter()
             .skip(scroll as usize)
             .take(viewport_height as usize)
-            .map(Line::to_string)
+            .map(|line| line.to_string())
             .collect::<Vec<_>>();
 
         assert!(content_height > viewport_height);
@@ -938,12 +938,13 @@ mod tests {
         transcript
     }
 
+
     #[test]
     fn auto_follow_scrolls_to_bottom_for_tall_transcript() {
         let transcript = tall_transcript();
 
         assert!(transcript.is_auto_following());
-        assert_eq!(transcript.render_scroll(4, 80), 5);
+        assert_eq!(transcript.render_scroll(4, 80), 4);
     }
 
     #[test]
@@ -953,7 +954,7 @@ mod tests {
         transcript.scroll_up(2);
 
         assert!(!transcript.is_auto_following());
-        assert_eq!(transcript.render_scroll(4, 80), 3);
+        assert_eq!(transcript.render_scroll(4, 80), 2);
     }
 
     #[test]
@@ -962,21 +963,21 @@ mod tests {
 
         transcript.scroll_up(2);
         assert!(!transcript.is_auto_following());
-        assert_eq!(transcript.render_scroll(4, 80), 3);
+        assert_eq!(transcript.render_scroll(4, 80), 2);
 
         transcript.apply(&HostEvent::Status {
             text: "still running".into(),
         });
 
         assert!(!transcript.is_auto_following());
-        assert_eq!(transcript.render_scroll(4, 80), 5);
+        assert_eq!(transcript.render_scroll(4, 80), 4);
 
         transcript.scroll_down(1);
         assert!(!transcript.is_auto_following());
-        assert_eq!(transcript.render_scroll(4, 80), 6);
+        assert_eq!(transcript.render_scroll(4, 80), 5);
 
         transcript.scroll_down(1);
         assert!(transcript.is_auto_following());
-        assert_eq!(transcript.render_scroll(4, 80), 7);
+        assert_eq!(transcript.render_scroll(4, 80), 6);
     }
 }

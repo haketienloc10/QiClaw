@@ -104,6 +104,9 @@ pub enum HostEvent {
     Footer {
         text: String,
     },
+    FooterSummary {
+        text: String,
+    },
     Warning {
         text: String,
     },
@@ -188,6 +191,21 @@ mod tests {
 
         assert!(line.ends_with('\n'));
         assert!(line.contains("\"type\":\"run_shell_command\""));
+    }
+
+    #[test]
+    fn parses_footer_summary_host_event_lines() {
+        let event = parse_host_event_line(
+            r#"{"type":"footer_summary","text":"completed in 2 tool rounds"}"#,
+        )
+        .expect("valid footer summary host event");
+
+        assert_eq!(
+            event,
+            HostEvent::FooterSummary {
+                text: "completed in 2 tool rounds".into(),
+            }
+        );
     }
 
     #[test]

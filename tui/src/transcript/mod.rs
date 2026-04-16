@@ -172,7 +172,11 @@ impl TranscriptState {
     fn active_assistant_entry(&mut self, message_id: &str, turn_id: &str) -> &mut TranscriptEntry {
         let existing_index = self.entries.iter().position(|entry| {
             entry.kind == TranscriptCellKind::Assistant
-                && (entry.turn_id.as_deref() == Some(turn_id) || entry.id == message_id)
+                && (
+                    entry.turn_id.as_deref() == Some(turn_id)
+                        || entry.id == message_id
+                        || (entry.streaming && entry.turn_id.is_none())
+                )
         });
         if let Some(index) = existing_index {
             let entry = self.entries.get_mut(index).expect("assistant entry by index");
@@ -401,6 +405,49 @@ mod tests {
         assert_eq!(assistant_entries.len(), 1);
         assert_eq!(assistant_entries[0].text, "Xin chào");
         assert_eq!(assistant_entries[0].turn_id.as_deref(), Some("turn-2"));
+    }
+
+    #[test]
+    fn restored_assistant_seed_without_turn_id_is_reused_by_following_completion() {
+        let mut transcript = TranscriptState::default();
+        transcript.apply(&HostEvent::TranscriptSeed {
+            cells: vec![TranscriptCell {
+                id: "user-live-1".into(),
+                kind: TranscriptCellKind::User,
+                text: "xin chào".into(),
+                title: None,
+                tool_name: None,
+                is_error: None,
+                streaming: None,
+                turn_id: None,
+                tool_call_id: None,
+                duration_ms: None,
+            }, TranscriptCell {
+                id: "assistant-live-2".into(),
+                kind: TranscriptCellKind::Assistant,
+                text: "Ch".into(),
+                title: None,
+                tool_name: None,
+                is_error: None,
+                streaming: Some(true),
+                turn_id: None,
+                tool_call_id: None,
+                duration_ms: None,
+            }],
+        });
+        transcript.apply(&HostEvent::AssistantCompleted {
+            turn_id: "turn-1".into(),
+            message_id: "assistant-1".into(),
+            text: "Chào Đại ca.".into(),
+        });
+
+        let assistant_entries: Vec<_> = transcript
+            .entries
+            .iter()
+            .filter(|entry| entry.kind == TranscriptCellKind::Assistant)
+            .collect();
+        assert_eq!(assistant_entries.len(), 1);
+        assert_eq!(assistant_entries[0].text, "Chào Đại ca.");
     }
 
     #[test]

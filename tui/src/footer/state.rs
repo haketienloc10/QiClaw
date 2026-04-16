@@ -8,6 +8,7 @@ pub struct FooterState {
     pub popup_open: bool,
     pub busy: bool,
     pub transcript_scrolled: bool,
+    pub shift_enter_supported: bool,
 }
 
 impl Default for FooterState {
@@ -19,11 +20,20 @@ impl Default for FooterState {
             popup_open: false,
             busy: false,
             transcript_scrolled: false,
+            shift_enter_supported: false,
         }
     }
 }
 
 impl FooterState {
+    fn newline_hint(&self) -> &'static str {
+        if self.shift_enter_supported {
+            "Shift+Enter newline"
+        } else {
+            "Ctrl+J newline"
+        }
+    }
+
     pub fn primary_hints(&self) -> Vec<&'static str> {
         if self.transcript_scrolled {
             return vec!["PgDn follow", "↑↓ scroll"];
@@ -35,12 +45,12 @@ impl FooterState {
 
         match self.mode {
             ComposerMode::HistorySearch => vec!["Type query", "Enter restore", "Esc cancel"],
-            ComposerMode::Shell => vec!["Enter run", "Shift+Enter newline", "Esc clear"],
+            ComposerMode::Shell => vec!["Enter run", self.newline_hint(), "Esc clear"],
             ComposerMode::Slash | ComposerMode::FileCompletion if self.popup_open => {
                 vec!["Tab accept", "↑↓ choose", "Esc close"]
             }
             _ if !self.draft_present => vec!["Enter send", "/ commands", "Ctrl+R history"],
-            _ => vec!["Enter send", "Shift+Enter newline", "Esc clear"],
+            _ => vec!["Enter send", self.newline_hint(), "Esc clear"],
         }
     }
 }
@@ -63,6 +73,7 @@ mod tests {
         let shell = FooterState {
             mode: ComposerMode::Shell,
             draft_present: true,
+            shift_enter_supported: true,
             ..FooterState::default()
         };
         assert_eq!(shell.primary_hints()[0], "Enter run");
@@ -72,6 +83,7 @@ mod tests {
     fn draft_hints_prioritize_send_newline_and_history() {
         let draft = FooterState {
             draft_present: true,
+            shift_enter_supported: true,
             ..FooterState::default()
         };
 
@@ -92,6 +104,19 @@ mod tests {
         assert_eq!(
             state.primary_hints(),
             vec!["Type query", "Enter restore", "Esc cancel"]
+        );
+    }
+
+    #[test]
+    fn fallback_newline_hint_uses_ctrl_j_without_enhanced_keys() {
+        let draft = FooterState {
+            draft_present: true,
+            ..FooterState::default()
+        };
+
+        assert_eq!(
+            draft.primary_hints(),
+            vec!["Enter send", "Ctrl+J newline", "Esc clear"]
         );
     }
 }

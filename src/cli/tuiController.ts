@@ -221,7 +221,10 @@ export function createTuiController(options: TuiControllerOptions): TuiControlle
       if (!state.assistantCellId) {
         transcriptCellOrdinal += 1;
         state.assistantCellId = `assistant-live-${transcriptCellOrdinal}`;
-        appendTranscriptCell({ id: state.assistantCellId, kind: 'assistant', text: event.text });
+        transcriptCells = [
+          ...transcriptCells,
+          { id: state.assistantCellId, kind: 'assistant', text: event.text }
+        ];
         return;
       }
 

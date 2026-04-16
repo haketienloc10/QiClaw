@@ -31,7 +31,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(bridge: NdjsonBridge, cwd: PathBuf) -> Self {
+    pub fn new(bridge: NdjsonBridge, cwd: PathBuf, enhanced_keys_supported: bool) -> Self {
         let (mut reader, writer) = bridge.split();
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || loop {
@@ -58,7 +58,10 @@ impl App {
             rx,
             transcript: TranscriptState::default(),
             composer: ComposerState::default(),
-            footer: FooterState::default(),
+            footer: FooterState {
+                shift_enter_supported: enhanced_keys_supported,
+                ..FooterState::default()
+            },
             slash_catalog: Vec::new(),
             cwd,
             spinner: Spinner::default(),
@@ -305,3 +308,4 @@ impl App {
         self.footer.status_text = status_text;
     }
 }
+

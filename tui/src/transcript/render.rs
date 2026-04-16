@@ -44,18 +44,19 @@ fn should_skip_entry(entry: &TranscriptEntry) -> bool {
 }
 
 fn render_inline_standard_entry(entry: &TranscriptEntry, width: u16) -> Option<Line<'static>> {
-    if entry.streaming || entry.text.contains('\n') || entry.text.trim().is_empty() {
+    if entry.text.contains('\n') || entry.text.trim().is_empty() {
         return None;
     }
 
-    let inline_text = format!("{} {}", header_text(entry), entry.text);
+    let inline_header = inline_header_text(entry);
+    let inline_text = format!("{} {}", inline_header, entry.text);
     if inline_text.chars().count() > width.max(1) as usize {
         return None;
     }
 
     match entry.kind {
         TranscriptCellKind::User | TranscriptCellKind::Assistant => Some(Line::from(vec![
-            Span::styled(header_text(entry), style_for_entry(entry)),
+            Span::styled(inline_header, style_for_entry(entry)),
             Span::raw(" "),
             Span::raw(entry.text.clone()),
         ])),
@@ -145,6 +146,14 @@ fn header_text(entry: &TranscriptEntry) -> String {
         TranscriptCellKind::Diff => format!("{marker} Diff"),
         TranscriptCellKind::Shell => format!("{marker} Shell"),
         TranscriptCellKind::Tool => unreachable!("tool headers use tool display model"),
+    }
+}
+
+fn inline_header_text(entry: &TranscriptEntry) -> String {
+    let marker = marker_for_entry(entry);
+    match entry.kind {
+        TranscriptCellKind::User | TranscriptCellKind::Assistant => marker.to_string(),
+        _ => header_text(entry),
     }
 }
 
@@ -652,6 +661,71 @@ mod tests {
     }
 
     #[test]
+    fn clears_inline_fragment_when_completion_reflows_to_multiline() {
+        let backend = TestBackend::new(18, 5);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    frame.area(),
+                    &[TranscriptEntry {
+                        id: "assistant-1".into(),
+                        kind: TranscriptCellKind::Assistant,
+                        title: Some("Assistant".into()),
+                        text: "Ch".into(),
+                        tool_name: None,
+                        is_error: false,
+                        streaming: true,
+                        turn_id: Some("turn-1".into()),
+                        tool_call_id: None,
+                        duration_ms: None,
+                    }],
+                    0,
+                    SPINNER,
+                )
+            })
+            .expect("first draw");
+
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    frame.area(),
+                    &[TranscriptEntry {
+                        id: "assistant-1".into(),
+                        kind: TranscriptCellKind::Assistant,
+                        title: Some("Assistant".into()),
+                        text: "Chào Đại ca, em đây.".into(),
+                        tool_name: None,
+                        is_error: false,
+                        streaming: false,
+                        turn_id: Some("turn-1".into()),
+                        tool_call_id: None,
+                        duration_ms: None,
+                    }],
+                    0,
+                    SPINNER,
+                )
+            })
+            .expect("second draw");
+
+        let buffer = terminal.backend().buffer();
+        let rows = (0..5)
+            .map(|y| {
+                (0..18)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(rows[0].trim_end(), "•");
+        assert!(!rows[0].contains("Ch"));
+        assert!(rows.iter().any(|row| row.contains("Chào Đại ca,")));
+    }
+
+    #[test]
     fn normalizes_nested_json_payload_into_human_preview() {
         let entry = TranscriptEntry {
             id: "tool-1".into(),
@@ -888,7 +962,26 @@ mod tests {
     }
 
     #[test]
-    fn renders_live_assistant_with_lightweight_working_label() {
+    fn renders_short_streaming_assistant_inline_to_avoid_orphaned_fragment() {
+        let lines = render_entry_lines(&TranscriptEntry {
+            id: "assistant-1".into(),
+            kind: TranscriptCellKind::Assistant,
+            title: Some("Assistant".into()),
+            text: "Ch".into(),
+            tool_name: None,
+            is_error: false,
+            streaming: true,
+            turn_id: Some("turn-1".into()),
+            tool_call_id: None,
+            duration_ms: None,
+        }, SPINNER, 80);
+
+        assert_eq!(lines[0].to_string(), "• Ch");
+        assert!(!lines.iter().any(|line| line.to_string().contains("Working")));
+    }
+
+    #[test]
+    fn keeps_long_streaming_assistant_in_multiline_working_layout() {
         let lines = render_entry_lines(&TranscriptEntry {
             id: "assistant-1".into(),
             kind: TranscriptCellKind::Assistant,
@@ -900,10 +993,12 @@ mod tests {
             turn_id: Some("turn-1".into()),
             tool_call_id: None,
             duration_ms: None,
-        }, SPINNER, 80);
+        }, SPINNER, 12);
 
-        assert_eq!(lines[0].to_string(), "• Working");
-        assert_eq!(lines[1].to_string(), "  Thinking through the diff");
+        let rendered = lines.iter().map(Line::to_string).collect::<Vec<_>>();
+        assert_eq!(rendered[0], "• Working");
+        assert_eq!(rendered[1], "  Thinking");
+        assert!(rendered.iter().any(|line| line == "  through"));
     }
 
     #[test]

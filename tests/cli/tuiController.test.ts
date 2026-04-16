@@ -1240,6 +1240,11 @@ describe('tuiController', () => {
     await controller.start();
     await controller.handleAction({ type: 'submit_prompt', prompt: 'xin chào' });
 
+    const assistantAppendCells = emitted
+      .filter((event): event is Extract<HostEvent, { type: 'transcript_append' }> => event.type === 'transcript_append')
+      .flatMap((event) => event.cells.filter((cell) => cell.kind === 'assistant'));
+
+    expect(assistantAppendCells).toEqual([]);
     expect(emitted.filter((event) => event.type === 'assistant_completed')).toEqual([
       { type: 'assistant_completed', turnId: 'turn-1', messageId: 'assistant-1', text: finalAnswer }
     ]);

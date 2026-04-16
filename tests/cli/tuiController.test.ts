@@ -2000,6 +2000,26 @@ describe('tuiController', () => {
               promptRawPreviewRedacted: 'summarize turn'
             }
           });
+          input.observer?.record({
+            type: 'provider_responded',
+            timestamp: '2026-04-16T10:00:02.000Z',
+            stage: 'response_composition',
+            data: {
+              turnId: 'turn-1',
+              providerRound: 1,
+              toolRound: 0,
+              durationMs: 300,
+              responseContentBlockCount: 1,
+              toolCallCount: 2,
+              hasTextOutput: true,
+              usage: {
+                inputTokens: 12_000,
+                outputTokens: 1_300,
+                totalTokens: 13_300,
+                cacheReadInputTokens: 0
+              }
+            }
+          });
 
           return {
             stopReason: 'completed',
@@ -2116,7 +2136,7 @@ describe('tuiController', () => {
       expect(footerSummaries).toHaveLength(1);
       expect(footerSummaries[0]).toEqual({
         type: 'footer_summary',
-        text: 'completed • verified • 1 provider • 2 tools • 18s'
+        text: 'completed • verified • 1 provider • 2 tools • 12k in • 1.3k out • 18s'
       });
       expect(footerSummaryIndex).toBeGreaterThan(turnCompletedIndex);
     } finally {
@@ -2184,6 +2204,46 @@ describe('tuiController', () => {
               totalContentBlockCount: 1,
               hasSystemPrompt: true,
               promptRawPreviewRedacted: 'max tools retry'
+            }
+          });
+          input.observer?.record({
+            type: 'provider_responded',
+            timestamp: '2026-04-16T11:00:00.030Z',
+            stage: 'response_composition',
+            data: {
+              turnId: 'turn-1',
+              providerRound: 1,
+              toolRound: 0,
+              durationMs: 300,
+              responseContentBlockCount: 1,
+              toolCallCount: 1,
+              hasTextOutput: false,
+              usage: {
+                inputTokens: 421,
+                outputTokens: 31,
+                totalTokens: 452,
+                cacheReadInputTokens: 0
+              }
+            }
+          });
+          input.observer?.record({
+            type: 'provider_responded',
+            timestamp: '2026-04-16T11:00:00.040Z',
+            stage: 'response_composition',
+            data: {
+              turnId: 'turn-1',
+              providerRound: 2,
+              toolRound: 1,
+              durationMs: 320,
+              responseContentBlockCount: 1,
+              toolCallCount: 0,
+              hasTextOutput: true,
+              usage: {
+                inputTokens: 421,
+                outputTokens: 30,
+                totalTokens: 451,
+                cacheReadInputTokens: 0
+              }
             }
           });
 
@@ -2284,7 +2344,364 @@ describe('tuiController', () => {
       expect(footerSummaries).toHaveLength(1);
       expect(footerSummaries[0]).toEqual({
         type: 'footer_summary',
-        text: 'max tools • 2 providers • 1 tool • 842ms'
+        text: 'max tools • 2 providers • 1 tool • 842 in • 61 out • 842ms'
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('formats compact aggregate token counts across multiple provider responses', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValueOnce(0);
+    nowSpy.mockReturnValueOnce(18_000);
+
+    const emitted: HostEvent[] = [];
+
+    try {
+      const controller = createTuiController({
+        cwd: '/tmp/qiclaw-token-summary',
+        runtime: {
+          provider: { name: 'anthropic', model: 'claude-sonnet-4-6' },
+          availableTools: [],
+          systemPrompt: 'system prompt',
+          cwd: '/tmp/qiclaw-token-summary',
+          maxToolRounds: 4,
+          observer: { record() {} }
+        },
+        checkpointStore: {
+          getLatest() {
+            return undefined;
+          },
+          save() {}
+        },
+        prepareSessionMemory: vi.fn(async () => ({
+          memoryText: '',
+          store: { stub: true },
+          recalled: [],
+          checkpointState: {
+            storeSessionId: 'session-token-summary',
+            engine: 'file-session-memory',
+            version: 1,
+            memoryPath: '/tmp/memory.jsonl',
+            metaPath: '/tmp/meta.json',
+            totalEntries: 0,
+            lastCompactedAt: null
+          }
+        })),
+        captureTurnMemory: vi.fn(async () => ({
+          saved: true,
+          checkpointState: {
+            storeSessionId: 'session-token-summary',
+            engine: 'file-session-memory',
+            version: 1,
+            memoryPath: '/tmp/memory.jsonl',
+            metaPath: '/tmp/meta.json',
+            totalEntries: 1,
+            lastCompactedAt: null
+          }
+        })),
+        createSessionId: () => 'session-token-summary',
+        executeTurn: async ({ observer }) => {
+          observer?.record({
+            type: 'provider_called',
+            timestamp: '2026-04-16T10:00:00.000Z',
+            stage: 'provider_decision',
+            data: {
+              turnId: 'turn-1',
+              providerRound: 1,
+              toolRound: 0,
+              messageCount: 2,
+              promptRawChars: 120,
+              toolNames: [],
+              messageSummaries: [],
+              totalContentBlockCount: 2,
+              hasSystemPrompt: true,
+              promptRawPreviewRedacted: 'prompt'
+            }
+          });
+          observer?.record({
+            type: 'provider_responded',
+            timestamp: '2026-04-16T10:00:01.000Z',
+            stage: 'response_composition',
+            data: {
+              turnId: 'turn-1',
+              providerRound: 1,
+              toolRound: 0,
+              durationMs: 320,
+              responseContentBlockCount: 1,
+              toolCallCount: 1,
+              hasTextOutput: false,
+              usage: {
+                inputTokens: 12_000,
+                outputTokens: 900,
+                totalTokens: 12_900,
+                cacheReadInputTokens: 0
+              }
+            }
+          });
+          observer?.record({
+            type: 'provider_called',
+            timestamp: '2026-04-16T10:00:02.000Z',
+            stage: 'provider_decision',
+            data: {
+              turnId: 'turn-1',
+              providerRound: 2,
+              toolRound: 1,
+              messageCount: 4,
+              promptRawChars: 260,
+              toolNames: ['read_file'],
+              messageSummaries: [],
+              totalContentBlockCount: 4,
+              hasSystemPrompt: true,
+              promptRawPreviewRedacted: 'prompt'
+            }
+          });
+          observer?.record({
+            type: 'provider_responded',
+            timestamp: '2026-04-16T10:00:03.000Z',
+            stage: 'response_composition',
+            data: {
+              turnId: 'turn-1',
+              providerRound: 2,
+              toolRound: 1,
+              durationMs: 280,
+              responseContentBlockCount: 1,
+              toolCallCount: 0,
+              hasTextOutput: true,
+              usage: {
+                inputTokens: 345,
+                outputTokens: 400,
+                totalTokens: 745,
+                cacheReadInputTokens: 0
+              }
+            }
+          });
+
+          return {
+            stopReason: 'completed',
+            finalAnswer: 'done',
+            history: [
+              { role: 'user', content: 'question' },
+              { role: 'assistant', content: 'done' }
+            ],
+            historySummary: undefined,
+            memoryCandidates: [],
+            structuredOutputParsed: false,
+            toolRoundsUsed: 1,
+            doneCriteria: {
+              goal: 'question',
+              checklist: ['question'],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            },
+            verification: {
+              isVerified: true,
+              finalAnswerIsNonEmpty: true,
+              finalAnswerIsSubstantive: true,
+              toolEvidenceSatisfied: true,
+              noUnresolvedToolErrors: true,
+              toolMessagesCount: 0,
+              checks: []
+            },
+            turnStream: (async function* (): AsyncIterable<TurnEvent> {
+              yield { type: 'tool_call_started', id: 'tool-1', name: 'read_file', input: { filePath: 'a' } };
+              yield { type: 'tool_call_completed', id: 'tool-1', name: 'read_file', resultPreview: 'ok', isError: false, durationMs: 10 };
+              yield { type: 'assistant_message_completed', text: 'done' };
+            })(),
+            finalResult: Promise.resolve({
+              stopReason: 'completed',
+              finalAnswer: 'done',
+              history: [
+                { role: 'user', content: 'question' },
+                { role: 'assistant', content: 'done' }
+              ],
+              historySummary: undefined,
+              memoryCandidates: [],
+              structuredOutputParsed: false,
+              toolRoundsUsed: 1,
+              doneCriteria: {
+                goal: 'question',
+                checklist: ['question'],
+                requiresNonEmptyFinalAnswer: true,
+                requiresToolEvidence: false,
+                requiresSubstantiveFinalAnswer: false,
+                forbidSuccessAfterToolErrors: false
+              },
+              verification: {
+                isVerified: true,
+                finalAnswerIsNonEmpty: true,
+                finalAnswerIsSubstantive: true,
+                toolEvidenceSatisfied: true,
+                noUnresolvedToolErrors: true,
+                toolMessagesCount: 0,
+                checks: []
+              }
+            })
+          };
+        },
+        emit(message) {
+          emitted.push(parseBridgeMessage(message));
+        }
+      });
+
+      await controller.start();
+      await controller.handleAction({ type: 'submit_prompt', prompt: 'question' });
+
+      const footerSummaries = emitted.filter((event): event is Extract<HostEvent, { type: 'footer_summary' }> => event.type === 'footer_summary');
+      expect(footerSummaries).toHaveLength(1);
+      expect(footerSummaries[0]).toEqual({
+        type: 'footer_summary',
+        text: 'completed • verified • 2 providers • 1 tool • 12k in • 1.3k out • 18s'
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('formats raw token counts and omits verified when verification is false', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValueOnce(0);
+    nowSpy.mockReturnValueOnce(842);
+
+    const emitted: HostEvent[] = [];
+
+    try {
+      const controller = createTuiController({
+        cwd: '/tmp/qiclaw-token-summary-raw',
+        runtime: {
+          provider: { name: 'openai', model: 'gpt-test' },
+          availableTools: [],
+          systemPrompt: 'system prompt',
+          cwd: '/tmp/qiclaw-token-summary-raw',
+          maxToolRounds: 3,
+          observer: { record() {} }
+        },
+        checkpointStore: {
+          getLatest() {
+            return undefined;
+          },
+          save() {}
+        },
+        prepareSessionMemory: vi.fn(async () => undefined),
+        captureTurnMemory: vi.fn(async () => ({ saved: false, checkpointState: undefined })),
+        createSessionId: () => 'session-token-summary-raw',
+        executeTurn: vi.fn(async (input) => {
+          input.observer?.record({
+            type: 'provider_called',
+            timestamp: '2026-04-16T12:00:00.010Z',
+            stage: 'provider_decision',
+            data: {
+              turnId: 'turn-1',
+              providerRound: 1,
+              toolRound: 0,
+              messageCount: 1,
+              promptRawChars: 12,
+              toolNames: [],
+              messageSummaries: [],
+              totalContentBlockCount: 1,
+              hasSystemPrompt: true,
+              promptRawPreviewRedacted: 'stop now'
+            }
+          });
+          input.observer?.record({
+            type: 'provider_responded',
+            timestamp: '2026-04-16T12:00:00.020Z',
+            stage: 'response_composition',
+            data: {
+              turnId: 'turn-1',
+              providerRound: 1,
+              toolRound: 0,
+              durationMs: 250,
+              responseContentBlockCount: 1,
+              toolCallCount: 0,
+              hasTextOutput: true,
+              usage: {
+                inputTokens: 842,
+                outputTokens: 61,
+                totalTokens: 903,
+                cacheReadInputTokens: 0
+              }
+            }
+          });
+
+          return {
+            stopReason: 'stopped',
+            finalAnswer: 'stopped',
+            history: [
+              { role: 'user', content: 'stop now' },
+              { role: 'assistant', content: 'stopped' }
+            ],
+            historySummary: undefined,
+            memoryCandidates: [],
+            structuredOutputParsed: false,
+            toolRoundsUsed: 0,
+            doneCriteria: {
+              goal: 'stop now',
+              checklist: ['stop now'],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            },
+            verification: {
+              isVerified: false,
+              finalAnswerIsNonEmpty: true,
+              finalAnswerIsSubstantive: true,
+              toolEvidenceSatisfied: true,
+              noUnresolvedToolErrors: true,
+              toolMessagesCount: 0,
+              checks: []
+            },
+            turnStream: (async function* (): AsyncIterable<TurnEvent> {
+              yield { type: 'assistant_message_completed', text: 'stopped' };
+            })(),
+            finalResult: Promise.resolve({
+              stopReason: 'stopped',
+              finalAnswer: 'stopped',
+              history: [
+                { role: 'user', content: 'stop now' },
+                { role: 'assistant', content: 'stopped' }
+              ],
+              historySummary: undefined,
+              memoryCandidates: [],
+              structuredOutputParsed: false,
+              toolRoundsUsed: 0,
+              doneCriteria: {
+                goal: 'stop now',
+                checklist: ['stop now'],
+                requiresNonEmptyFinalAnswer: true,
+                requiresToolEvidence: false,
+                requiresSubstantiveFinalAnswer: false,
+                forbidSuccessAfterToolErrors: false
+              },
+              verification: {
+                isVerified: false,
+                finalAnswerIsNonEmpty: true,
+                finalAnswerIsSubstantive: true,
+                toolEvidenceSatisfied: true,
+                noUnresolvedToolErrors: true,
+                toolMessagesCount: 0,
+                checks: []
+              }
+            })
+          };
+        }),
+        emit(message) {
+          emitted.push(parseBridgeMessage(message));
+        }
+      });
+
+      await controller.start();
+      await controller.handleAction({ type: 'submit_prompt', prompt: 'stop now' });
+
+      const footerSummaries = emitted.filter((event): event is Extract<HostEvent, { type: 'footer_summary' }> => event.type === 'footer_summary');
+      expect(footerSummaries).toHaveLength(1);
+      expect(footerSummaries[0]).toEqual({
+        type: 'footer_summary',
+        text: 'stopped • 1 provider • 0 tools • 842 in • 61 out • 842ms'
       });
     } finally {
       nowSpy.mockRestore();

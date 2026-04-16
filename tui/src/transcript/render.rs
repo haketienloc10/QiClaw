@@ -73,15 +73,31 @@ fn render_standard_entry_lines(entry: &TranscriptEntry, width: u16) -> Vec<Line<
         return lines;
     }
 
-    let header = header_text(entry);
-    let mut lines = vec![Line::from(Span::styled(header, style_for_entry(entry)))];
+    let style = style_for_entry(entry);
+    let mut lines = Vec::new();
 
     if entry.text.is_empty() {
+        lines.push(Line::from(Span::styled(header_text(entry), style)));
         lines.push(Line::default());
     } else {
         let indent_body = should_indent_body(entry);
-        let wrapped_body_lines = wrap_standard_body_lines(&entry.text, indent_body, width);
-        lines.extend(wrapped_body_lines.into_iter().map(Line::from));
+        let mut wrapped_body_lines = wrap_standard_body_lines(&entry.text, indent_body, width);
+
+        if matches!(entry.kind, TranscriptCellKind::User | TranscriptCellKind::Assistant)
+            && !entry.streaming
+            && wrapped_body_lines.first().is_some_and(|line| line.starts_with("  "))
+        {
+            let first_line = wrapped_body_lines.remove(0);
+            let body_suffix = first_line.strip_prefix(' ').unwrap_or(&first_line).to_string();
+            lines.push(Line::from(vec![
+                Span::styled(marker_for_entry(entry).to_string(), style),
+                Span::raw(body_suffix),
+            ]));
+            lines.extend(wrapped_body_lines.into_iter().map(Line::from));
+        } else {
+            lines.push(Line::from(Span::styled(header_text(entry), style)));
+            lines.extend(wrapped_body_lines.into_iter().map(Line::from));
+        }
     }
 
     if separates_from_next_entry(entry) {
@@ -661,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn clears_inline_fragment_when_completion_reflows_to_multiline() {
+    fn completion_reflow_keeps_marker_attached_to_first_content_line() {
         let backend = TestBackend::new(18, 5);
         let mut terminal = Terminal::new(backend).expect("terminal");
 
@@ -720,9 +736,12 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        assert_eq!(rows[0].trim_end(), "•");
-        assert!(!rows[0].contains("Ch"));
+        assert!(rows[0].starts_with("• "));
+        assert_ne!(rows[0].trim_end(), "•");
+        assert!(!rows.iter().any(|row| row.contains("Working")));
+        assert!(rows[1].starts_with("  "));
         assert!(rows.iter().any(|row| row.contains("Chào Đại ca,")));
+        assert!(rows.iter().any(|row| row.contains("đây.")));
     }
 
     #[test]
@@ -1020,6 +1039,28 @@ mod tests {
     }
 
     #[test]
+    fn wrapped_user_entry_keeps_marker_with_first_content_line() {
+        let lines = render_entry_lines(&TranscriptEntry {
+            id: "user-1".into(),
+            kind: TranscriptCellKind::User,
+            title: Some("User".into()),
+            text: "review code dựa vào git diff với nhiều chi tiết hơn để buộc renderer phải wrap".into(),
+            tool_name: None,
+            is_error: false,
+            streaming: false,
+            turn_id: None,
+            tool_call_id: None,
+            duration_ms: None,
+        }, SPINNER, 26);
+
+        let rendered = lines.iter().map(Line::to_string).collect::<Vec<_>>();
+        assert!(rendered.len() > 3);
+        assert!(rendered[0].starts_with("› "));
+        assert_ne!(rendered[0], "›");
+        assert!(rendered.iter().skip(1).all(|line| line.is_empty() || line.starts_with("  ")));
+    }
+
+    #[test]
     fn renders_single_line_assistant_entry_inline() {
         let lines = render_entry_lines(&TranscriptEntry {
             id: "assistant-1".into(),
@@ -1038,7 +1079,7 @@ mod tests {
     }
 
     #[test]
-    fn long_single_line_assistant_entry_falls_back_to_multiline_layout() {
+    fn long_single_line_assistant_entry_keeps_marker_with_first_wrapped_line() {
         let lines = render_entry_lines(&TranscriptEntry {
             id: "assistant-1".into(),
             kind: TranscriptCellKind::Assistant,
@@ -1053,13 +1094,14 @@ mod tests {
         }, SPINNER, 24);
 
         let rendered = lines.iter().map(Line::to_string).collect::<Vec<_>>();
-        assert_eq!(rendered[0], "•");
-        assert_eq!(rendered[1], "  Đây là một kết luận");
         assert!(rendered.len() > 3);
+        assert!(rendered[0].starts_with("• "));
+        assert_ne!(rendered[0], "•");
+        assert!(rendered.iter().skip(1).all(|line| line.is_empty() || line.starts_with("  ")));
     }
 
     #[test]
-    fn wraps_multiline_assistant_body_to_viewport_width() {
+    fn wraps_multiline_assistant_body_without_orphaning_marker() {
         let lines = render_entry_lines(&TranscriptEntry {
             id: "assistant-1".into(),
             kind: TranscriptCellKind::Assistant,
@@ -1075,8 +1117,8 @@ mod tests {
 
         let rendered = lines.iter().map(Line::to_string).collect::<Vec<_>>();
         assert!(rendered.len() > 3);
-        assert_eq!(rendered[0], "•");
-        assert!(rendered[1].starts_with("  Chuẩn, Đại ca."));
+        assert!(rendered[0].starts_with("• "));
+        assert_ne!(rendered[0], "•");
         assert!(rendered.iter().skip(1).all(|line| line.is_empty() || line.starts_with("  ")));
     }
 
@@ -1158,7 +1200,7 @@ mod tests {
         }, SPINNER, 80);
 
         let rendered = lines.iter().map(Line::to_string).collect::<Vec<_>>();
-        assert_eq!(rendered, vec!["•", "  a", "", "", ""]);
+        assert_eq!(rendered, vec!["• a", "", "", ""]);
     }
 
     #[test]

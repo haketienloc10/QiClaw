@@ -17,6 +17,10 @@ export function getBuiltinAgentPackageDirectory(preset: string, builtinPackagesD
   return join(builtinPackagesDirectory, validatePresetName(preset));
 }
 
+export function getSharedAgentPromptFilePath(fileName: string, agentRootDirectory: string = agentDirectoryPath): string {
+  return join(agentRootDirectory, 'shared', fileName);
+}
+
 function validatePresetName(preset: string): string {
   if (!presetNamePattern.test(preset)) {
     throw new Error(`Invalid agent preset name: "${preset}".`);

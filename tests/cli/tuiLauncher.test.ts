@@ -13,10 +13,10 @@ describe('tuiLauncher bridge', () => {
       if (actionHandler.mock.calls.length === 2) {
         resolveHandledActions?.();
       }
+      return true;
     });
     const fd3Writes: string[] = [];
     const fd4Listeners: Array<(chunk: string) => void> = [];
-    let exitHandler: ((code: number | null) => void) | undefined;
 
     const bridge = await createTuiBridge({
       cwd: '/tmp/qiclaw-launcher',
@@ -43,10 +43,7 @@ describe('tuiLauncher bridge', () => {
         kill() {
           return true;
         },
-        once(event, listener) {
-          if (event === 'exit') {
-            exitHandler = listener as (code: number | null) => void;
-          }
+        once() {
           return this;
         }
       } as never),
@@ -54,20 +51,18 @@ describe('tuiLauncher bridge', () => {
       onAction: actionHandler
     });
 
-    const completion = bridge.completion;
-
     fd4Listeners[0](serializeBridgeMessage({ type: 'request_status' }).slice(0, 10));
     fd4Listeners[0](serializeBridgeMessage({ type: 'request_status' }).slice(10));
     fd4Listeners[0](serializeBridgeMessage({ type: 'run_shell_command', command: 'git', args: ['status'] }));
     await handledActions;
     bridge.send({ type: 'status', text: 'ready' });
-    exitHandler?.(0);
-
-    await completion;
 
     expect(actionHandler).toHaveBeenNthCalledWith(1, { type: 'request_status' });
     expect(actionHandler).toHaveBeenNthCalledWith(2, { type: 'run_shell_command', command: 'git', args: ['status'] });
     expect(fd3Writes).toEqual([serializeBridgeMessage({ type: 'status', text: 'ready' })]);
+
+    bridge.dispose();
+    await expect(bridge.completion).resolves.toBe(0);
   });
 
   it('rejects completion on malformed ndjson instead of throwing from fd4 handler', async () => {
@@ -222,10 +217,10 @@ describe('tuiLauncher bridge', () => {
     expect(kill).toHaveBeenCalledOnce();
   });
 
-  it('forwards prompt, slash, and shell actions from one interactive fd4 burst before exit', async () => {
+  it('forwards prompt, slash, shell, and quit actions before resolving after an expected exit', async () => {
     const handled: Array<{ type: string }> = [];
     const fd4Listeners: Array<(chunk: string) => void> = [];
-    let exitHandler: ((code: number | null) => void) | undefined;
+    let exitHandler: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
 
     const bridge = await createTuiBridge({
       cwd: '/tmp/qiclaw-launcher-interactive',
@@ -249,7 +244,7 @@ describe('tuiLauncher bridge', () => {
         },
         once(event, listener) {
           if (event === 'exit') {
-            exitHandler = listener as (code: number | null) => void;
+            exitHandler = listener as (code: number | null, signal: NodeJS.Signals | null) => void;
           }
           return this;
         }
@@ -257,23 +252,131 @@ describe('tuiLauncher bridge', () => {
       binaryPath: '/tmp/qiclaw-tui',
       onAction: vi.fn(async (action: { type: string }) => {
         handled.push(action);
+        return action.type !== 'quit';
       })
     });
 
     fd4Listeners[0]([
       serializeBridgeMessage({ type: 'submit_prompt', prompt: 'hello from tui' }).trim(),
       serializeBridgeMessage({ type: 'run_slash_command', command: '/status' }).trim(),
-      serializeBridgeMessage({ type: 'run_shell_command', command: 'pwd', args: [] }).trim()
+      serializeBridgeMessage({ type: 'run_shell_command', command: 'pwd', args: [] }).trim(),
+      serializeBridgeMessage({ type: 'quit' }).trim()
     ].join('\n') + '\n');
 
     await Promise.resolve();
     await Promise.resolve();
-    exitHandler?.(0);
+    exitHandler?.(0, null);
     await expect(bridge.completion).resolves.toBe(0);
 
-    expect(handled).toHaveLength(3);
+    expect(handled).toHaveLength(4);
     expect(handled[0]).toMatchObject({ type: 'submit_prompt', prompt: 'hello from tui' });
     expect(handled[1]).toMatchObject({ type: 'run_slash_command', command: '/status' });
     expect(handled[2]).toMatchObject({ type: 'run_shell_command', command: 'pwd', args: [] });
+    expect(handled[3]).toMatchObject({ type: 'quit' });
+  });
+
+  it('rejects completion when the TUI child exits unexpectedly even with code 0', async () => {
+    let exitHandler: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+
+    const bridge = await createTuiBridge({
+      cwd: '/tmp/qiclaw-launcher-child-exit-zero',
+      spawnProcess: () => ({
+        stdio: [
+          null,
+          null,
+          null,
+          { write() { return true; } },
+          {
+            setEncoding() {},
+            on() {}
+          }
+        ],
+        kill() {
+          return true;
+        },
+        once(event, listener) {
+          if (event === 'exit') {
+            exitHandler = listener as (code: number | null, signal: NodeJS.Signals | null) => void;
+          }
+          return this;
+        }
+      } as never),
+      binaryPath: '/tmp/qiclaw-tui',
+      onAction: vi.fn(async () => true)
+    });
+
+    exitHandler?.(0, null);
+
+    await expect(bridge.completion).rejects.toThrow(/exited unexpectedly/i);
+  });
+
+  it('rejects completion when the TUI child exits non-zero instead of ending the CLI silently', async () => {
+    let exitHandler: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+
+    const bridge = await createTuiBridge({
+      cwd: '/tmp/qiclaw-launcher-child-exit',
+      spawnProcess: () => ({
+        stdio: [
+          null,
+          null,
+          null,
+          { write() { return true; } },
+          {
+            setEncoding() {},
+            on() {}
+          }
+        ],
+        kill() {
+          return true;
+        },
+        once(event, listener) {
+          if (event === 'exit') {
+            exitHandler = listener as (code: number | null, signal: NodeJS.Signals | null) => void;
+          }
+          return this;
+        }
+      } as never),
+      binaryPath: '/tmp/qiclaw-tui',
+      onAction: vi.fn(async () => true)
+    });
+
+    exitHandler?.(101, null);
+
+    await expect(bridge.completion).rejects.toThrow(/exited with code 101/i);
+  });
+
+  it('rejects completion when the TUI child exits from a signal', async () => {
+    let exitHandler: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+
+    const bridge = await createTuiBridge({
+      cwd: '/tmp/qiclaw-launcher-child-signal',
+      spawnProcess: () => ({
+        stdio: [
+          null,
+          null,
+          null,
+          { write() { return true; } },
+          {
+            setEncoding() {},
+            on() {}
+          }
+        ],
+        kill() {
+          return true;
+        },
+        once(event, listener) {
+          if (event === 'exit') {
+            exitHandler = listener as (code: number | null, signal: NodeJS.Signals | null) => void;
+          }
+          return this;
+        }
+      } as never),
+      binaryPath: '/tmp/qiclaw-tui',
+      onAction: vi.fn(async () => true)
+    });
+
+    exitHandler?.(null, 'SIGTERM');
+
+    await expect(bridge.completion).rejects.toThrow(/unexpectedly with signal SIGTERM/i);
   });
 });

@@ -1,7 +1,12 @@
-import { access } from 'node:fs/promises';
 import { constants } from 'node:fs';
+import { access, readFile } from 'node:fs/promises';
 
-import { getBuiltinAgentPackageDirectory, getProjectAgentPackageDirectory, getUserAgentPackageDirectory } from './packagePaths.js';
+import {
+  getBuiltinAgentPackageDirectory,
+  getProjectAgentPackageDirectory,
+  getSharedAgentPromptFilePath,
+  getUserAgentPackageDirectory
+} from './packagePaths.js';
 import { loadAgentPackageFromDirectory } from './packageLoader.js';
 import {
   validateAgentPackageExtendsCycle,
@@ -18,17 +23,24 @@ export async function resolveAgentPackage(
   const visited = new Set<string>();
   const stack: string[] = [];
   const packageChain = await loadResolvedChain(preset, options, visited, stack, preset);
+  const sharedPromptFiles = await loadSharedPromptFiles();
   const effectivePolicy = mergePolicyChain(packageChain);
   const effectiveCompletion = mergeCompletionChain(packageChain);
   const effectiveDiagnostics = mergeDiagnosticsChain(packageChain);
-  const effectivePromptFiles = mergePromptFileChain(packageChain);
+  const effectivePromptFiles = {
+    ...mergePromptFileChain(packageChain),
+    ...sharedPromptFiles
+  };
   const effectivePromptOrder = resolvePromptOrder(packageChain, effectivePromptFiles);
-  const resolvedFiles = packageChain.flatMap((agentPackage) => [
-    agentPackage.manifestPath,
-    ...orderedPromptFileNames(agentPackage).flatMap((fileName) => {
-      const promptFile = agentPackage.promptFiles[fileName];
-      return promptFile ? [promptFile.filePath] : [];
-    })
+  const resolvedFiles = dedupeResolvedFiles([
+    ...Object.values(sharedPromptFiles).map((promptFile) => promptFile.filePath),
+    ...packageChain.flatMap((agentPackage) => [
+      agentPackage.manifestPath,
+      ...orderedPromptFileNames(agentPackage).flatMap((fileName) => {
+        const promptFile = agentPackage.promptFiles[fileName];
+        return promptFile ? [promptFile.filePath] : [];
+      })
+    ])
   ]);
   const resolvedPackage: ResolvedAgentPackage = {
     preset,
@@ -156,15 +168,47 @@ function resolvePromptOrder(
     .reverse()
     .flatMap((agentPackage) => agentPackage.manifest?.promptFiles ?? []);
 
-  return dedupePromptFileNames(inheritedManifestOrder as AgentPromptFileName[]).filter(
-    (fileName) => effectivePromptFiles[fileName]
+  return prioritizePromptFile(
+    dedupePromptFileNames(inheritedManifestOrder as AgentPromptFileName[]).filter((fileName) => effectivePromptFiles[fileName]),
+    effectivePromptFiles
   );
+}
+
+async function loadSharedPromptFiles(): Promise<Record<AgentPromptFileName, ResolvedAgentPackage['effectivePromptFiles'][AgentPromptFileName]>> {
+  const filePath = getSharedAgentPromptFilePath('QICLAW.md');
+
+  try {
+    const content = await readFile(filePath, 'utf8');
+    return {
+      'QICLAW.md': {
+        filePath,
+        content: normalizeLineEndings(content)
+      }
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return {};
+    }
+
+    throw error;
+  }
 }
 
 function orderedPromptFileNames(agentPackage: LoadedAgentPackage): AgentPromptFileName[] {
   const manifestOrder = agentPackage.manifest?.promptFiles ?? [];
   const fileNames = Object.keys(agentPackage.promptFiles) as AgentPromptFileName[];
   return dedupePromptFileNames([...manifestOrder, ...fileNames]);
+}
+
+function prioritizePromptFile(
+  fileNames: AgentPromptFileName[],
+  effectivePromptFiles: ResolvedAgentPackage['effectivePromptFiles']
+): AgentPromptFileName[] {
+  if (!effectivePromptFiles['QICLAW.md']) {
+    return fileNames;
+  }
+
+  return dedupePromptFileNames(['QICLAW.md', ...fileNames]);
 }
 
 function dedupePromptFileNames(fileNames: AgentPromptFileName[]): AgentPromptFileName[] {
@@ -181,6 +225,26 @@ function dedupePromptFileNames(fileNames: AgentPromptFileName[]): AgentPromptFil
   }
 
   return result;
+}
+
+function dedupeResolvedFiles(filePaths: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const filePath of filePaths) {
+    if (seen.has(filePath)) {
+      continue;
+    }
+
+    seen.add(filePath);
+    result.push(filePath);
+  }
+
+  return result;
+}
+
+function normalizeLineEndings(value: string): string {
+  return value.replaceAll('\r\n', '\n');
 }
 
 async function directoryExists(directoryPath: string): Promise<boolean> {

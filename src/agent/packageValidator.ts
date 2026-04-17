@@ -64,6 +64,12 @@ export function validateLoadedAgentPackage(agentPackage: LoadedAgentPackage): st
     }
   }
 
+  if (agentPackage.promptFiles['QICLAW.md']) {
+    errors.push(
+      `Agent package "${agentPackage.preset}" must not define reserved shared prompt file "QICLAW.md" inside the package directory.`
+    );
+  }
+
   const manifestPolicy = agentPackage.manifest.policy;
   const allowedCapabilityClasses = isPlainObject(manifestPolicy)
     ? (manifestPolicy.allowedCapabilityClasses as unknown)
@@ -93,6 +99,15 @@ export function validateResolvedAgentPackage(agentPackage: ResolvedAgentPackage)
     if (!agentPackage.effectivePromptFiles[fileName]) {
       errors.push(`Agent package "${agentPackage.preset}" resolved prompt order references missing prompt file "${fileName}".`);
     }
+  }
+
+  if (
+    agentPackage.effectivePromptFiles['QICLAW.md'] &&
+    agentPackage.effectivePromptOrder[0] !== 'QICLAW.md'
+  ) {
+    errors.push(
+      `Agent package "${agentPackage.preset}" must place "QICLAW.md" first in resolved prompt order when the shared prompt file is present.`
+    );
   }
 
   if (typeof maxToolRounds === 'number' && maxToolRounds < 1) {

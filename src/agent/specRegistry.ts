@@ -1,7 +1,7 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import { getBuiltinAgentPackageDirectory } from './packagePaths.js';
+import { getBuiltinAgentPackageDirectory, getSharedAgentPromptFilePath } from './packagePaths.js';
 import {
   validateAgentPackageExtendsCycle,
   validateLoadedAgentPackage,
@@ -9,6 +9,7 @@ import {
 } from './packageValidator.js';
 import type { AgentPromptFileName, LoadedAgentPackage, ResolvedAgentPackage } from './spec.js';
 
+const priorityPromptFileName: AgentPromptFileName = 'QICLAW.md';
 const builtinPackagesDirectory = dirname(getBuiltinAgentPackageDirectory('default'));
 const builtinAgentPackageNames = readdirSync(builtinPackagesDirectory, { withFileTypes: true })
   .filter((entry) => entry.isDirectory())
@@ -53,9 +54,11 @@ function resolveBuiltinAgentPackageWithStack(name: string, stack: string[]): Res
   const parentPackage = loaded.manifest?.extends
     ? resolveBuiltinAgentPackageWithStack(loaded.manifest.extends, [...stack, name])
     : undefined;
+  const sharedPromptFiles = loadSharedPromptFile(loaded.directoryPath);
   const effectivePromptFiles = {
     ...(parentPackage?.effectivePromptFiles ?? {}),
-    ...loaded.promptFiles
+    ...loaded.promptFiles,
+    ...sharedPromptFiles
   };
   const effectivePromptOrder = resolvePromptOrder(loaded, parentPackage, effectivePromptFiles);
   const packageChain = [loaded, ...(parentPackage?.packageChain ?? [])];
@@ -80,14 +83,15 @@ function resolveBuiltinAgentPackageWithStack(name: string, stack: string[]): Res
     },
     effectivePromptOrder,
     effectivePromptFiles,
-    resolvedFiles: [
+    resolvedFiles: dedupeResolvedFiles([
       loaded.manifestPath,
       ...orderedPromptFileNames(loaded).flatMap((fileName) => {
         const promptFile = loaded.promptFiles[fileName];
         return promptFile ? [promptFile.filePath] : [];
       }),
+      ...('QICLAW.md' in sharedPromptFiles ? [sharedPromptFiles['QICLAW.md'].filePath] : []),
       ...(parentPackage?.resolvedFiles ?? [])
-    ]
+    ])
   };
   const resolvedValidationErrors = validateResolvedAgentPackage(resolvedPackage);
 
@@ -121,6 +125,23 @@ function loadBuiltinPackage(name: BuiltinAgentPackageName): LoadedAgentPackage {
   };
 }
 
+function loadSharedPromptFile(
+  builtinPackageDirectory: string
+): Record<AgentPromptFileName, ResolvedAgentPackage['effectivePromptFiles'][AgentPromptFileName]> {
+  const filePath = getSharedAgentPromptFilePath(priorityPromptFileName, dirname(dirname(builtinPackageDirectory)));
+
+  if (!existsSync(filePath)) {
+    return {};
+  }
+
+  return {
+    [priorityPromptFileName]: {
+      filePath,
+      content: normalizeLineEndings(readFileSync(filePath, 'utf8'))
+    }
+  };
+}
+
 function resolvePromptOrder(
   loaded: LoadedAgentPackage,
   parentPackage: ResolvedAgentPackage | undefined,
@@ -133,13 +154,25 @@ function resolvePromptOrder(
       ? []
       : defaultPromptOrder;
 
-  return dedupePromptFileNames([...inheritedManifestOrder, ...manifestPromptOrder]).filter(
-    (fileName) => effectivePromptFiles[fileName]
+  return prioritizePromptFile(
+    dedupePromptFileNames([...inheritedManifestOrder, ...manifestPromptOrder]).filter((fileName) => effectivePromptFiles[fileName]),
+    effectivePromptFiles
   );
 }
 
 function orderedPromptFileNames(agentPackage: LoadedAgentPackage): AgentPromptFileName[] {
   return dedupePromptFileNames([...(agentPackage.manifest?.promptFiles ?? []), ...Object.keys(agentPackage.promptFiles)]);
+}
+
+function prioritizePromptFile(
+  fileNames: AgentPromptFileName[],
+  effectivePromptFiles: ResolvedAgentPackage['effectivePromptFiles']
+): AgentPromptFileName[] {
+  if (!effectivePromptFiles[priorityPromptFileName]) {
+    return fileNames;
+  }
+
+  return dedupePromptFileNames([priorityPromptFileName, ...fileNames]);
 }
 
 function dedupePromptFileNames(fileNames: AgentPromptFileName[]): AgentPromptFileName[] {
@@ -153,6 +186,22 @@ function dedupePromptFileNames(fileNames: AgentPromptFileName[]): AgentPromptFil
 
     seen.add(fileName);
     result.push(fileName);
+  }
+
+  return result;
+}
+
+function dedupeResolvedFiles(filePaths: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const filePath of filePaths) {
+    if (seen.has(filePath)) {
+      continue;
+    }
+
+    seen.add(filePath);
+    result.push(filePath);
   }
 
   return result;

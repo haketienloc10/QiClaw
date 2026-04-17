@@ -18,7 +18,7 @@ interface SpawnedBridgeProcess {
   stdio: [NodeJS.ReadableStream | null, NodeJS.WritableStream | null, NodeJS.WritableStream | null, BridgePipeWriter, BridgePipeReader];
   kill(signal?: NodeJS.Signals | number): boolean;
   once(event: 'error', listener: (error: Error) => void): this;
-  once(event: 'exit', listener: (code: number | null) => void): this;
+  once(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): this;
 }
 
 export interface TuiBridge {
@@ -64,6 +64,7 @@ export async function createTuiBridge(options: CreateTuiBridgeOptions): Promise<
   const actionReader = child.stdio[4];
   let stdoutBuffer = '';
   let settled = false;
+  let allowExpectedExit = false;
   let resolveCompletion: ((code: number) => void) | undefined;
   let rejectCompletion: ((error: Error) => void) | undefined;
   let actionQueue = Promise.resolve();
@@ -77,13 +78,30 @@ export async function createTuiBridge(options: CreateTuiBridgeOptions): Promise<
     rejectCompletion?.(error);
   };
 
-  const completeWithExit = (code: number) => {
+  const completeWithExit = (code: number | null, signal: NodeJS.Signals | null) => {
     actionQueue.finally(() => {
       if (settled) {
         return;
       }
+
+      if (allowExpectedExit && code === 0 && signal === null) {
+        settled = true;
+        resolveCompletion?.(0);
+        return;
+      }
+
       settled = true;
-      resolveCompletion?.(code);
+      if (signal) {
+        rejectCompletion?.(new Error(`qiclaw-tui exited unexpectedly with signal ${signal}.`));
+        return;
+      }
+
+      if (code === null || code === 0) {
+        rejectCompletion?.(new Error('qiclaw-tui exited unexpectedly.'));
+        return;
+      }
+
+      rejectCompletion?.(new Error(`qiclaw-tui exited with code ${code}.`));
     });
   };
 
@@ -123,7 +141,13 @@ export async function createTuiBridge(options: CreateTuiBridgeOptions): Promise<
 
       actionQueue = actionQueue
         .then(async () => {
-          await options.onAction(message);
+          const shouldContinue = await options.onAction(message);
+          if (message.type === 'quit') {
+            allowExpectedExit = true;
+          }
+          if (shouldContinue === false && message.type !== 'quit') {
+            completeWithError(new Error(`Unexpected false return for frontend action ${message.type}.`));
+          }
         })
         .catch((error) => {
           completeWithError(error instanceof Error ? error : new Error(String(error)));
@@ -141,8 +165,8 @@ export async function createTuiBridge(options: CreateTuiBridgeOptions): Promise<
       settled = true;
       reject(error);
     });
-    child.once('exit', (code) => {
-      completeWithExit(code ?? 0);
+    child.once('exit', (code, signal) => {
+      completeWithExit(code, signal);
     });
   });
 

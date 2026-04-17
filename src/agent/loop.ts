@@ -204,29 +204,67 @@ function decodeJsonStringEscape(escape: string): string | undefined {
   }
 }
 
-type AssistantResponseParserMode = 'prefix' | 'value' | 'done';
+type AssistantResponseParserMode =
+  | 'start'
+  | 'root_key_or_end'
+  | 'root_key'
+  | 'after_root_key'
+  | 'before_value'
+  | 'skip_string'
+  | 'skip_number'
+  | 'skip_literal'
+  | 'skip_container'
+  | 'capture_value'
+  | 'after_value'
+  | 'done';
+
+interface JsonStringParseState {
+  isEscaping: boolean;
+  unicodeBuffer: string;
+  expectingUnicode: boolean;
+}
 
 interface AssistantResponseParserState {
   raw: string;
   mode: AssistantResponseParserMode;
-  prefixStepIndex: number;
-  prefixLiteralIndex: number;
-  isEscaping: boolean;
-  unicodeBuffer: string;
   parsedSuccessfully: boolean;
+  currentKey: string;
+  keyBuffer: string;
+  keyState: JsonStringParseState;
+  valueState: JsonStringParseState;
+  skipStringState: JsonStringParseState;
+  skipContainerInString: boolean;
+  skipContainerClosers: string[];
+  literalRemaining: string;
 }
 
-const ASSISTANT_RESPONSE_PREFIX_STEPS = ['{', '"assistant_response"', ':', '"'] as const;
+function createJsonStringParseState(): JsonStringParseState {
+  return {
+    isEscaping: false,
+    unicodeBuffer: '',
+    expectingUnicode: false
+  };
+}
+
+function resetJsonStringParseState(state: JsonStringParseState): void {
+  state.isEscaping = false;
+  state.unicodeBuffer = '';
+  state.expectingUnicode = false;
+}
 
 function createAssistantResponseParserState(): AssistantResponseParserState {
   return {
     raw: '',
-    mode: 'prefix',
-    prefixStepIndex: 0,
-    prefixLiteralIndex: 0,
-    isEscaping: false,
-    unicodeBuffer: '',
-    parsedSuccessfully: false
+    mode: 'start',
+    parsedSuccessfully: false,
+    currentKey: '',
+    keyBuffer: '',
+    keyState: createJsonStringParseState(),
+    valueState: createJsonStringParseState(),
+    skipStringState: createJsonStringParseState(),
+    skipContainerInString: false,
+    skipContainerClosers: [],
+    literalRemaining: ''
   };
 }
 
@@ -234,136 +272,333 @@ function fallbackAssistantResponseRaw(state: AssistantResponseParserState): stri
   return state.raw.length > 0 ? [state.raw] : [];
 }
 
-function consumeAssistantResponsePrefixChar(state: AssistantResponseParserState, char: string): boolean {
-  while (state.prefixStepIndex < ASSISTANT_RESPONSE_PREFIX_STEPS.length) {
-    const step = ASSISTANT_RESPONSE_PREFIX_STEPS[state.prefixStepIndex];
-
-    if (step === '{' || step === ':') {
-      if (/\s/.test(char)) {
-        return true;
-      }
-
-      if (char !== step) {
-        return false;
-      }
-
-      state.prefixStepIndex += 1;
-      state.prefixLiteralIndex = 0;
-      return true;
+function consumeJsonStringChar(
+  state: JsonStringParseState,
+  char: string
+): { status: 'continue' | 'done' | 'invalid'; decoded: string } {
+  if (state.expectingUnicode) {
+    if (!/^[0-9a-fA-F]$/.test(char)) {
+      return { status: 'invalid', decoded: '' };
     }
 
-    if (step === '"') {
-      if (/\s/.test(char)) {
-        return true;
-      }
-
-      if (char !== '"') {
-        return false;
-      }
-
-      state.prefixStepIndex += 1;
-      state.prefixLiteralIndex = 0;
-      state.mode = 'value';
-      return true;
+    state.unicodeBuffer = char;
+    state.expectingUnicode = false;
+    if (state.unicodeBuffer.length === 4) {
+      const decoded = String.fromCodePoint(Number.parseInt(state.unicodeBuffer, 16));
+      state.unicodeBuffer = '';
+      return { status: 'continue', decoded };
     }
 
-    if (/\s/.test(char) && state.prefixLiteralIndex === 0) {
-      return true;
-    }
-
-    if (char !== step[state.prefixLiteralIndex]) {
-      return false;
-    }
-
-    state.prefixLiteralIndex += 1;
-    if (state.prefixLiteralIndex === step.length) {
-      state.prefixStepIndex += 1;
-      state.prefixLiteralIndex = 0;
-    }
-    return true;
+    return { status: 'continue', decoded: '' };
   }
 
-  return false;
-}
-
-function consumeAssistantResponseValueChar(state: AssistantResponseParserState, char: string): string | undefined {
   if (state.unicodeBuffer.length > 0) {
     if (!/^[0-9a-fA-F]$/.test(char)) {
-      state.mode = 'done';
-      return undefined;
+      return { status: 'invalid', decoded: '' };
     }
 
     state.unicodeBuffer += char;
     if (state.unicodeBuffer.length === 4) {
       const decoded = String.fromCodePoint(Number.parseInt(state.unicodeBuffer, 16));
       state.unicodeBuffer = '';
-      return decoded;
+      return { status: 'continue', decoded };
     }
 
-    return '';
+    return { status: 'continue', decoded: '' };
   }
 
   if (state.isEscaping) {
     if (char === 'u') {
       state.unicodeBuffer = '';
+      state.expectingUnicode = true;
       state.isEscaping = false;
-      return '';
+      return { status: 'continue', decoded: '' };
     }
 
     const decoded = decodeJsonStringEscape(char);
     if (decoded === undefined) {
-      state.mode = 'done';
-      return undefined;
+      return { status: 'invalid', decoded: '' };
     }
 
     state.isEscaping = false;
-    return decoded;
+    return { status: 'continue', decoded };
   }
 
   if (char === '\\') {
     state.isEscaping = true;
-    return '';
+    return { status: 'continue', decoded: '' };
   }
 
   if (char === '"') {
-    state.parsedSuccessfully = true;
-    state.mode = 'done';
-    return '';
+    return { status: 'done', decoded: '' };
   }
 
-  return char;
+  return { status: 'continue', decoded: char };
 }
 
 function pushAssistantResponseChunk(state: AssistantResponseParserState, chunk: string): string[] {
   state.raw += chunk;
   let output = '';
 
-  for (const char of chunk) {
-    if (state.mode === 'done') {
-      continue;
-    }
+  for (let index = 0; index < chunk.length; index += 1) {
+    const char = chunk[index];
+    let reprocessChar = true;
 
-    if (state.mode === 'prefix') {
-      if (!consumeAssistantResponsePrefixChar(state, char)) {
-        state.mode = 'done';
-        return [];
+    while (reprocessChar) {
+      reprocessChar = false;
+
+      if (state.mode === 'done') {
+        break;
       }
-      continue;
-    }
 
-    const decoded = consumeAssistantResponseValueChar(state, char);
-    if (decoded === undefined) {
-      return [];
-    }
+      if (state.mode === 'start') {
+        if (/\s/.test(char)) {
+          break;
+        }
 
-    output += decoded;
+        if (char !== '{') {
+          state.mode = 'done';
+          break;
+        }
+
+        state.mode = 'root_key_or_end';
+        break;
+      }
+
+      if (state.mode === 'root_key_or_end') {
+        if (/\s/.test(char)) {
+          break;
+        }
+
+        if (char === '}') {
+          state.mode = 'done';
+          break;
+        }
+
+        if (char !== '"') {
+          state.mode = 'done';
+          break;
+        }
+
+        state.keyBuffer = '';
+        resetJsonStringParseState(state.keyState);
+        state.mode = 'root_key';
+        break;
+      }
+
+      if (state.mode === 'root_key') {
+        const parsedChar = consumeJsonStringChar(state.keyState, char);
+        if (parsedChar.status === 'invalid') {
+          state.mode = 'done';
+          break;
+        }
+
+        if (parsedChar.status === 'done') {
+          state.currentKey = state.keyBuffer;
+          state.mode = 'after_root_key';
+          break;
+        }
+
+        state.keyBuffer += parsedChar.decoded;
+        break;
+      }
+
+      if (state.mode === 'after_root_key') {
+        if (/\s/.test(char)) {
+          break;
+        }
+
+        if (char !== ':') {
+          state.mode = 'done';
+          break;
+        }
+
+        state.mode = 'before_value';
+        break;
+      }
+
+      if (state.mode === 'before_value') {
+        if (/\s/.test(char)) {
+          break;
+        }
+
+        if (state.currentKey === 'assistant_response') {
+          if (char !== '"') {
+            state.mode = 'done';
+            break;
+          }
+
+          resetJsonStringParseState(state.valueState);
+          state.mode = 'capture_value';
+          break;
+        }
+
+        if (char === '"') {
+          resetJsonStringParseState(state.skipStringState);
+          state.mode = 'skip_string';
+          break;
+        }
+
+        if (char === '{' || char === '[') {
+          state.skipContainerClosers = [char === '{' ? '}' : ']'];
+          state.skipContainerInString = false;
+          resetJsonStringParseState(state.skipStringState);
+          state.mode = 'skip_container';
+          break;
+        }
+
+        if (/[-0-9]/.test(char)) {
+          state.mode = 'skip_number';
+          break;
+        }
+
+        if (char === 't') {
+          state.literalRemaining = 'rue';
+          state.mode = 'skip_literal';
+          break;
+        }
+
+        if (char === 'f') {
+          state.literalRemaining = 'alse';
+          state.mode = 'skip_literal';
+          break;
+        }
+
+        if (char === 'n') {
+          state.literalRemaining = 'ull';
+          state.mode = 'skip_literal';
+          break;
+        }
+
+        state.mode = 'done';
+        break;
+      }
+
+      if (state.mode === 'skip_string') {
+        const parsedChar = consumeJsonStringChar(state.skipStringState, char);
+        if (parsedChar.status === 'invalid') {
+          state.mode = 'done';
+          break;
+        }
+
+        if (parsedChar.status === 'done') {
+          state.mode = 'after_value';
+        }
+        break;
+      }
+
+      if (state.mode === 'skip_number') {
+        if (/[0-9eE+.-]/.test(char)) {
+          break;
+        }
+
+        state.mode = 'after_value';
+        reprocessChar = true;
+        break;
+      }
+
+      if (state.mode === 'skip_literal') {
+        if (state.literalRemaining.length === 0) {
+          state.mode = 'after_value';
+          reprocessChar = true;
+          break;
+        }
+
+        if (char !== state.literalRemaining[0]) {
+          state.mode = 'done';
+          break;
+        }
+
+        state.literalRemaining = state.literalRemaining.slice(1);
+        if (state.literalRemaining.length === 0) {
+          state.mode = 'after_value';
+        }
+        break;
+      }
+
+      if (state.mode === 'skip_container') {
+        if (state.skipContainerInString) {
+          const parsedChar = consumeJsonStringChar(state.skipStringState, char);
+          if (parsedChar.status === 'invalid') {
+            state.mode = 'done';
+            break;
+          }
+
+          if (parsedChar.status === 'done') {
+            state.skipContainerInString = false;
+          }
+          break;
+        }
+
+        if (char === '"') {
+          resetJsonStringParseState(state.skipStringState);
+          state.skipContainerInString = true;
+          break;
+        }
+
+        if (char === '{') {
+          state.skipContainerClosers.push('}');
+          break;
+        }
+
+        if (char === '[') {
+          state.skipContainerClosers.push(']');
+          break;
+        }
+
+        const expectedCloser = state.skipContainerClosers[state.skipContainerClosers.length - 1];
+        if (char === expectedCloser) {
+          state.skipContainerClosers.pop();
+          if (state.skipContainerClosers.length === 0) {
+            state.mode = 'after_value';
+          }
+        }
+        break;
+      }
+
+      if (state.mode === 'capture_value') {
+        const parsedChar = consumeJsonStringChar(state.valueState, char);
+        if (parsedChar.status === 'invalid') {
+          state.mode = 'done';
+          break;
+        }
+
+        if (parsedChar.status === 'done') {
+          state.parsedSuccessfully = true;
+          state.mode = 'after_value';
+          break;
+        }
+
+        output += parsedChar.decoded;
+        break;
+      }
+
+      if (state.mode === 'after_value') {
+        if (/\s/.test(char)) {
+          break;
+        }
+
+        if (char === ',') {
+          state.currentKey = '';
+          state.mode = 'root_key_or_end';
+          break;
+        }
+
+        if (char === '}') {
+          state.mode = 'done';
+          break;
+        }
+
+        state.mode = 'done';
+      }
+    }
   }
 
   return output.length > 0 ? [output] : [];
 }
 
 function finishAssistantResponseStream(state: AssistantResponseParserState): string[] {
-  if (state.parsedSuccessfully && !state.isEscaping && state.unicodeBuffer.length === 0) {
+  if (state.parsedSuccessfully && !state.valueState.isEscaping && state.valueState.unicodeBuffer.length === 0) {
     return [];
   }
 

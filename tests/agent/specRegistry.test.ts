@@ -45,9 +45,16 @@ async function importSpecRegistryWithBuiltinDirectory(
   builtinPackagesDirectory: string,
   options?: { failingPromptFilePath?: string }
 ) {
-  vi.doMock('../../src/agent/packagePaths.js', () => ({
-    getBuiltinAgentPackageDirectory: (preset: string) => join(builtinPackagesDirectory, preset)
-  }));
+  vi.doMock('../../src/agent/packagePaths.js', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../src/agent/packagePaths.js')>();
+
+    return {
+      ...actual,
+      getBuiltinAgentPackageDirectory: (preset: string) => join(builtinPackagesDirectory, preset),
+      getSharedAgentPromptFilePath: (fileName: string, agentRootDirectory: string = join(builtinPackagesDirectory, '..')) =>
+        join(agentRootDirectory, 'shared', fileName)
+    };
+  });
 
   if (options?.failingPromptFilePath) {
     vi.doMock('node:fs', async (importOriginal) => {
@@ -87,7 +94,8 @@ describe('specRegistry builtin parity', () => {
 
     expect(resolved.preset).toBe('default');
     expect(resolved.extendsChain).toEqual(['default']);
-    expect(resolved.effectivePromptOrder).toEqual(['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'USER.md']);
+    expect(resolved.effectivePromptOrder).toEqual(['QICLAW.md', 'AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'USER.md']);
+    expect(resolved.effectivePromptFiles['QICLAW.md']?.content).toContain('# QICLAW.md');
     expect(resolved.effectivePromptFiles['AGENT.md']?.content).toContain('# AGENT.md - Your Workspace');
     expect(resolved.effectivePromptFiles['USER.md']?.content).toContain('# USER.md - About Your Human');
     expect(resolved.effectivePolicy.allowedCapabilityClasses).toEqual(['read', 'write']);
@@ -99,7 +107,8 @@ describe('specRegistry builtin parity', () => {
     const resolved = resolveBuiltinAgentPackage('readonly');
 
     expect(resolved.extendsChain).toEqual(['readonly', 'default']);
-    expect(resolved.effectivePromptOrder).toEqual(['AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'USER.md']);
+    expect(resolved.effectivePromptOrder).toEqual(['QICLAW.md', 'AGENT.md', 'SOUL.md', 'STYLE.md', 'TOOLS.md', 'USER.md']);
+    expect(resolved.effectivePromptFiles['QICLAW.md']?.content).toContain('# QICLAW.md');
     expect(resolved.effectivePromptFiles['AGENT.md']?.content).toContain('# AGENT.md - Your Workspace');
     expect(resolved.effectivePromptFiles['USER.md']?.content).toContain('Readonly user instructions');
     expect(resolved.effectivePolicy.allowedCapabilityClasses).toEqual(['read']);
@@ -244,13 +253,117 @@ describe('specRegistry builtin validation', () => {
       }
     });
 
+    const sharedDirectory = join(builtinPackagesDirectory, '..', 'shared');
+    await mkdir(sharedDirectory, { recursive: true });
+    await writeFile(join(sharedDirectory, 'QICLAW.md'), '# QICLAW.md\n\nShared qiclaw instructions\n');
+
     const { resolveBuiltinAgentPackage } = await importSpecRegistryWithBuiltinDirectory(builtinPackagesDirectory);
     const resolved = resolveBuiltinAgentPackage('readonly');
 
-    expect(resolved.effectivePromptOrder).toEqual(['AGENT.md', 'USER.md', 'TOOLS.md']);
+    expect(resolved.effectivePromptOrder).toEqual(['QICLAW.md', 'AGENT.md', 'USER.md', 'TOOLS.md']);
     expect(resolved.effectivePromptFiles['STYLE.md']?.content).toBe(
       'Unlisted builtin markdown should not enter effective prompt order'
     );
+  });
+
+  it('loads QICLAW.md from the shared agent directory for builtin packages', async () => {
+    const builtinPackagesDirectory = await createBuiltinPackagesDirectory();
+    const sharedDirectory = join(builtinPackagesDirectory, '..', 'shared');
+    await mkdir(sharedDirectory, { recursive: true });
+    await writeFile(join(sharedDirectory, 'QICLAW.md'), '# QICLAW.md\n\nShared qiclaw instructions\n');
+
+    await writeBuiltinPackageFixture(builtinPackagesDirectory, 'default', {
+      manifest: {
+        promptFiles: ['AGENT.md', 'USER.md'],
+        policy: {
+          allowedCapabilityClasses: ['read'],
+          maxToolRounds: 2,
+          mutationMode: 'none'
+        }
+      },
+      promptFiles: {
+        'AGENT.md': 'Purpose: Default\nScope boundary: Default',
+        'USER.md': 'Default user instructions'
+      }
+    });
+
+    const { resolveBuiltinAgentPackage } = await importSpecRegistryWithBuiltinDirectory(builtinPackagesDirectory);
+    const resolved = resolveBuiltinAgentPackage('default');
+
+    expect(resolved.effectivePromptOrder[0]).toBe('QICLAW.md');
+    expect(resolved.effectivePromptFiles['QICLAW.md']?.content).toContain('Shared qiclaw instructions');
+    expect(resolved.effectivePromptFiles['QICLAW.md']?.filePath).toBe(join(sharedDirectory, 'QICLAW.md'));
+    expect(resolved.resolvedFiles).toContain(join(sharedDirectory, 'QICLAW.md'));
+  });
+
+  it('keeps builtin manifest order for other files after prepending shared QICLAW.md', async () => {
+    const builtinPackagesDirectory = await createBuiltinPackagesDirectory();
+    const sharedDirectory = join(builtinPackagesDirectory, '..', 'shared');
+    await mkdir(sharedDirectory, { recursive: true });
+    await writeFile(join(sharedDirectory, 'QICLAW.md'), '# QICLAW.md\n\nShared qiclaw instructions\n');
+
+    await writeBuiltinPackageFixture(builtinPackagesDirectory, 'default', {
+      manifest: {
+        promptFiles: ['USER.md', 'AGENT.md'],
+        policy: {
+          allowedCapabilityClasses: ['read'],
+          maxToolRounds: 2,
+          mutationMode: 'none'
+        }
+      },
+      promptFiles: {
+        'AGENT.md': 'Purpose: Default\nScope boundary: Default',
+        'USER.md': 'Default user instructions'
+      }
+    });
+
+    const { resolveBuiltinAgentPackage } = await importSpecRegistryWithBuiltinDirectory(builtinPackagesDirectory);
+    const resolved = resolveBuiltinAgentPackage('default');
+
+    expect(resolved.effectivePromptOrder).toEqual(['QICLAW.md', 'USER.md', 'AGENT.md']);
+  });
+
+  it('includes the shared QICLAW.md path only once in resolvedFiles for builtin inheritance', async () => {
+    const builtinPackagesDirectory = await createBuiltinPackagesDirectory();
+    const sharedDirectory = join(builtinPackagesDirectory, '..', 'shared');
+    await mkdir(sharedDirectory, { recursive: true });
+    await writeFile(join(sharedDirectory, 'QICLAW.md'), '# QICLAW.md\n\nShared qiclaw instructions\n');
+
+    await writeBuiltinPackageFixture(builtinPackagesDirectory, 'default', {
+      manifest: {
+        promptFiles: ['AGENT.md', 'USER.md'],
+        policy: {
+          allowedCapabilityClasses: ['read'],
+          maxToolRounds: 2,
+          mutationMode: 'none'
+        }
+      },
+      promptFiles: {
+        'AGENT.md': 'Purpose: Default\nScope boundary: Default',
+        'USER.md': 'Default user instructions'
+      }
+    });
+    await writeBuiltinPackageFixture(builtinPackagesDirectory, 'readonly', {
+      manifest: {
+        extends: 'default',
+        promptFiles: ['USER.md'],
+        policy: {
+          allowedCapabilityClasses: ['read'],
+          maxToolRounds: 2,
+          mutationMode: 'none'
+        }
+      },
+      promptFiles: {
+        'USER.md': 'Readonly user instructions'
+      }
+    });
+
+    const { resolveBuiltinAgentPackage } = await importSpecRegistryWithBuiltinDirectory(builtinPackagesDirectory);
+    const resolved = resolveBuiltinAgentPackage('readonly');
+    const sharedQiclawPath = join(sharedDirectory, 'QICLAW.md');
+    const qiclawPaths = resolved.resolvedFiles.filter((filePath) => filePath === sharedQiclawPath);
+
+    expect(qiclawPaths).toEqual([sharedQiclawPath]);
   });
 
   it('rethrows unexpected prompt read errors instead of masking them as missing files', async () => {
@@ -298,5 +411,30 @@ describe('specRegistry builtin validation', () => {
     });
 
     expect(() => resolveBuiltinAgentPackage('default')).toThrow(`EACCES: permission denied, open '${failingPromptFilePath}'`);
+  });
+
+  it('fails when a builtin package directory defines QICLAW.md instead of using the shared prompt file', async () => {
+    const builtinPackagesDirectory = await createBuiltinPackagesDirectory();
+    await writeBuiltinPackageFixture(builtinPackagesDirectory, 'default', {
+      manifest: {
+        promptFiles: ['AGENT.md', 'USER.md'],
+        policy: {
+          allowedCapabilityClasses: ['read'],
+          maxToolRounds: 2,
+          mutationMode: 'none'
+        }
+      },
+      promptFiles: {
+        'AGENT.md': 'Purpose: Default\nScope boundary: Default',
+        'USER.md': 'Default user instructions',
+        'QICLAW.md': 'Package-local qiclaw'
+      }
+    });
+
+    const { resolveBuiltinAgentPackage } = await importSpecRegistryWithBuiltinDirectory(builtinPackagesDirectory);
+
+    expect(() => resolveBuiltinAgentPackage('default')).toThrow(
+      'Agent package "default" must not define reserved shared prompt file "QICLAW.md" inside the package directory.'
+    );
   });
 });

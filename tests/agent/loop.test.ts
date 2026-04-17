@@ -993,6 +993,52 @@ describe('agent loop', () => {
     ]);
   });
 
+  it('ignores root `_thinking` while parsing generate responses', async () => {
+    const memoryCandidate = {
+      operation: 'create',
+      target_memory_ids: '',
+      kind: 'heuristic',
+      title: 'Verify system date directly',
+      summary: 'Check the machine clock directly when exact current date matters.',
+      keywords: 'date | time | verification',
+      confidence: 0.93,
+      durability: 'durable',
+      speculative: false,
+      novelty_basis: 'The user explicitly generalized this lesson in the current turn.'
+    };
+    const generate = vi.fn(async () => normalizeProviderResponse({
+      content: JSON.stringify({
+        _thinking: 'This stays internal.',
+        assistant_response: 'Đã ghi nhận.',
+        memory_candidates: {
+          count: 1,
+          candidates: [memoryCandidate]
+        }
+      })
+    }));
+    const provider: ModelProvider = {
+      name: 'scripted-generate-only',
+      model: 'test-model',
+      generate
+    };
+
+    const result = await runAgentTurn({
+      provider,
+      availableTools: [],
+      baseSystemPrompt: 'system',
+      userInput: 'remember this lesson',
+      cwd: process.cwd(),
+      maxToolRounds: 1
+    });
+
+    expect(result.finalAnswer).toBe('Đã ghi nhận.');
+    expect(result.memoryCandidates).toEqual([memoryCandidate]);
+    expect(result.history).toEqual([
+      { role: 'user', content: 'remember this lesson' },
+      { role: 'assistant', content: 'Đã ghi nhận.' }
+    ]);
+  });
+
   it('falls back to raw text when assistant_response is missing from JSON output', async () => {
     const raw = JSON.stringify({
       memory_candidates: {
@@ -1583,6 +1629,139 @@ describe('agent loop', () => {
         { role: 'assistant', content: 'He said "hi" at C:\\tmp' }
       ]
     });
+  });
+
+  it('streams assistant_response when `_thinking` appears before it in the root object', async () => {
+    const provider: ModelProvider = {
+      name: 'openai',
+      model: 'gpt-test',
+      async *stream() {
+        yield { type: 'start' as const, provider: 'openai', model: 'gpt-test' };
+        yield { type: 'text_delta' as const, text: '{"_thinking":"Internal note","assistant_response":"Xin ' };
+        yield { type: 'text_delta' as const, text: 'chào","memory_candidates":{"count":0,"candidates":[]}}' };
+        yield {
+          type: 'finish' as const,
+          finish: { stopReason: 'end_turn' },
+          usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 }
+        };
+      },
+      async generate() {
+        throw new Error('runAgentTurn should collect from stream in this test');
+      }
+    };
+
+    const events = await Array.fromAsync(runAgentTurnStream({
+      provider,
+      availableTools: [],
+      baseSystemPrompt: 'system',
+      userInput: 'say hi',
+      cwd: process.cwd(),
+      maxToolRounds: 1
+    }));
+
+    expect(events.slice(0, 4)).toEqual([
+      { type: 'turn_started' },
+      { type: 'provider_started', provider: 'openai', model: 'gpt-test' },
+      { type: 'assistant_text_delta', text: 'Xin ' },
+      { type: 'assistant_text_delta', text: 'chào' }
+    ]);
+    expect(events[4]).toEqual({ type: 'assistant_message_completed', text: 'Xin chào', toolCalls: undefined });
+    expect(events[5]).toMatchObject({
+      type: 'turn_completed',
+      finalAnswer: 'Xin chào',
+      structuredOutputParsed: true,
+      history: [
+        { role: 'user', content: 'say hi' },
+        { role: 'assistant', content: 'Xin chào' }
+      ]
+    });
+  });
+
+  it('streams assistant_response even when it is not the first non-thinking root field', async () => {
+    const provider: ModelProvider = {
+      name: 'openai',
+      model: 'gpt-test',
+      async *stream() {
+        yield { type: 'start' as const, provider: 'openai', model: 'gpt-test' };
+        yield { type: 'text_delta' as const, text: '{"_thinking":"Internal note","memory_candidates":{"count":0,"candidates":[]},"assistant_response":"Đúng ' };
+        yield { type: 'text_delta' as const, text: 'rồi"}' };
+        yield {
+          type: 'finish' as const,
+          finish: { stopReason: 'end_turn' },
+          usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 }
+        };
+      },
+      async generate() {
+        throw new Error('runAgentTurn should collect from stream in this test');
+      }
+    };
+
+    const events = await Array.fromAsync(runAgentTurnStream({
+      provider,
+      availableTools: [],
+      baseSystemPrompt: 'system',
+      userInput: 'say hi',
+      cwd: process.cwd(),
+      maxToolRounds: 1
+    }));
+
+    expect(events.slice(0, 4)).toEqual([
+      { type: 'turn_started' },
+      { type: 'provider_started', provider: 'openai', model: 'gpt-test' },
+      { type: 'assistant_text_delta', text: 'Đúng ' },
+      { type: 'assistant_text_delta', text: 'rồi' }
+    ]);
+    expect(events[4]).toEqual({ type: 'assistant_message_completed', text: 'Đúng rồi', toolCalls: undefined });
+    expect(events[5]).toMatchObject({
+      type: 'turn_completed',
+      finalAnswer: 'Đúng rồi',
+      structuredOutputParsed: true,
+      history: [
+        { role: 'user', content: 'say hi' },
+        { role: 'assistant', content: 'Đúng rồi' }
+      ]
+    });
+  });
+
+  it('streams escaped assistant_response content when `_thinking` appears before it', async () => {
+    const provider: ModelProvider = {
+      name: 'openai',
+      model: 'gpt-test',
+      async *stream() {
+        yield { type: 'start' as const, provider: 'openai', model: 'gpt-test' };
+        yield { type: 'text_delta' as const, text: '{"_thinking":"Internal note","assistant_response":"Dòng 1\\nHe said \\\"hi\\\" at C:\\\\tmp \\u2713"' };
+        yield { type: 'text_delta' as const, text: ',"memory_candidates":{"count":0,"candidates":[]}}' };
+        yield {
+          type: 'finish' as const,
+          finish: { stopReason: 'end_turn' },
+          usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 }
+        };
+      },
+      async generate() {
+        throw new Error('runAgentTurn should collect from stream in this test');
+      }
+    };
+
+    const events = await Array.fromAsync(runAgentTurnStream({
+      provider,
+      availableTools: [],
+      baseSystemPrompt: 'system',
+      userInput: 'say hi',
+      cwd: process.cwd(),
+      maxToolRounds: 1
+    }));
+
+    expect(events.slice(0, 5)).toEqual([
+      { type: 'turn_started' },
+      { type: 'provider_started', provider: 'openai', model: 'gpt-test' },
+      { type: 'assistant_text_delta', text: 'Dòng 1\nHe said "hi" at C:\\tmp ✓' },
+      { type: 'assistant_message_completed', text: 'Dòng 1\nHe said "hi" at C:\\tmp ✓', toolCalls: undefined },
+      expect.objectContaining({
+        type: 'turn_completed',
+        finalAnswer: 'Dòng 1\nHe said "hi" at C:\\tmp ✓',
+        structuredOutputParsed: true
+      })
+    ]);
   });
 
   it('does not emit duplicate tool_call_started events for repeated streamed tool call ids', async () => {

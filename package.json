@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-agent-assets.mjs",
     "build:tui": "cargo build --manifest-path tui/Cargo.toml",
-    "dev": "npm run build:tui && tsx src/cli/main.ts",
+    "dev": "tsx src/cli/main.ts",
+    "dev:tui": "npm run build:tui && tsx src/cli/main.ts",
     "test": "vitest run",
     "test:tui": "cargo test --manifest-path tui/Cargo.toml",
     "typecheck:test": "tsc -p tsconfig.test.json",

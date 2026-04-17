@@ -16,6 +16,10 @@ const resolvedPackage: ResolvedAgentPackage = {
   effectiveCompletion: undefined,
   effectiveDiagnostics: undefined,
   effectivePromptFiles: {
+    'QICLAW.md': {
+      filePath: '/tmp/QICLAW.md',
+      content: '# QICLAW'
+    },
     'base.md': {
       filePath: '/tmp/base.md',
       content: '# Base'
@@ -25,8 +29,8 @@ const resolvedPackage: ResolvedAgentPackage = {
       content: '# Repo'
     }
   },
-  effectivePromptOrder: ['base.md', 'repo.md'],
-  resolvedFiles: ['/tmp/base.md', '/tmp/repo.md']
+  effectivePromptOrder: ['QICLAW.md', 'base.md', 'repo.md'],
+  resolvedFiles: ['/tmp/QICLAW.md', '/tmp/base.md', '/tmp/repo.md']
 };
 
 describe('renderAgentSystemPrompt', () => {
@@ -35,13 +39,15 @@ describe('renderAgentSystemPrompt', () => {
 
     expect(rendered).not.toContain('base.md');
     expect(rendered).not.toContain('repo.md');
-    expect(rendered).toContain('# Base\n\n# Repo');
+    expect(rendered).toContain('# QICLAW\n\n# Base\n\n# Repo');
 
+    const qiclawIndex = rendered.indexOf('# QICLAW');
     const baseIndex = rendered.indexOf('# Base');
     const repoIndex = rendered.indexOf('# Repo');
     const constraintsIndex = rendered.indexOf('Runtime constraints summary');
 
-    expect(baseIndex).toBeGreaterThanOrEqual(0);
+    expect(qiclawIndex).toBeGreaterThanOrEqual(0);
+    expect(baseIndex).toBeGreaterThan(qiclawIndex);
     expect(repoIndex).toBeGreaterThan(baseIndex);
     expect(constraintsIndex).toBeGreaterThan(repoIndex);
   });

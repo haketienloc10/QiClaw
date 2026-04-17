@@ -11,6 +11,7 @@ const slashCommands: SlashCommandDefinition[] = [
   { name: '/status', description: 'Show current session status', usage: '/status', kind: 'direct' },
   { name: '/tools', description: 'List available tools', usage: '/tools', kind: 'direct' },
   { name: '/memory', description: 'Show session memory status', usage: '/memory', kind: 'direct' },
+  { name: '/recal', description: 'Inspect recalled memories for an input', usage: '/recal <input>', kind: 'direct' },
   { name: '/doctor', description: 'Show environment diagnostics', usage: '/doctor', kind: 'direct' },
   { name: '/diff', description: 'Show safe working tree diff summary', usage: '/diff', kind: 'direct' },
   {

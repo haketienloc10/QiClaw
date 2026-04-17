@@ -107,6 +107,23 @@ export interface PrepareInteractiveSessionMemoryResult {
   checkpointState: SessionMemoryCheckpointState;
 }
 
+export interface InspectInteractiveRecallInput {
+  cwd: string;
+  sessionId: string;
+  userInput: string;
+  historySummary?: string;
+  checkpointState?: SessionMemoryCheckpointState;
+  recallLimit?: number;
+  now?: string;
+  debugRecallInputs?: (record: RecallInputsDebugRecord) => void;
+  memoryConfig?: MemoryEmbeddingConfig;
+}
+
+export interface InspectInteractiveRecallResult {
+  renderedText: string;
+  recalled: SessionMemoryCandidate[];
+}
+
 export interface CaptureInteractiveTurnMemoryInput {
   store: FileSessionStore;
   sessionId: string;
@@ -463,6 +480,45 @@ function renderMemorySections(hot: string[], warm: string[], faded: string[], bu
   }
 
   return sections.join('\n');
+}
+
+export async function inspectInteractiveRecall(
+  input: InspectInteractiveRecallInput
+): Promise<InspectInteractiveRecallResult> {
+  const store = new FileSessionStore({ cwd: input.cwd, sessionId: input.sessionId, memoryConfig: input.memoryConfig });
+  const globalStore = new GlobalMemoryStore({ memoryConfig: input.memoryConfig });
+
+  await store.open();
+  await globalStore.open();
+
+  const recalled = await recallInteractiveCandidates({
+    store,
+    globalStore,
+    sessionId: input.sessionId,
+    userInput: input.userInput,
+    historySummary: input.historySummary,
+    latestSummaryText: input.checkpointState?.latestSummaryText,
+    recallLimit: Math.max(1, input.recallLimit ?? DEFAULT_RECALL_LIMIT),
+    now: input.now,
+    debugRecallInputs: input.debugRecallInputs
+  });
+
+  return {
+    recalled,
+    renderedText: renderInteractiveRecallInspection(input.userInput, recalled)
+  };
+}
+
+function renderInteractiveRecallInspection(query: string, recalled: SessionMemoryCandidate[]): string {
+  if (recalled.length === 0) {
+    return `Query: ${query}\nNo recalled memories.`;
+  }
+
+  return [
+    `Query: ${query}`,
+    `Matches: ${recalled.length}`,
+    ...recalled.map((candidate, index) => `${index + 1}. [${candidate.sessionId === 'user-global' ? 'global' : 'session'}] ${candidate.summaryText} — score=${candidate.retrievalScore.toFixed(2)} importance=${candidate.importance.toFixed(2)}`)
+  ].join('\n');
 }
 
 async function recallInteractiveCandidates(input: {

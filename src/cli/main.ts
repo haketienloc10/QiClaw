@@ -24,6 +24,7 @@ import {
 } from '../session/session.js';
 import {
   captureInteractiveTurnMemory,
+  inspectInteractiveRecall,
   prepareInteractiveSessionMemory,
   type RecallInputsDebugRecord
 } from '../memory/sessionMemoryEngine.js';
@@ -366,7 +367,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
             historySummary,
             restored: Boolean(restored)
           }),
-          helpText: formatInteractiveInfoLine('Commands: /help, /multiline, /skills, /exit'),
+          helpText: formatInteractiveInfoLine('Commands: /help, /multiline, /skills, /recal, /exit'),
           multilineNoticeText: formatInteractiveInfoLine('Multiline mode on. Enter /send to submit or /cancel to discard.'),
           multilineDiscardedText: formatInteractiveInfoLine('Multiline draft discarded.'),
           readLine: options.readLine,
@@ -376,6 +377,68 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
             });
           },
           async runTurn(userInput) {
+            if (userInput.startsWith('/recal')) {
+              const recallInput = userInput.slice('/recal'.length).trim();
+
+              if (recallInput.length === 0) {
+                return {
+                  stopReason: 'completed' as const,
+                  finalAnswer: 'Usage: /recal <input>',
+                  history,
+                  toolRoundsUsed: 0,
+                  verification: {
+                    isVerified: true,
+                    finalAnswerIsNonEmpty: true,
+                    finalAnswerIsSubstantive: true,
+                    toolEvidenceSatisfied: true,
+                    noUnresolvedToolErrors: true,
+                    toolMessagesCount: 0,
+                    checks: []
+                  }
+                };
+              }
+
+              const historyContext = buildPromptHistoryContext(history, historySummary);
+              const inspection = await inspectInteractiveRecall({
+                cwd: runtime.cwd,
+                sessionId: sessionMemoryState?.storeSessionId ?? sessionId,
+                userInput: recallInput,
+                historySummary: historyContext.historySummary,
+                checkpointState: sessionMemoryState,
+                debugRecallInputs,
+                memoryConfig,
+                now: new Date().toISOString()
+              });
+
+              checkpointStore.save({
+                sessionId,
+                taskId: 'interactive',
+                status: 'running',
+                checkpointJson: createInteractiveCheckpointJson({
+                  version: 1,
+                  history,
+                  historySummary,
+                  sessionMemory: sessionMemoryState
+                })
+              });
+
+              return {
+                stopReason: 'completed' as const,
+                finalAnswer: inspection.renderedText,
+                history,
+                toolRoundsUsed: 0,
+                verification: {
+                  isVerified: true,
+                  finalAnswerIsNonEmpty: inspection.renderedText.length > 0,
+                  finalAnswerIsSubstantive: inspection.renderedText.length > 0,
+                  toolEvidenceSatisfied: true,
+                  noUnresolvedToolErrors: true,
+                  toolMessagesCount: 0,
+                  checks: []
+                }
+              };
+            }
+
             let preparedMemory:
               | Awaited<ReturnType<typeof prepareInteractiveSessionMemory>>
               | undefined;

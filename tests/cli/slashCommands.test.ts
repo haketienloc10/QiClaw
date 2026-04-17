@@ -18,6 +18,7 @@ describe('slashCommands', () => {
       '/status',
       '/tools',
       '/memory',
+      '/recal',
       '/doctor',
       '/diff',
       '/review',
@@ -25,6 +26,7 @@ describe('slashCommands', () => {
     ]);
 
     expect(resolveSlashCommand('/diff')?.kind).toBe('direct');
+    expect(resolveSlashCommand('/recal')?.kind).toBe('direct');
     expect(resolveSlashCommand('/review')?.kind).toBe('prompt');
   });
 

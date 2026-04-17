@@ -598,6 +598,116 @@ describe('createRepl', () => {
     ]);
   });
 
+  it('passes unknown slash commands through to runTurn in REPL interactive mode', async () => {
+    const outputs: string[] = [];
+    const runTurn = vi.fn(async (input: string) => ({
+      stopReason: 'completed' as const,
+      finalAnswer: `answer: ${input}`,
+      toolRoundsUsed: 0,
+      verification: {
+        isVerified: true,
+        finalAnswerIsNonEmpty: true,
+        finalAnswerIsSubstantive: true,
+        toolEvidenceSatisfied: true,
+        noUnresolvedToolErrors: true,
+        toolMessagesCount: 0,
+        checks: []
+      }
+    }));
+    const inputs = ['/recal hôm nay là thứ mấy', '/exit'];
+    const repl = createRepl({
+      promptLabel: '> ',
+      runTurn,
+      readLine: async () => inputs.shift(),
+      writeLine(text) {
+        outputs.push(text);
+      }
+    });
+
+    await expect(repl.runInteractive()).resolves.toBe(0);
+    expect(runTurn).toHaveBeenCalledTimes(1);
+    expect(runTurn).toHaveBeenCalledWith('/recal hôm nay là thứ mấy');
+    expect(outputs).toEqual([
+      'answer: /recal hôm nay là thứ mấy',
+      'Goodbye.'
+    ]);
+  });
+
+  it('shows /recal in the interactive help text', async () => {
+    const outputs: string[] = [];
+    const runTurn = vi.fn(async (input: string) => ({
+      stopReason: 'completed' as const,
+      finalAnswer: `answer: ${input}`,
+      toolRoundsUsed: 0,
+      verification: {
+        isVerified: true,
+        finalAnswerIsNonEmpty: true,
+        finalAnswerIsSubstantive: true,
+        toolEvidenceSatisfied: true,
+        noUnresolvedToolErrors: true,
+        toolMessagesCount: 0,
+        checks: []
+      }
+    }));
+    const inputs = ['/help', '/exit'];
+    const repl = createRepl({
+      promptLabel: '> ',
+      runTurn,
+      readLine: async () => inputs.shift(),
+      writeLine(text) {
+        outputs.push(text);
+      },
+      helpText: 'Commands: /help, /multiline, /skills, /recal, /exit'
+    });
+
+    await expect(repl.runInteractive()).resolves.toBe(0);
+    expect(outputs).toEqual([
+      'Commands: /help, /multiline, /skills, /recal, /exit',
+      'Goodbye.'
+    ]);
+  });
+
+  it('runs /recal in buildCli interactive mode without sending it to the model', async () => {
+    const writes: string[] = [];
+    const prepareSessionMemory = vi.fn(async () => ({
+      memoryText: '',
+      store: { stub: true },
+      recalled: [],
+      checkpointState: {
+        storeSessionId: 'session-repl-recal',
+        engine: 'file-session-memory',
+        version: 1,
+        memoryPath: '/tmp/memory/index.json',
+        metaPath: '/tmp/memory/meta.json',
+        totalEntries: 0,
+        lastCompactedAt: null
+      }
+    }));
+    const runTurn = vi.fn(createSuccessfulRunTurn());
+    const cli = buildCli({
+      argv: [],
+      cwd: '/tmp/qiclaw-interactive-recal',
+      readLine: (() => {
+        const inputs = ['/recal hôm nay là thứ mấy', '/exit'];
+        return async () => inputs.shift();
+      })(),
+      stdout: {
+        write(chunk) {
+          writes.push(String(chunk));
+          return true;
+        }
+      },
+      createRuntime: (runtimeOptions) => createTestRuntime('/tmp/qiclaw-interactive-recal', runtimeOptions.observer),
+      prepareSessionMemory,
+      runTurn
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+    expect(runTurn).not.toHaveBeenCalledWith(expect.objectContaining({ userInput: '/recal hôm nay là thứ mấy' }));
+    expect(prepareSessionMemory).not.toHaveBeenCalledWith(expect.objectContaining({ userInput: '/recal hôm nay là thứ mấy' }));
+    expect(writes.join('')).toContain('hôm nay là thứ mấy');
+  });
+
   it('combines continued input lines into one multiline turn', async () => {
     const outputs: string[] = [];
     const runTurn = vi.fn(async (input: string) => ({

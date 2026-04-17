@@ -4,6 +4,7 @@ import type { RunAgentTurnResult, TurnEvent } from '../agent/loop.js';
 import type { Message } from '../core/types.js';
 import {
   captureInteractiveTurnMemory,
+  inspectInteractiveRecall,
   prepareInteractiveSessionMemory,
   type CaptureInteractiveTurnMemoryResult,
   type PrepareInteractiveSessionMemoryResult,
@@ -594,6 +595,34 @@ export function createTuiController(options: TuiControllerOptions): TuiControlle
         text: sessionMemoryState
           ? `Memory entries: ${sessionMemoryState.totalEntries}`
           : 'Memory unavailable for this session yet.'
+      });
+      await saveCheckpoint('running');
+      return;
+    }
+
+    if (command.name === '/recal') {
+      if (normalized.argsText.length === 0) {
+        emit({ type: 'warning', text: 'Usage: /recal <input>' });
+        await saveCheckpoint('running');
+        return;
+      }
+
+      const inspection = await inspectInteractiveRecall({
+        cwd: options.cwd,
+        sessionId,
+        userInput: normalized.argsText,
+        historySummary,
+        checkpointState: sessionMemoryState,
+        memoryConfig,
+        now: new Date().toISOString()
+      });
+
+      transcriptCellOrdinal += 1;
+      appendTranscriptCell({
+        id: `memory-recall-${transcriptCellOrdinal}`,
+        kind: 'status',
+        title: 'Memory recall',
+        text: inspection.renderedText
       });
       await saveCheckpoint('running');
       return;

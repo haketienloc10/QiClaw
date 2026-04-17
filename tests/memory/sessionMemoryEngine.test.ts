@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   captureInteractiveTurnMemory,
+  inspectInteractiveRecall,
   prepareInteractiveSessionMemory,
   recallSessionMemories
 } from '../../src/memory/sessionMemoryEngine.js';
@@ -1188,6 +1189,83 @@ describe('prepareInteractiveSessionMemory', () => {
       globalReadMeta.mockRestore();
       globalRecall.mockRestore();
       globalTouchByHashes.mockRestore();
+    }
+  });
+});
+
+describe('inspectInteractiveRecall', () => {
+  it('returns recalled candidates and renders inspection text without packing into prompt memory', async () => {
+    const open = vi.spyOn(FileSessionStore.prototype, 'open').mockResolvedValue(undefined);
+    const globalOpen = vi.spyOn(GlobalMemoryStore.prototype, 'open').mockResolvedValue(undefined);
+    const readMeta = vi.spyOn(FileSessionStore.prototype, 'readMeta').mockResolvedValue({
+      version: 1,
+      engine: 'file-session-memory-store',
+      sessionId: 'session_1',
+      memoryPath: '/tmp/memory.json',
+      metaPath: '/tmp/meta.json',
+      totalEntries: 0,
+      lastCompactedAt: null,
+      lastVerifiedAt: null,
+      lastDoctorAt: null,
+      lastSealedAt: null,
+      accessStatsByHash: {}
+    });
+    const globalReadMeta = vi.spyOn(GlobalMemoryStore.prototype, 'readMeta').mockResolvedValue({
+      version: 1,
+      engine: 'file-global-memory-store',
+      sessionId: 'user-global',
+      memoryPath: '/tmp/global-memory.json',
+      metaPath: '/tmp/global-meta.json',
+      totalEntries: 0,
+      lastCompactedAt: null,
+      lastVerifiedAt: null,
+      lastDoctorAt: null,
+      lastSealedAt: null,
+      accessStatsByHash: {}
+    });
+    const recall = vi.spyOn(FileSessionStore.prototype, 'recall').mockResolvedValueOnce([
+      createCandidate({
+        hash: 'session-hit-1',
+        summaryText: 'Deployment preference',
+        essenceText: 'Use deployment checklist first.',
+        retrievalScore: 0.9,
+        importance: 0.8,
+        explicitSave: true
+      })
+    ]).mockResolvedValueOnce([]);
+    const globalRecall = vi.spyOn(GlobalMemoryStore.prototype, 'recall').mockResolvedValueOnce([
+      createCandidate({
+        hash: 'global-hit-1',
+        sessionId: 'user-global',
+        summaryText: 'Deploy incident note',
+        essenceText: 'Previous deploy needed rollback.',
+        retrievalScore: 0.6,
+        importance: 0.7,
+        explicitSave: false
+      })
+    ]).mockResolvedValueOnce([]);
+
+    try {
+      const result = await inspectInteractiveRecall({
+        cwd: '/tmp/session-memory-engine-inspect',
+        sessionId: 'session_1',
+        userInput: 'deploy memory',
+        historySummary: 'deploy summary',
+        recallLimit: 5,
+        now: '2026-04-17T12:00:00.000Z'
+      });
+
+      expect(result.recalled.map((candidate) => candidate.hash)).toEqual(['session-hit-1', 'global-hit-1']);
+      expect(result.renderedText).toContain('deploy memory');
+      expect(result.renderedText).toContain('Deployment preference');
+      expect(result.renderedText).toContain('Deploy incident note');
+    } finally {
+      open.mockRestore();
+      globalOpen.mockRestore();
+      readMeta.mockRestore();
+      globalReadMeta.mockRestore();
+      recall.mockRestore();
+      globalRecall.mockRestore();
     }
   });
 });

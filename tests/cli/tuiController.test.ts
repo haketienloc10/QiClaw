@@ -269,19 +269,22 @@ describe('tuiController', () => {
 
     await controller.start();
     await controller.handleAction({ type: 'submit_prompt', prompt: 'new question' });
+    await controller.handleAction({ type: 'run_slash_command', command: '/recal', argsText: 'deploy memory' });
     await controller.handleAction({ type: 'run_slash_command', command: '/diff' });
     await controller.handleAction({ type: 'run_shell_command', command: 'pwd', args: [] });
 
     const appendEvents = emitted.filter((event) => event.type === 'transcript_append');
-    expect(appendEvents).toHaveLength(5);
+    expect(appendEvents).toHaveLength(7);
     expect(appendEvents[0]).toEqual(expect.objectContaining({ cells: [expect.objectContaining({ kind: 'user', text: 'new question' })] }));
-    expect(appendEvents[1]).toEqual(expect.objectContaining({ cells: [expect.objectContaining({ kind: 'user', text: '/diff' })] }));
-    expect(appendEvents[2]).toEqual(expect.objectContaining({ cells: expect.arrayContaining([
+    expect(appendEvents[1]).toEqual(expect.objectContaining({ cells: [expect.objectContaining({ kind: 'user', text: '/recal deploy memory' })] }));
+    expect(appendEvents[2]).toEqual(expect.objectContaining({ cells: [expect.objectContaining({ kind: 'status', title: 'Memory recall', text: expect.stringContaining('deploy memory') })] }));
+    expect(appendEvents[3]).toEqual(expect.objectContaining({ cells: [expect.objectContaining({ kind: 'user', text: '/diff' })] }));
+    expect(appendEvents[4]).toEqual(expect.objectContaining({ cells: expect.arrayContaining([
       expect.objectContaining({ id: 'diff-status', kind: 'status', text: 'git status output' }),
       expect.objectContaining({ id: 'diff-patch', kind: 'diff', text: 'git diff output' })
     ]) }));
-    expect(appendEvents[3]).toEqual(expect.objectContaining({ cells: [expect.objectContaining({ kind: 'user', text: '!pwd' })] }));
-    expect(appendEvents[4]).toEqual(expect.objectContaining({ cells: [expect.objectContaining({ id: 'shell-1', kind: 'shell', text: 'pwd output' })] }));
+    expect(appendEvents[5]).toEqual(expect.objectContaining({ cells: [expect.objectContaining({ kind: 'user', text: '!pwd' })] }));
+    expect(appendEvents[6]).toEqual(expect.objectContaining({ cells: [expect.objectContaining({ id: 'shell-1', kind: 'shell', text: 'pwd output' })] }));
     expect(emitted).toContainEqual(expect.objectContaining({ type: 'status', text: 'shell completed' }));
   });
 

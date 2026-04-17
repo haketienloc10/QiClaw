@@ -204,7 +204,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
         const memoryConfig = resolveMemoryEmbeddingConfig(process.env);
         const displayMode: CliDisplayMode = parsed.prompt
           ? 'compact'
-          : (!stdout.isTTY || parsed.plain ? 'plain' : 'interactive');
+          : (shouldLaunchTui(stdout) ? 'interactive' : 'plain');
 
         if (displayMode === 'interactive') {
           try {
@@ -1275,9 +1275,12 @@ async function resolveAgentPackageForCliExecution(agentSpecName: string, cwd: st
   }
 }
 
+function shouldLaunchTui(stdout: Pick<NodeJS.WriteStream, 'write'> & { isTTY?: boolean }): boolean {
+  return Boolean(stdout.isTTY) && process.env.QICLAW_TUI_ENABLED === 'true';
+}
+
 function parseArgs(argv: string[]): {
   prompt?: string;
-  plain: boolean;
   provider: ProviderId;
   model?: string;
   baseUrl?: string;
@@ -1287,7 +1290,6 @@ function parseArgs(argv: string[]): {
   agentSpecPreviewName?: string;
 } {
   let prompt: string | undefined;
-  let plain = false;
   let provider = resolveDefaultProviderFromEnv();
   let model: string | undefined;
   let baseUrl: string | undefined;
@@ -1308,11 +1310,6 @@ function parseArgs(argv: string[]): {
 
       prompt = value;
       index += 1;
-      continue;
-    }
-
-    if (token === '--plain') {
-      plain = true;
       continue;
     }
 
@@ -1409,7 +1406,6 @@ function parseArgs(argv: string[]): {
 
   return {
     prompt,
-    plain,
     provider,
     model,
     baseUrl,

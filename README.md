@@ -14,27 +14,25 @@ npm install
 
 ### Interactive
 
+Mặc định `npm run dev` chạy CLI/plain REPL.
+
 ```bash
 npm run dev
 ```
 
-Nếu terminal hỗ trợ TTY, QiClaw sẽ ưu tiên full-screen Rust TUI. Để build binary TUI:
+TUI chỉ được bật khi đặt `QICLAW_TUI_ENABLED=true` và đang chạy trong interactive TTY. Ví dụ:
+
+```bash
+QICLAW_TUI_ENABLED=true npm run dev
+```
+
+Nếu cần build binary TUI trước:
 
 ```bash
 npm run build:tui
 ```
 
-Sau đó chạy lại CLI interactive như bình thường:
-
-```bash
-npm run dev
-```
-
-TUI dùng terminal trực tiếp qua stdio inherit và bridge NDJSON trên fd 3/4. Bridge này hiện yêu cầu hệ Unix-like; trên môi trường không hỗ trợ interactive TUI sẽ tự fallback về plain mode. Nếu muốn bỏ qua TUI và dùng plain REPL fallback:
-
-```bash
-npm run dev -- --plain
-```
+TUI dùng terminal trực tiếp qua stdio inherit và bridge NDJSON trên fd 3/4. Bridge này hiện yêu cầu hệ Unix-like; trên môi trường không hỗ trợ interactive TUI sẽ tự fallback về plain CLI path.
 
 Thoát REPL/TUI bằng:
 

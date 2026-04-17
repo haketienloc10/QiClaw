@@ -29,7 +29,8 @@ const providerEnvKeys = [
   'ANTHROPIC_BASE_URL',
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_MODEL',
-  'QICLAW_DEBUG_LOG'
+  'QICLAW_DEBUG_LOG',
+  'QICLAW_TUI_ENABLED'
 ] as const;
 
 type ProviderEnvSnapshot = Partial<Record<(typeof providerEnvKeys)[number], string>>;
@@ -42,7 +43,9 @@ function snapshotProviderEnv(): ProviderEnvSnapshot {
     OPENAI_MODEL: process.env.OPENAI_MODEL,
     ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-    ANTHROPIC_MODEL: process.env.ANTHROPIC_MODEL
+    ANTHROPIC_MODEL: process.env.ANTHROPIC_MODEL,
+    QICLAW_DEBUG_LOG: process.env.QICLAW_DEBUG_LOG,
+    QICLAW_TUI_ENABLED: process.env.QICLAW_TUI_ENABLED
   };
 }
 
@@ -3175,389 +3178,397 @@ describe('buildCli', () => {
   });
 
   it('keeps streamed interactive text visible on TTY output with cursor controls', async () => {
-    const writes: string[] = [];
-    const cwd = join(tmpdir(), `qiclaw-interactive-live-text-tty-${Math.random().toString(36).slice(2)}`);
-    const cli = buildCli({
-      argv: ['--plain'],
-      cwd,
-      readLine: (() => {
-        const inputs = ['live text please', '/exit'];
-        return async () => inputs.shift();
-      })(),
-      stdout: {
-        isTTY: true,
-        write(chunk) {
-          writes.push(String(chunk));
-          return true;
+    await withProviderEnvSnapshot(async () => {
+      delete process.env.QICLAW_TUI_ENABLED;
+
+      const writes: string[] = [];
+      const cwd = join(tmpdir(), `qiclaw-interactive-live-text-tty-${Math.random().toString(36).slice(2)}`);
+      const cli = buildCli({
+        cwd,
+        readLine: (() => {
+          const inputs = ['live text please', '/exit'];
+          return async () => inputs.shift();
+        })(),
+        stdout: {
+          isTTY: true,
+          write(chunk) {
+            writes.push(String(chunk));
+            return true;
+          },
+          moveCursor(dx, dy) {
+            writes.push(`\u001b[${Math.abs(dy)}A`);
+            return true;
+          },
+          clearLine() {
+            writes.push('\u001b[2K');
+            return true;
+          }
+        } as Pick<NodeJS.WriteStream, 'write'> & {
+          isTTY: boolean;
+          moveCursor(dx: number, dy: number): boolean;
+          clearLine(dir: -1 | 0 | 1): boolean;
         },
-        moveCursor(dx, dy) {
-          writes.push(`\u001b[${Math.abs(dy)}A`);
-          return true;
-        },
-        clearLine() {
-          writes.push('\u001b[2K');
-          return true;
-        }
-      } as Pick<NodeJS.WriteStream, 'write'> & {
-        isTTY: boolean;
-        moveCursor(dx: number, dy: number): boolean;
-        clearLine(dir: -1 | 0 | 1): boolean;
-      },
-      createRuntime: (runtimeOptions) => createTestRuntime(cwd, runtimeOptions.observer),
-      runTurn: async (input) => ({
-        stopReason: 'completed',
-        finalAnswer: 'Xin chào',
-        history: [],
-        toolRoundsUsed: 0,
-        doneCriteria: {
-          goal: input.userInput,
-          checklist: [input.userInput],
-          requiresNonEmptyFinalAnswer: true as const,
-          requiresToolEvidence: false,
-          requiresSubstantiveFinalAnswer: false,
-          forbidSuccessAfterToolErrors: false
-        },
-        verification: {
-          isVerified: true,
-          finalAnswerIsNonEmpty: true,
-          finalAnswerIsSubstantive: true,
-          toolEvidenceSatisfied: true,
-          noUnresolvedToolErrors: true,
-          toolMessagesCount: 0,
-          checks: []
-        },
-        turnStream: (async function* () {
-          yield { type: 'turn_started' } satisfies TurnEvent;
-          input.observer?.record(createTelemetryEvent('provider_called', 'provider_decision', {
-            turnId: 'turn-tty-live-text',
-            providerRound: 1,
-            toolRound: 0,
-            messageCount: 2,
-            promptRawChars: 42,
-            toolNames: [],
-            messageSummaries: [
-              { role: 'system', rawChars: 12, contentBlockCount: 1, messageSource: 'system' },
-              { role: 'user', rawChars: 20, contentBlockCount: 1, messageSource: 'user' }
-            ],
-            totalContentBlockCount: 2,
-            hasSystemPrompt: true,
-            promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"}]}'
-          }));
-          yield { type: 'assistant_text_delta', text: 'Xin ' } satisfies TurnEvent;
-          yield { type: 'assistant_text_delta', text: 'chào' } satisfies TurnEvent;
-          yield {
-            type: 'assistant_message_completed',
-            text: 'Xin chào'
-          } satisfies TurnEvent;
-          yield {
-            type: 'turn_completed',
-            finalAnswer: 'Xin chào',
-            stopReason: 'completed',
-            history: [],
-            toolRoundsUsed: 0,
-            doneCriteria: {
-              goal: input.userInput,
-              checklist: [input.userInput],
-              requiresNonEmptyFinalAnswer: true as const,
-              requiresToolEvidence: false,
-              requiresSubstantiveFinalAnswer: false,
-              forbidSuccessAfterToolErrors: false
-            },
-            turnCompleted: true
-          } satisfies TurnEvent;
-        })()
-      })
+        createRuntime: (runtimeOptions) => createTestRuntime(cwd, runtimeOptions.observer),
+        runTurn: async (input) => ({
+          stopReason: 'completed',
+          finalAnswer: 'Xin chào',
+          history: [],
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true as const,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
+            toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
+            toolMessagesCount: 0,
+            checks: []
+          },
+          turnStream: (async function* () {
+            yield { type: 'turn_started' } satisfies TurnEvent;
+            input.observer?.record(createTelemetryEvent('provider_called', 'provider_decision', {
+              turnId: 'turn-tty-live-text',
+              providerRound: 1,
+              toolRound: 0,
+              messageCount: 2,
+              promptRawChars: 42,
+              toolNames: [],
+              messageSummaries: [
+                { role: 'system', rawChars: 12, contentBlockCount: 1, messageSource: 'system' },
+                { role: 'user', rawChars: 20, contentBlockCount: 1, messageSource: 'user' }
+              ],
+              totalContentBlockCount: 2,
+              hasSystemPrompt: true,
+              promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"}]}'
+            }));
+            yield { type: 'assistant_text_delta', text: 'Xin ' } satisfies TurnEvent;
+            yield { type: 'assistant_text_delta', text: 'chào' } satisfies TurnEvent;
+            yield {
+              type: 'assistant_message_completed',
+              text: 'Xin chào'
+            } satisfies TurnEvent;
+            yield {
+              type: 'turn_completed',
+              finalAnswer: 'Xin chào',
+              stopReason: 'completed',
+              history: [],
+              toolRoundsUsed: 0,
+              doneCriteria: {
+                goal: input.userInput,
+                checklist: [input.userInput],
+                requiresNonEmptyFinalAnswer: true as const,
+                requiresToolEvidence: false,
+                requiresSubstantiveFinalAnswer: false,
+                forbidSuccessAfterToolErrors: false
+              },
+              turnCompleted: true
+            } satisfies TurnEvent;
+          })()
+        })
+      });
+
+      await expect(cli.run()).resolves.toBe(0);
+
+      const output = stripAnsi(renderTerminalTranscript(writes.join('')));
+      expectContainsInOrder(output, [
+        '┌────────────────────────────────────────────────────┐\n',
+        '│ ⚡QiClaw                      🤖 Model: test-model │\n',
+        '└────────────────────────────────────────────────────┘\n',
+        '✓ Responding\n',
+        'Xin chào\n',
+        'Goodbye.\n'
+      ]);
     });
-
-    await expect(cli.run()).resolves.toBe(0);
-
-    const output = stripAnsi(renderTerminalTranscript(writes.join('')));
-    expectContainsInOrder(output, [
-      '┌────────────────────────────────────────────────────┐\n',
-      '│ ⚡QiClaw                      🤖 Model: test-model │\n',
-      '└────────────────────────────────────────────────────┘\n',
-      '✓ Responding\n',
-      'Xin chào\n',
-      'Goodbye.\n'
-    ]);
   });
 
   it('keeps both streamed interactive text segments around later tool activity on TTY output', async () => {
-    const writes: string[] = [];
-    const cwd = join(tmpdir(), `qiclaw-interactive-text-tool-text-tool-tty-${Math.random().toString(36).slice(2)}`);
-    const cli = buildCli({
-      argv: ['--plain'],
-      cwd,
-      readLine: (() => {
-        const inputs = ['trace transcript please', '/exit'];
-        return async () => inputs.shift();
-      })(),
-      stdout: {
-        isTTY: true,
-        write(chunk) {
-          writes.push(String(chunk));
-          return true;
+    await withProviderEnvSnapshot(async () => {
+      delete process.env.QICLAW_TUI_ENABLED;
+
+      const writes: string[] = [];
+      const cwd = join(tmpdir(), `qiclaw-interactive-text-tool-text-tool-tty-${Math.random().toString(36).slice(2)}`);
+      const cli = buildCli({
+        cwd,
+        readLine: (() => {
+          const inputs = ['trace transcript please', '/exit'];
+          return async () => inputs.shift();
+        })(),
+        stdout: {
+          isTTY: true,
+          write(chunk) {
+            writes.push(String(chunk));
+            return true;
+          },
+          moveCursor(dx, dy) {
+            writes.push(`\u001b[${Math.abs(dy)}A`);
+            return true;
+          },
+          clearLine() {
+            writes.push('\u001b[2K');
+            return true;
+          }
+        } as Pick<NodeJS.WriteStream, 'write'> & {
+          isTTY: boolean;
+          moveCursor(dx: number, dy: number): boolean;
+          clearLine(dir: -1 | 0 | 1): boolean;
         },
-        moveCursor(dx, dy) {
-          writes.push(`\u001b[${Math.abs(dy)}A`);
-          return true;
-        },
-        clearLine() {
-          writes.push('\u001b[2K');
-          return true;
-        }
-      } as Pick<NodeJS.WriteStream, 'write'> & {
-        isTTY: boolean;
-        moveCursor(dx: number, dy: number): boolean;
-        clearLine(dir: -1 | 0 | 1): boolean;
-      },
-      createRuntime: (runtimeOptions) => createTestRuntime(cwd, runtimeOptions.observer),
-      runTurn: async (input) => ({
-        stopReason: 'completed',
-        finalAnswer: 'Alpha text\nBeta text\n',
-        history: [],
-        toolRoundsUsed: 2,
-        doneCriteria: {
-          goal: input.userInput,
-          checklist: [input.userInput],
-          requiresNonEmptyFinalAnswer: true as const,
-          requiresToolEvidence: false,
-          requiresSubstantiveFinalAnswer: false,
-          forbidSuccessAfterToolErrors: false
-        },
-        verification: {
-          isVerified: true,
-          finalAnswerIsNonEmpty: true,
-          finalAnswerIsSubstantive: true,
-          toolEvidenceSatisfied: true,
-          noUnresolvedToolErrors: true,
-          toolMessagesCount: 2,
-          checks: []
-        },
-        turnStream: (async function* () {
-          yield { type: 'turn_started' } satisfies TurnEvent;
-          input.observer?.record(createTelemetryEvent('provider_called', 'provider_decision', {
-            turnId: 'turn-tty-text-tool-text-tool',
-            providerRound: 1,
-            toolRound: 0,
-            messageCount: 2,
-            promptRawChars: 42,
-            toolNames: [],
-            messageSummaries: [
-              { role: 'system', rawChars: 12, contentBlockCount: 1, messageSource: 'system' },
-              { role: 'user', rawChars: 24, contentBlockCount: 1, messageSource: 'user' }
-            ],
-            totalContentBlockCount: 2,
-            hasSystemPrompt: true,
-            promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"}]}'
-          }));
-          yield { type: 'assistant_text_delta', text: 'Alpha text\n' } satisfies TurnEvent;
-          yield {
-            type: 'tool_call_started',
-            id: 'toolu_1',
-            name: 'file',
-            input: { action: 'read', path: 'src/alpha.ts' }
-          } satisfies TurnEvent;
-          yield {
-            type: 'tool_call_completed',
-            id: 'toolu_1',
-            name: 'file',
-            resultPreview: 'alpha result',
-            isError: false
-          } satisfies TurnEvent;
-          yield { type: 'assistant_text_delta', text: 'Beta text\n' } satisfies TurnEvent;
-          yield {
-            type: 'tool_call_started',
-            id: 'toolu_2',
-            name: 'shell',
-            input: { command: 'pwd' }
-          } satisfies TurnEvent;
-          yield {
-            type: 'tool_call_completed',
-            id: 'toolu_2',
-            name: 'shell',
-            resultPreview: 'pwd result',
-            isError: false
-          } satisfies TurnEvent;
-          yield {
-            type: 'assistant_message_completed',
-            text: 'Alpha text\nBeta text\n'
-          } satisfies TurnEvent;
-          yield {
-            type: 'turn_completed',
-            finalAnswer: 'Alpha text\nBeta text\n',
-            stopReason: 'completed',
-            history: [],
-            toolRoundsUsed: 2,
-            doneCriteria: {
-              goal: input.userInput,
-              checklist: [input.userInput],
-              requiresNonEmptyFinalAnswer: true as const,
-              requiresToolEvidence: false,
-              requiresSubstantiveFinalAnswer: false,
-              forbidSuccessAfterToolErrors: false
-            },
-            turnCompleted: true
-          } satisfies TurnEvent;
-        })()
-      })
+        createRuntime: (runtimeOptions) => createTestRuntime(cwd, runtimeOptions.observer),
+        runTurn: async (input) => ({
+          stopReason: 'completed',
+          finalAnswer: 'Alpha text\nBeta text\n',
+          history: [],
+          toolRoundsUsed: 2,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true as const,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
+            toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
+            toolMessagesCount: 2,
+            checks: []
+          },
+          turnStream: (async function* () {
+            yield { type: 'turn_started' } satisfies TurnEvent;
+            input.observer?.record(createTelemetryEvent('provider_called', 'provider_decision', {
+              turnId: 'turn-tty-text-tool-text-tool',
+              providerRound: 1,
+              toolRound: 0,
+              messageCount: 2,
+              promptRawChars: 42,
+              toolNames: [],
+              messageSummaries: [
+                { role: 'system', rawChars: 12, contentBlockCount: 1, messageSource: 'system' },
+                { role: 'user', rawChars: 24, contentBlockCount: 1, messageSource: 'user' }
+              ],
+              totalContentBlockCount: 2,
+              hasSystemPrompt: true,
+              promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"}]}'
+            }));
+            yield { type: 'assistant_text_delta', text: 'Alpha text\n' } satisfies TurnEvent;
+            yield {
+              type: 'tool_call_started',
+              id: 'toolu_1',
+              name: 'file',
+              input: { action: 'read', path: 'src/alpha.ts' }
+            } satisfies TurnEvent;
+            yield {
+              type: 'tool_call_completed',
+              id: 'toolu_1',
+              name: 'file',
+              resultPreview: 'alpha result',
+              isError: false
+            } satisfies TurnEvent;
+            yield { type: 'assistant_text_delta', text: 'Beta text\n' } satisfies TurnEvent;
+            yield {
+              type: 'tool_call_started',
+              id: 'toolu_2',
+              name: 'shell',
+              input: { command: 'pwd' }
+            } satisfies TurnEvent;
+            yield {
+              type: 'tool_call_completed',
+              id: 'toolu_2',
+              name: 'shell',
+              resultPreview: 'pwd result',
+              isError: false
+            } satisfies TurnEvent;
+            yield {
+              type: 'assistant_message_completed',
+              text: 'Alpha text\nBeta text\n'
+            } satisfies TurnEvent;
+            yield {
+              type: 'turn_completed',
+              finalAnswer: 'Alpha text\nBeta text\n',
+              stopReason: 'completed',
+              history: [],
+              toolRoundsUsed: 2,
+              doneCriteria: {
+                goal: input.userInput,
+                checklist: [input.userInput],
+                requiresNonEmptyFinalAnswer: true as const,
+                requiresToolEvidence: false,
+                requiresSubstantiveFinalAnswer: false,
+                forbidSuccessAfterToolErrors: false
+              },
+              turnCompleted: true
+            } satisfies TurnEvent;
+          })()
+        })
+      });
+
+      await expect(cli.run()).resolves.toBe(0);
+
+      const transcript = stripAnsi(renderTerminalTranscript(writes.join('')));
+      expect(transcript).toContain('  alpha result\n');
+      expect(transcript).toContain(' └─ ✔ Success\n');
+      expect(transcript).toContain('  pwd result\n');
+      expectContainsInOrder(transcript, [
+        '✓ Responding\n',
+        '──────────────────────────────────────────────────────\n\n',
+        'Alpha text\n',
+        ' ✦ file read src/alpha.ts\n',
+        'Beta text\n',
+        ' ✦ shell pwd\n',
+        'Goodbye.\n'
+      ]);
     });
-
-    await expect(cli.run()).resolves.toBe(0);
-
-    const transcript = stripAnsi(renderTerminalTranscript(writes.join('')));
-    expect(transcript).toContain('  alpha result\n');
-    expect(transcript).toContain(' └─ ✔ Success\n');
-    expect(transcript).toContain('  pwd result\n');
-    expectContainsInOrder(transcript, [
-      '✓ Responding\n',
-      '──────────────────────────────────────────────────────\n\n',
-      'Alpha text\n',
-      ' ✦ file read src/alpha.ts\n',
-      'Beta text\n',
-      ' ✦ shell pwd\n',
-      'Goodbye.\n'
-    ]);
   });
 
   it('falls back to raw ANSI line rewrites for interactive tool activity even when cursor methods exist', async () => {
-    vi.useFakeTimers();
+    await withProviderEnvSnapshot(async () => {
+      delete process.env.QICLAW_TUI_ENABLED;
+      vi.useFakeTimers();
 
-    const writes: string[] = [];
-    let moveCursorCalls = 0;
-    let clearLineCalls = 0;
-    const cwd = join(tmpdir(), `qiclaw-interactive-ansi-rewrite-${Math.random().toString(36).slice(2)}`);
-    const cli = buildCli({
-      argv: ['--plain'],
-      cwd,
-      readLine: (() => {
-        const inputs = ['run tool please', '/exit'];
-        return async () => inputs.shift();
-      })(),
-      stdout: {
-        isTTY: true,
-        write(chunk) {
-          writes.push(String(chunk));
-          return true;
+      const writes: string[] = [];
+      let moveCursorCalls = 0;
+      let clearLineCalls = 0;
+      const cwd = join(tmpdir(), `qiclaw-interactive-ansi-rewrite-${Math.random().toString(36).slice(2)}`);
+      const cli = buildCli({
+        cwd,
+        readLine: (() => {
+          const inputs = ['run tool please', '/exit'];
+          return async () => inputs.shift();
+        })(),
+        stdout: {
+          isTTY: true,
+          write(chunk) {
+            writes.push(String(chunk));
+            return true;
+          },
+          moveCursor() {
+            moveCursorCalls += 1;
+            return true;
+          },
+          clearLine() {
+            clearLineCalls += 1;
+            return true;
+          }
+        } as Pick<NodeJS.WriteStream, 'write' | 'moveCursor' | 'clearLine'> & {
+          isTTY: boolean;
         },
-        moveCursor() {
-          moveCursorCalls += 1;
-          return true;
-        },
-        clearLine() {
-          clearLineCalls += 1;
-          return true;
-        }
-      } as Pick<NodeJS.WriteStream, 'write' | 'moveCursor' | 'clearLine'> & {
-        isTTY: boolean;
-      },
-      createRuntime: (runtimeOptions) => createTestRuntime(cwd, runtimeOptions.observer),
-      runTurn: async (input) => ({
-        stopReason: 'completed',
-        finalAnswer: '',
-        history: [],
-        toolRoundsUsed: 1,
-        doneCriteria: {
-          goal: input.userInput,
-          checklist: [input.userInput],
-          requiresNonEmptyFinalAnswer: true as const,
-          requiresToolEvidence: false,
-          requiresSubstantiveFinalAnswer: false,
-          forbidSuccessAfterToolErrors: false
-        },
-        verification: {
-          isVerified: true,
-          finalAnswerIsNonEmpty: true,
-          finalAnswerIsSubstantive: true,
-          toolEvidenceSatisfied: true,
-          noUnresolvedToolErrors: true,
-          toolMessagesCount: 1,
-          checks: []
-        },
-        turnStream: (async function* () {
-          yield { type: 'turn_started' } satisfies TurnEvent;
-          input.observer?.record(createTelemetryEvent('provider_called', 'provider_decision', {
-            turnId: 'turn-ansi-rewrite',
-            providerRound: 1,
-            toolRound: 0,
-            messageCount: 2,
-            promptRawChars: 42,
-            toolNames: [],
-            messageSummaries: [
-              { role: 'system', rawChars: 12, contentBlockCount: 1, messageSource: 'system' },
-              { role: 'user', rawChars: 20, contentBlockCount: 1, messageSource: 'user' }
-            ],
-            totalContentBlockCount: 2,
-            hasSystemPrompt: true,
-            promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"}]}'
-          }));
-          input.observer?.record(createTelemetryEvent('provider_responded', 'provider_decision', {
-            turnId: 'turn-ansi-rewrite',
-            providerRound: 1,
-            toolRound: 0,
-            stopReason: 'tool_use',
-            usage: { inputTokens: 12, outputTokens: 8, totalTokens: 20 },
-            responseContentBlockCount: 1,
-            toolCallCount: 1,
-            hasTextOutput: false,
-            responseContentBlocksByType: { tool_use: 1 },
-            toolCallSummaries: [],
-            providerUsageRawRedacted: { input_tokens: 12, output_tokens: 8 },
-            providerStopDetails: { stop_reason: 'tool_use' },
-            responsePreviewRedacted: '[{"type":"tool_use"}]',
-            durationMs: 20
-          }));
-          input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
-            turnId: 'turn-ansi-rewrite',
-            providerRound: 1,
-            toolRound: 1,
-            toolName: 'shell',
-            toolCallId: 'toolu_ansi',
-            inputPreview: '{"command":"npm","args":["test"]}',
-            inputRawRedacted: { command: 'npm', args: ['test'] }
-          }));
+        createRuntime: (runtimeOptions) => createTestRuntime(cwd, runtimeOptions.observer),
+        runTurn: async (input) => ({
+          stopReason: 'completed',
+          finalAnswer: '',
+          history: [],
+          toolRoundsUsed: 1,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true as const,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
+            toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
+            toolMessagesCount: 1,
+            checks: []
+          },
+          turnStream: (async function* () {
+            yield { type: 'turn_started' } satisfies TurnEvent;
+            input.observer?.record(createTelemetryEvent('provider_called', 'provider_decision', {
+              turnId: 'turn-ansi-rewrite',
+              providerRound: 1,
+              toolRound: 0,
+              messageCount: 2,
+              promptRawChars: 42,
+              toolNames: [],
+              messageSummaries: [
+                { role: 'system', rawChars: 12, contentBlockCount: 1, messageSource: 'system' },
+                { role: 'user', rawChars: 20, contentBlockCount: 1, messageSource: 'user' }
+              ],
+              totalContentBlockCount: 2,
+              hasSystemPrompt: true,
+              promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"}]}'
+            }));
+            input.observer?.record(createTelemetryEvent('provider_responded', 'provider_decision', {
+              turnId: 'turn-ansi-rewrite',
+              providerRound: 1,
+              toolRound: 0,
+              stopReason: 'tool_use',
+              usage: { inputTokens: 12, outputTokens: 8, totalTokens: 20 },
+              responseContentBlockCount: 1,
+              toolCallCount: 1,
+              hasTextOutput: false,
+              responseContentBlocksByType: { tool_use: 1 },
+              toolCallSummaries: [],
+              providerUsageRawRedacted: { input_tokens: 12, output_tokens: 8 },
+              providerStopDetails: { stop_reason: 'tool_use' },
+              responsePreviewRedacted: '[{"type":"tool_use"}]',
+              durationMs: 20
+            }));
+            input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
+              turnId: 'turn-ansi-rewrite',
+              providerRound: 1,
+              toolRound: 1,
+              toolName: 'shell',
+              toolCallId: 'toolu_ansi',
+              inputPreview: '{"command":"npm","args":["test"]}',
+              inputRawRedacted: { command: 'npm', args: ['test'] }
+            }));
 
-          await vi.advanceTimersByTimeAsync(INTERACTIVE_PULSE_SETTLE_MS);
+            await vi.advanceTimersByTimeAsync(INTERACTIVE_PULSE_SETTLE_MS);
 
-          input.observer?.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
-            turnId: 'turn-ansi-rewrite',
-            providerRound: 1,
-            toolRound: 1,
-            toolName: 'shell',
-            toolCallId: 'toolu_ansi',
-            isError: false,
-            resultPreview: 'ok',
-            resultRawRedacted: { content: 'ok' },
-            durationMs: 5,
-            resultSizeChars: 2,
-            resultSizeBucket: 'small'
-          }));
-          yield {
-            type: 'turn_completed',
-            finalAnswer: '',
-            stopReason: 'completed',
-            history: [],
-            toolRoundsUsed: 1,
-            doneCriteria: {
-              goal: input.userInput,
-              checklist: [input.userInput],
-              requiresNonEmptyFinalAnswer: true as const,
-              requiresToolEvidence: false,
-              requiresSubstantiveFinalAnswer: false,
-              forbidSuccessAfterToolErrors: false
-            },
-            turnCompleted: true
-          } satisfies TurnEvent;
-        })()
-      })
+            input.observer?.record(createTelemetryEvent('tool_call_completed', 'tool_execution', {
+              turnId: 'turn-ansi-rewrite',
+              providerRound: 1,
+              toolRound: 1,
+              toolName: 'shell',
+              toolCallId: 'toolu_ansi',
+              isError: false,
+              resultPreview: 'ok',
+              resultRawRedacted: { content: 'ok' },
+              durationMs: 5,
+              resultSizeChars: 2,
+              resultSizeBucket: 'small'
+            }));
+            yield {
+              type: 'turn_completed',
+              finalAnswer: '',
+              stopReason: 'completed',
+              history: [],
+              toolRoundsUsed: 1,
+              doneCriteria: {
+                goal: input.userInput,
+                checklist: [input.userInput],
+                requiresNonEmptyFinalAnswer: true as const,
+                requiresToolEvidence: false,
+                requiresSubstantiveFinalAnswer: false,
+                forbidSuccessAfterToolErrors: false
+              },
+              turnCompleted: true
+            } satisfies TurnEvent;
+          })()
+        })
+      });
+
+      await expect(cli.run()).resolves.toBe(0);
+
+      const output = writes.join('');
+      expect(output).toContain('\u001b[1A\u001b[2K');
+      expect(moveCursorCalls).toBe(0);
+      expect(clearLineCalls).toBe(0);
     });
-
-    await expect(cli.run()).resolves.toBe(0);
-
-    const output = writes.join('');
-    expect(output).toContain('\u001b[1A\u001b[2K');
-    expect(moveCursorCalls).toBe(0);
-    expect(clearLineCalls).toBe(0);
   });
 
   it('shows interactive fallback failure duration when tool events include durationMs', async () => {
@@ -5005,6 +5016,23 @@ describe('buildCli', () => {
 
     await expect(cli.run()).resolves.toBe(1);
     expect(stderrWrites).toEqual(['Unknown argument: --unknown\n']);
+  });
+
+  it('returns exit code 1 and prints an error when --plain is provided', async () => {
+    const stderrWrites: string[] = [];
+    const cli = buildCli({
+      argv: ['--plain'],
+      readLine: async () => undefined,
+      stderr: {
+        write(chunk) {
+          stderrWrites.push(String(chunk));
+          return true;
+        }
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(1);
+    expect(stderrWrites).toEqual(['Unknown argument: --plain\n']);
   });
 
   it('renders prompt mode as an indented QiClaw block with the footer flush to column zero', async () => {

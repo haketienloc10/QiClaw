@@ -1,11 +1,13 @@
 import { existsSync } from 'node:fs';
 
+import type { EmbeddingGlobalMemoryStore } from './embeddingGlobalMemoryStore.js';
+import type { EmbeddingSessionStore } from './embeddingSessionStore.js';
 import type { FileSessionStore } from './fileSessionStore.js';
 import type { GlobalMemoryStore } from './globalMemoryStore.js';
 import type { SessionMemoryMeta } from './sessionMemoryTypes.js';
 
 export interface SessionMemoryMaintenanceTarget {
-  store: FileSessionStore | GlobalMemoryStore;
+  store: FileSessionStore | GlobalMemoryStore | EmbeddingSessionStore | EmbeddingGlobalMemoryStore;
   meta: Pick<SessionMemoryMeta, 'memoryPath'>;
   exists?: boolean;
   now?: string;

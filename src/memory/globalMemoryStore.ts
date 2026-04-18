@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -82,10 +83,11 @@ export class GlobalMemoryStore {
   async put(entry: SessionMemoryEntry): Promise<string> {
     const globalEntry = { ...entry, sessionId: GLOBAL_SESSION_ID };
     const markdownPath = await writeMarkdownArtifact(this.artifactPaths.directoryPath, globalEntry);
+    const sourceContentHash = await createSourceContentHash(markdownPath);
     const index = await this.readIndex();
     index.entries = [
       ...index.entries.filter((candidate) => candidate.hash !== globalEntry.hash),
-      toIndexRecord(globalEntry, markdownPath)
+      toIndexRecord(globalEntry, markdownPath, sourceContentHash)
     ];
     await this.writeIndex(index);
 
@@ -289,12 +291,17 @@ async function ensureIndexFile(memoryPath: string): Promise<void> {
   await writeFile(memoryPath, JSON.stringify({ entries: [] }, null, 2));
 }
 
-function toIndexRecord(entry: SessionMemoryEntry, markdownPath: string): GlobalMemoryIndexRecord {
+function toIndexRecord(
+  entry: SessionMemoryEntry,
+  markdownPath: string,
+  sourceContentHash: string
+): GlobalMemoryIndexRecord {
   return buildPersistedMemoryRecord({
     ...entry,
     sessionId: GLOBAL_SESSION_ID,
     tags: [...entry.tags],
-    markdownPath
+    markdownPath,
+    sourceContentHash
   });
 }
 
@@ -319,7 +326,13 @@ function isIndexRecord(value: unknown): value is GlobalMemoryIndexRecord {
     && typeof record.accessCount === 'number'
     && typeof record.importance === 'number'
     && typeof record.explicitSave === 'boolean'
-    && typeof record.markdownPath === 'string';
+    && typeof record.markdownPath === 'string'
+    && (record.sourceContentHash === undefined || typeof record.sourceContentHash === 'string');
+}
+
+async function createSourceContentHash(markdownPath: string): Promise<string> {
+  const markdownBytes = await readFile(markdownPath);
+  return createHash('sha256').update(markdownBytes).digest('hex');
 }
 
 async function writeMarkdownArtifact(baseDirectoryPath: string, entry: SessionMemoryEntry): Promise<string> {

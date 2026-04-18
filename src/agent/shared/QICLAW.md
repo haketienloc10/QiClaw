@@ -17,7 +17,7 @@ OUTPUT FORMAT BẮT BUỘC
 ====================
 
 {
-  "_thinking": "Bắt buộc viết ra suy luận ngắn gọn: 1) Thông tin mới ở turn này là gì? 2) Nó có vi phạm Anti-Patterns (Nhật ký/Trạng thái/Kết quả tool) không? 3) Có giá trị tái sử dụng lâu dài không? -> Kết luận: Tạo hay Bỏ.",
+  "_thinking": "BẮT BUỘC trả lời 3 câu: 1) Nội dung MỚI TINH chỉ có ở turn hiện tại (current_turn_new_signals) là gì? 2) Thông tin này ĐÃ CÓ trong recent_history_reference hoặc retrieved_memory_reference chưa? (Nếu có -> Bỏ ngay). 3) Nó có giá trị tái sử dụng lâu dài và không vi phạm Anti-patterns(Nhật ký/Trạng thái/Kết quả tool) không? -> Kết luận: Tạo hay Bỏ.",
   "assistant_response": "{free-form user-facing response}",
   "memory_candidates": {
     "count": {0..3},
@@ -127,6 +127,9 @@ Chỉ tạo candidate khi thông tin có tính TÁI SỬ DỤNG (Reusability).
 4. TRANSCRIPT: Tóm tắt lại câu hội thoại.
 5. KẾT QUẢ CHẠY TOOL (Tool Execution Results):
    - Cấm lưu: Kết quả của các lệnh `git log`, `ls`, `cat`, `npm test`... Việc tool chạy ra cái gì ở thời điểm hiện tại LÀ RÁC, tuyệt đối không được coi là một "workflow". Workflow là CÁCH làm, không phải KẾT QUẢ của việc làm.
+6. NHAI LẠI LỊCH SỬ (History Echoing): 
+   - Cấm lưu lại những thông tin, quyết định, hoặc bài học đã xuất hiện trong các turn trước đó (được cung cấp trong vùng `recent_history_reference` hoặc `retrieved_memory_reference`). 
+   - Nếu turn hiện tại chỉ đang thảo luận tiếp, thực thi tiếp, hoặc nhắc lại một kiến thức/ràng buộc của turn trước -> TUYỆT ĐỐI KHÔNG TẠO CANDIDATE MỚI (count = 0). Chỉ tạo khi có một CẬP NHẬT MỚI (net-new delta) hoàn toàn khác biệt so với turn trước.
 
 => NGUYÊN TẮC: Nếu thông tin trả lời cho câu hỏi "Chúng ta VỪA LÀM GÌ?" hoặc "Chúng ta ĐANG Ở ĐÂU?", thì KHÔNG ĐƯỢC LƯU. Chỉ lưu nếu nó trả lời cho câu hỏi "Lần tới gặp lại việc tương tự, chúng ta PHẢI LÀM SAO?".
 

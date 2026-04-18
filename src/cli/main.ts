@@ -407,7 +407,14 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
                 checkpointState: sessionMemoryState,
                 debugRecallInputs,
                 memoryConfig,
-                now: new Date().toISOString()
+                now: new Date().toISOString(),
+                onBackendFallback(event) {
+                  recordInteractiveMemoryFallback(cliObserver.observer, {
+                    sessionId,
+                    kind: 'prepare',
+                    message: `embedding ${event.scope} ${event.phase} failed; falling back to lexical: ${event.message}`
+                  });
+                }
               });
 
               checkpointStore.save({
@@ -452,7 +459,14 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
                 historySummary: historyContext.historySummary,
                 checkpointState: sessionMemoryState,
                 debugRecallInputs,
-                memoryConfig
+                memoryConfig,
+                onBackendFallback(event) {
+                  recordInteractiveMemoryFallback(cliObserver.observer, {
+                    sessionId,
+                    kind: 'prepare',
+                    message: `embedding ${event.scope} ${event.phase} failed; falling back to lexical: ${event.message}`
+                  });
+                }
               });
             } catch (error) {
               preparedMemory = undefined;

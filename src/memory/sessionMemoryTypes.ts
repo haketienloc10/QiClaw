@@ -24,6 +24,7 @@ export interface PersistedSessionMemoryRecord extends SessionMemoryEntry {
   invalidatedAt?: string;
   status: SessionMemoryStatus;
   markdownPath: string;
+  sourceContentHash?: string;
 }
 
 export interface BuildPersistedMemoryRecordInput extends SessionMemoryEntry {
@@ -31,6 +32,7 @@ export interface BuildPersistedMemoryRecordInput extends SessionMemoryEntry {
   invalidatedAt?: string;
   status?: SessionMemoryStatus;
   markdownPath: string;
+  sourceContentHash?: string;
 }
 
 export interface SessionMemoryAccessStat {

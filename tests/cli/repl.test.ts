@@ -6245,6 +6245,134 @@ describe('buildCli', () => {
       })
     ]);
   });
+
+  it('logs prepare fallback telemetry when embedding recall falls back to lexical', async () => {
+    await withProviderEnvSnapshot(async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-04-17T12:00:00.000Z'));
+
+      const tempDir = await mkdtemp(join(tmpdir(), 'qiclaw-cli-memory-fallback-embedding-'));
+      tempDirs.push(tempDir);
+      const debugLogPath = join(tempDir, 'debug', 'telemetry.jsonl');
+      const rotatedLogPath = join(tempDir, 'debug', 'telemetry-2026-04-17.jsonl');
+
+      const prepareSessionMemory = vi.fn(async (input: { onBackendFallback?: (event: {
+        phase: string;
+        scope: 'session' | 'global';
+        backend: 'embedding';
+        fallback: 'lexical';
+        message: string;
+      }) => void }) => {
+        input.onBackendFallback?.({
+          phase: 'recall',
+          scope: 'session',
+          backend: 'embedding',
+          fallback: 'lexical',
+          message: 'ollama offline'
+        });
+
+        return {
+          memoryText: '',
+          store: {} as never,
+          globalStore: undefined,
+          recalled: [],
+          checkpointState: {
+            storeSessionId: 'session-test-1',
+            engine: 'file-session-memory-store',
+            version: 1,
+            memoryPath: '/tmp/memory.json',
+            metaPath: '/tmp/meta.json',
+            totalEntries: 0,
+            lastCompactedAt: null
+          }
+        };
+      });
+
+      try {
+        const cli = buildCli({
+          argv: ['--debug-log', debugLogPath],
+          cwd: tempDir,
+          createSessionId: () => 'session-test-1',
+          readLine: (() => {
+            const inputs = ['embedding query', '/exit'];
+            return async () => inputs.shift();
+          })(),
+          stdout: { write() { return true; } },
+          createRuntime: (runtimeOptions) => ({
+            provider: createNoopTestProvider(),
+            availableTools: [],
+            cwd: tempDir,
+            observer: runtimeOptions.observer ?? createNoopObserver(),
+            resolvedPackage: defaultResolvedPackage,
+            systemPrompt: 'Test prompt',
+            maxToolRounds: 3
+          }),
+          prepareSessionMemory,
+          captureTurnMemory: async () => ({
+            saved: false,
+            checkpointState: {
+              storeSessionId: 'session-test-1',
+              engine: 'file-session-memory-store',
+              version: 1,
+              memoryPath: '/tmp/memory.json',
+              metaPath: '/tmp/meta.json',
+              totalEntries: 0,
+              lastCompactedAt: null
+            }
+          }),
+          runTurn: async (input) => ({
+            stopReason: 'completed',
+            finalAnswer: `answer: ${input.userInput}`,
+            history: [
+              { role: 'user', content: input.userInput },
+              { role: 'assistant', content: `answer: ${input.userInput}` }
+            ],
+            historySummary: `Summary after ${input.userInput}`,
+            toolRoundsUsed: 0,
+            doneCriteria: {
+              goal: input.userInput,
+              checklist: [input.userInput],
+              requiresNonEmptyFinalAnswer: true as const,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            },
+            verification: {
+              isVerified: true,
+              finalAnswerIsNonEmpty: true,
+              finalAnswerIsSubstantive: true,
+              toolEvidenceSatisfied: true,
+              noUnresolvedToolErrors: true,
+              toolMessagesCount: 0,
+              checks: []
+            }
+          })
+        });
+
+        await expect(cli.run()).resolves.toBe(0);
+        expect(prepareSessionMemory).toHaveBeenCalledWith(expect.objectContaining({
+          onBackendFallback: expect.any(Function)
+        }));
+
+        const fallbackEvents = (await readFile(rotatedLogPath, 'utf8'))
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line))
+          .filter((event) => event.type === 'interactive_memory_fallback');
+
+        expect(fallbackEvents).toContainEqual(expect.objectContaining({
+          type: 'interactive_memory_fallback',
+          stage: 'input_received',
+          data: expect.objectContaining({
+            phase: 'prepare',
+            message: expect.stringContaining('embedding')
+          })
+        }));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });
 
 describe('createJsonLineLogger', () => {

@@ -2,8 +2,11 @@ import { existsSync } from 'node:fs';
 
 import { allocateContextBudget } from '../context/budgetManager.js';
 import type { Message } from '../core/types.js';
+import { EmbeddingGlobalMemoryStore } from './embeddingGlobalMemoryStore.js';
+import { EmbeddingSessionStore } from './embeddingSessionStore.js';
 import { FileSessionStore } from './fileSessionStore.js';
 import { GlobalMemoryStore } from './globalMemoryStore.js';
+import { createGlobalMemoryStore, createSessionMemoryStore } from './memoryStoreFactory.js';
 import { ensureSessionStoreWriteReady, verifySessionStoreOnOpen } from './sessionMemoryMaintenance.js';
 import { scoreSessionMemoryCandidate } from './decay.js';
 import { assignMemoryFidelity } from './fidelity.js';
@@ -21,6 +24,7 @@ import {
 
 const DEFAULT_MEMORY_CONTEXT_TOTAL_CHARS = 4_000;
 const DEFAULT_RECALL_LIMIT = 5;
+const MAX_RECALL_QUERY_TOKENS = 1024;
 
 export interface SessionMemoryCheckpointState extends SessionMemoryCheckpointMetadata {}
 
@@ -86,6 +90,14 @@ export interface RecallInputsDebugRecord {
   finalResults: RecallDebugHit[];
 }
 
+export interface BackendFallbackEvent {
+  phase: 'open' | 'recall' | 'put' | 'seal' | 'touch' | 'supersede' | 'invalidate';
+  scope: 'session' | 'global';
+  backend: 'embedding';
+  fallback: 'lexical';
+  message: string;
+}
+
 export interface PrepareInteractiveSessionMemoryInput {
   cwd: string;
   sessionId: string;
@@ -97,12 +109,16 @@ export interface PrepareInteractiveSessionMemoryInput {
   now?: string;
   debugRecallInputs?: (record: RecallInputsDebugRecord) => void;
   memoryConfig?: MemoryEmbeddingConfig;
+  onBackendFallback?: (event: BackendFallbackEvent) => void;
 }
+
+type SessionStoreLike = FileSessionStore | EmbeddingSessionStore;
+type GlobalStoreLike = GlobalMemoryStore | EmbeddingGlobalMemoryStore;
 
 export interface PrepareInteractiveSessionMemoryResult {
   memoryText: string;
-  store: FileSessionStore;
-  globalStore?: GlobalMemoryStore;
+  store: SessionStoreLike;
+  globalStore?: GlobalStoreLike;
   recalled: SessionMemoryCandidate[];
   checkpointState: SessionMemoryCheckpointState;
 }
@@ -117,6 +133,7 @@ export interface InspectInteractiveRecallInput {
   now?: string;
   debugRecallInputs?: (record: RecallInputsDebugRecord) => void;
   memoryConfig?: MemoryEmbeddingConfig;
+  onBackendFallback?: (event: BackendFallbackEvent) => void;
 }
 
 export interface InspectInteractiveRecallResult {
@@ -125,7 +142,7 @@ export interface InspectInteractiveRecallResult {
 }
 
 export interface CaptureInteractiveTurnMemoryInput {
-  store: FileSessionStore;
+  store: SessionStoreLike;
   sessionId: string;
   userInput: string;
   finalAnswer: string;
@@ -134,6 +151,7 @@ export interface CaptureInteractiveTurnMemoryInput {
   sourceTurnId?: string;
   now?: string;
   memoryConfig?: MemoryEmbeddingConfig;
+  onBackendFallback?: (event: BackendFallbackEvent) => void;
 }
 
 export interface CaptureInteractiveTurnMemoryResult {
@@ -145,8 +163,8 @@ export interface CaptureInteractiveTurnMemoryResult {
 export async function prepareInteractiveSessionMemory(
   input: PrepareInteractiveSessionMemoryInput
 ): Promise<PrepareInteractiveSessionMemoryResult> {
-  const store = new FileSessionStore({ cwd: input.cwd, sessionId: input.sessionId, memoryConfig: input.memoryConfig });
-  const globalStore = new GlobalMemoryStore({ memoryConfig: input.memoryConfig });
+  const store = createSessionMemoryStore({ cwd: input.cwd, sessionId: input.sessionId, memoryConfig: input.memoryConfig });
+  const globalStore = createGlobalMemoryStore({ memoryConfig: input.memoryConfig });
   const memoryPath = store.paths().memoryPath;
   const hadExistingStore = Boolean(input.checkpointState?.memoryPath) || existsSync(memoryPath);
 
@@ -173,13 +191,16 @@ export async function prepareInteractiveSessionMemory(
   const candidates = await recallInteractiveCandidates({
     store,
     globalStore,
+    cwd: input.cwd,
+    memoryConfig: input.memoryConfig,
     sessionId: input.sessionId,
     userInput: input.userInput,
     historySummary: input.historySummary,
     latestSummaryText: input.checkpointState?.latestSummaryText,
     recallLimit,
     now: input.now,
-    debugRecallInputs: input.debugRecallInputs
+    debugRecallInputs: input.debugRecallInputs,
+    onBackendFallback: input.onBackendFallback
   });
   const allocation = allocateContextBudget({ total: Math.max(0, Math.floor(input.totalBudgetChars ?? DEFAULT_MEMORY_CONTEXT_TOTAL_CHARS)) });
   const recall = recallSessionMemories({
@@ -485,8 +506,8 @@ function renderMemorySections(hot: string[], warm: string[], faded: string[], bu
 export async function inspectInteractiveRecall(
   input: InspectInteractiveRecallInput
 ): Promise<InspectInteractiveRecallResult> {
-  const store = new FileSessionStore({ cwd: input.cwd, sessionId: input.sessionId, memoryConfig: input.memoryConfig });
-  const globalStore = new GlobalMemoryStore({ memoryConfig: input.memoryConfig });
+  const store = createSessionMemoryStore({ cwd: input.cwd, sessionId: input.sessionId, memoryConfig: input.memoryConfig });
+  const globalStore = createGlobalMemoryStore({ memoryConfig: input.memoryConfig });
 
   await store.open();
   await globalStore.open();
@@ -494,13 +515,16 @@ export async function inspectInteractiveRecall(
   const recalled = await recallInteractiveCandidates({
     store,
     globalStore,
+    cwd: input.cwd,
+    memoryConfig: input.memoryConfig,
     sessionId: input.sessionId,
     userInput: input.userInput,
     historySummary: input.historySummary,
     latestSummaryText: input.checkpointState?.latestSummaryText,
     recallLimit: Math.max(1, input.recallLimit ?? DEFAULT_RECALL_LIMIT),
     now: input.now,
-    debugRecallInputs: input.debugRecallInputs
+    debugRecallInputs: input.debugRecallInputs,
+    onBackendFallback: input.onBackendFallback
   });
 
   return {
@@ -522,8 +546,10 @@ function renderInteractiveRecallInspection(query: string, recalled: SessionMemor
 }
 
 async function recallInteractiveCandidates(input: {
-  store: FileSessionStore;
-  globalStore: GlobalMemoryStore;
+  store: SessionStoreLike;
+  globalStore: GlobalStoreLike;
+  cwd: string;
+  memoryConfig?: MemoryEmbeddingConfig;
   sessionId: string;
   userInput: string;
   historySummary?: string;
@@ -531,7 +557,34 @@ async function recallInteractiveCandidates(input: {
   recallLimit: number;
   now?: string;
   debugRecallInputs?: (record: RecallInputsDebugRecord) => void;
+  onBackendFallback?: (event: BackendFallbackEvent) => void;
 }): Promise<SessionMemoryCandidate[]> {
+  if (countRecallQueryTokens(input.userInput) > MAX_RECALL_QUERY_TOKENS) {
+    input.debugRecallInputs?.({
+      type: 'memory_recall_inputs',
+      timestamp: input.now ?? new Date().toISOString(),
+      sessionId: input.sessionId,
+      userInput: input.userInput,
+      historySummary: input.historySummary,
+      latestSummaryText: input.latestSummaryText,
+      queries: [],
+      queryCount: 0,
+      userInputLength: input.userInput.length,
+      historySummaryLength: input.historySummary?.length ?? 0,
+      latestSummaryTextLength: input.latestSummaryText?.length ?? 0,
+      queryOverview: [],
+      queryResults: [],
+      finalOverview: {
+        finalResultCount: 0,
+        sessionFinalCount: 0,
+        globalFinalCount: 0
+      },
+      finalResults: []
+    });
+
+    return [];
+  }
+
   const queryEntries = [
     { source: 'userInput' as const, query: input.userInput },
     { source: 'historySummary' as const, query: input.historySummary },
@@ -542,10 +595,43 @@ async function recallInteractiveCandidates(input: {
   const deduped = new Map<string, SessionMemoryCandidate>();
 
   for (const entry of queryEntries) {
-    const [sessionHits, globalHits] = await Promise.all([
-      input.store.recall(entry.query, { k: input.recallLimit }),
-      input.globalStore.recall(entry.query, { k: input.recallLimit })
-    ]);
+    const sessionHitsPromise = input.store.recall(entry.query, { k: input.recallLimit }).catch(async (error) => {
+      if (!input.memoryConfig || !(input.store instanceof EmbeddingSessionStore)) {
+        throw error;
+      }
+
+      input.onBackendFallback?.({
+        phase: 'recall',
+        scope: 'session',
+        backend: 'embedding',
+        fallback: 'lexical',
+        message: String(error instanceof Error ? error.message : error)
+      });
+
+      const lexicalStore = new FileSessionStore({ cwd: input.cwd, sessionId: input.sessionId });
+      await lexicalStore.open();
+      return lexicalStore.recall(entry.query, { k: input.recallLimit });
+    });
+
+    const globalHitsPromise = input.globalStore.recall(entry.query, { k: input.recallLimit }).catch(async (error) => {
+      if (!input.memoryConfig || !(input.globalStore instanceof EmbeddingGlobalMemoryStore)) {
+        throw error;
+      }
+
+      input.onBackendFallback?.({
+        phase: 'recall',
+        scope: 'global',
+        backend: 'embedding',
+        fallback: 'lexical',
+        message: String(error instanceof Error ? error.message : error)
+      });
+
+      const lexicalGlobalStore = new GlobalMemoryStore();
+      await lexicalGlobalStore.open();
+      return lexicalGlobalStore.recall(entry.query, { k: input.recallLimit });
+    });
+
+    const [sessionHits, globalHits] = await Promise.all([sessionHitsPromise, globalHitsPromise]);
 
     queryResults.push({
       source: entry.source,
@@ -646,6 +732,10 @@ function toRecallDebugHit(candidate: SessionMemoryCandidate): RecallDebugHit {
 
 function normalizeMemoryText(value: string): string {
   return value.replace(/\s+/gu, ' ').trim().toLowerCase();
+}
+
+function countRecallQueryTokens(value: string): number {
+  return value.trim().split(/\s+/u).filter(Boolean).length;
 }
 
 function buildPendingMarkdownPath(directoryPath: string, entry: SessionMemoryEntry): string {

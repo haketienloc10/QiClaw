@@ -10,6 +10,8 @@ import * as sessionMemoryMaintenance from '../../src/memory/sessionMemoryMainten
 import * as decay from '../../src/memory/decay.js';
 import { FileSessionStore } from '../../src/memory/fileSessionStore.js';
 import { GlobalMemoryStore } from '../../src/memory/globalMemoryStore.js';
+import { EmbeddingGlobalMemoryStore } from '../../src/memory/embeddingGlobalMemoryStore.js';
+import { EmbeddingSessionStore } from '../../src/memory/embeddingSessionStore.js';
 import type { SessionMemoryCandidate } from '../../src/memory/sessionMemoryTypes.js';
 
 function createCandidate(overrides: Partial<SessionMemoryCandidate> = {}): SessionMemoryCandidate {
@@ -551,9 +553,9 @@ describe('captureInteractiveTurnMemory', () => {
 
 describe('prepareInteractiveSessionMemory', () => {
   it('passes the memory embedding config into session and global store constructors during prepare', async () => {
-    const open = vi.spyOn(FileSessionStore.prototype, 'open').mockResolvedValue(undefined);
-    const globalOpen = vi.spyOn(GlobalMemoryStore.prototype, 'open').mockResolvedValue(undefined);
-    const readMeta = vi.spyOn(FileSessionStore.prototype, 'readMeta').mockResolvedValue({
+    const open = vi.spyOn(EmbeddingSessionStore.prototype, 'open').mockResolvedValue(undefined);
+    const globalOpen = vi.spyOn(EmbeddingGlobalMemoryStore.prototype, 'open').mockResolvedValue(undefined);
+    const readMeta = vi.spyOn(EmbeddingSessionStore.prototype, 'readMeta').mockResolvedValue({
       version: 1,
       engine: 'file-session-memory-store',
       sessionId: 'session_1',
@@ -566,7 +568,7 @@ describe('prepareInteractiveSessionMemory', () => {
       lastSealedAt: null,
       accessStatsByHash: {}
     });
-    const globalReadMeta = vi.spyOn(GlobalMemoryStore.prototype, 'readMeta').mockResolvedValue({
+    const globalReadMeta = vi.spyOn(EmbeddingGlobalMemoryStore.prototype, 'readMeta').mockResolvedValue({
       version: 1,
       engine: 'file-global-memory-store',
       sessionId: 'user-global',
@@ -579,10 +581,10 @@ describe('prepareInteractiveSessionMemory', () => {
       lastSealedAt: null,
       accessStatsByHash: {}
     });
-    const recall = vi.spyOn(FileSessionStore.prototype, 'recall').mockResolvedValue([]);
-    const globalRecall = vi.spyOn(GlobalMemoryStore.prototype, 'recall').mockResolvedValue([]);
-    const touchByHashes = vi.spyOn(FileSessionStore.prototype, 'touchByHashes').mockResolvedValue([]);
-    const globalTouchByHashes = vi.spyOn(GlobalMemoryStore.prototype, 'touchByHashes').mockResolvedValue([]);
+    const recall = vi.spyOn(EmbeddingSessionStore.prototype, 'recall').mockResolvedValue([]);
+    const globalRecall = vi.spyOn(EmbeddingGlobalMemoryStore.prototype, 'recall').mockResolvedValue([]);
+    const touchByHashes = vi.spyOn(EmbeddingSessionStore.prototype, 'touchByHashes').mockResolvedValue([]);
+    const globalTouchByHashes = vi.spyOn(EmbeddingGlobalMemoryStore.prototype, 'touchByHashes').mockResolvedValue([]);
     const verifyOpen = vi.spyOn(sessionMemoryMaintenance, 'verifySessionStoreOnOpen').mockResolvedValue({ ok: true, verified: false });
 
     try {
@@ -1194,6 +1196,100 @@ describe('prepareInteractiveSessionMemory', () => {
 });
 
 describe('inspectInteractiveRecall', () => {
+  it('skips recall entirely when the user input exceeds the recall context threshold', async () => {
+    const sessionRecall = vi.spyOn(FileSessionStore.prototype, 'recall').mockResolvedValue([]);
+    const globalRecall = vi.spyOn(GlobalMemoryStore.prototype, 'recall').mockResolvedValue([]);
+    const sessionOpen = vi.spyOn(FileSessionStore.prototype, 'open').mockResolvedValue(undefined);
+    const globalOpen = vi.spyOn(GlobalMemoryStore.prototype, 'open').mockResolvedValue(undefined);
+    const longInput = Array.from({ length: 1025 }, (_, index) => `token-${index + 1}`).join(' ');
+
+    try {
+      const result = await inspectInteractiveRecall({
+        cwd: '/tmp/session-memory-engine-inspect',
+        sessionId: 'session_1',
+        userInput: longInput,
+        historySummary: 'deploy summary',
+        recallLimit: 5,
+        now: '2026-04-17T12:00:00.000Z'
+      });
+
+      expect(result.recalled).toEqual([]);
+      expect(result.renderedText).toBe(`Query: ${longInput}\nNo recalled memories.`);
+      expect(sessionRecall).not.toHaveBeenCalled();
+      expect(globalRecall).not.toHaveBeenCalled();
+    } finally {
+      sessionRecall.mockRestore();
+      globalRecall.mockRestore();
+      sessionOpen.mockRestore();
+      globalOpen.mockRestore();
+    }
+  });
+
+  it('falls back to lexical session recall when the embedding session store fails', async () => {
+    const embeddingRecall = vi.spyOn(EmbeddingSessionStore.prototype, 'recall').mockRejectedValue(new Error('ollama offline'));
+    const embeddingOpen = vi.spyOn(EmbeddingSessionStore.prototype, 'open').mockResolvedValue(undefined);
+    const lexicalOpen = vi.spyOn(FileSessionStore.prototype, 'open').mockResolvedValue(undefined);
+    const lexicalReadMeta = vi.spyOn(FileSessionStore.prototype, 'readMeta').mockResolvedValue({
+      version: 1,
+      engine: 'file-session-memory-store',
+      sessionId: 'session_1',
+      memoryPath: '/tmp/memory.json',
+      metaPath: '/tmp/meta.json',
+      totalEntries: 0,
+      lastCompactedAt: null,
+      lastVerifiedAt: null,
+      lastDoctorAt: null,
+      lastSealedAt: null,
+      accessStatsByHash: {}
+    });
+    const globalOpen = vi.spyOn(EmbeddingGlobalMemoryStore.prototype, 'open').mockResolvedValue(undefined);
+    const lexicalRecall = vi.spyOn(FileSessionStore.prototype, 'recall').mockResolvedValueOnce([
+      createCandidate({
+        hash: 'lexical-hit-1',
+        summaryText: 'Deployment preference',
+        essenceText: 'Use deployment checklist first.',
+        retrievalScore: 0.9,
+        importance: 0.8,
+        explicitSave: true
+      })
+    ]).mockResolvedValueOnce([]);
+    const globalRecall = vi.spyOn(EmbeddingGlobalMemoryStore.prototype, 'recall').mockResolvedValue([]);
+    const onBackendFallback = vi.fn();
+
+    try {
+      const result = await inspectInteractiveRecall({
+        cwd: '/tmp/session-memory-engine-inspect',
+        sessionId: 'session_1',
+        userInput: 'deploy memory',
+        historySummary: 'deploy summary',
+        recallLimit: 5,
+        now: '2026-04-17T12:00:00.000Z',
+        memoryConfig: {
+          provider: 'ollama',
+          model: 'nomic-embed-text',
+          baseUrl: 'http://localhost:11434'
+        },
+        onBackendFallback
+      });
+
+      expect(result.recalled.map((candidate) => candidate.hash)).toEqual(['lexical-hit-1']);
+      expect(onBackendFallback).toHaveBeenCalledWith(expect.objectContaining({
+        phase: 'recall',
+        scope: 'session',
+        backend: 'embedding',
+        fallback: 'lexical'
+      }));
+    } finally {
+      embeddingRecall.mockRestore();
+      embeddingOpen.mockRestore();
+      lexicalOpen.mockRestore();
+      lexicalReadMeta.mockRestore();
+      globalOpen.mockRestore();
+      lexicalRecall.mockRestore();
+      globalRecall.mockRestore();
+    }
+  });
+
   it('returns recalled candidates and renders inspection text without packing into prompt memory', async () => {
     const open = vi.spyOn(FileSessionStore.prototype, 'open').mockResolvedValue(undefined);
     const globalOpen = vi.spyOn(GlobalMemoryStore.prototype, 'open').mockResolvedValue(undefined);
@@ -1255,7 +1351,7 @@ describe('inspectInteractiveRecall', () => {
         now: '2026-04-17T12:00:00.000Z'
       });
 
-      expect(result.recalled.map((candidate) => candidate.hash)).toEqual(['session-hit-1', 'global-hit-1']);
+      expect(result.recalled.map((candidate) => candidate.hash).sort()).toEqual(['global-hit-1', 'session-hit-1']);
       expect(result.renderedText).toContain('deploy memory');
       expect(result.renderedText).toContain('Deployment preference');
       expect(result.renderedText).toContain('Deploy incident note');

@@ -1,11 +1,15 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { EmbeddingGlobalMemoryStore } from '../../src/memory/embeddingGlobalMemoryStore.js';
+import { EmbeddingSessionStore } from '../../src/memory/embeddingSessionStore.js';
 import { GlobalMemoryStore } from '../../src/memory/globalMemoryStore.js';
 import { FileSessionStore } from '../../src/memory/fileSessionStore.js';
+import { resetEmbeddingCache } from '../../src/memory/ollamaEmbeddingClient.js';
 import type { SessionMemoryEntry } from '../../src/memory/sessionMemoryTypes.js';
 
 const tempDirs: string[] = [];
@@ -31,6 +35,8 @@ function createEntry(overrides: Partial<SessionMemoryEntry> = {}): SessionMemory
 }
 
 afterEach(async () => {
+  vi.unstubAllGlobals();
+  resetEmbeddingCache();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -208,6 +214,36 @@ describe('FileSessionStore', () => {
     const markdown = await readFile(markdownPath, 'utf8');
     expect(markdown).toContain('# Use concise Vietnamese.');
     expect(markdown).toContain('User prefers concise Vietnamese responses in this session.');
+
+    const index = JSON.parse(await readFile(store.paths().memoryPath, 'utf8')) as {
+      entries: Array<Record<string, unknown>>;
+    };
+    expect(index.entries[0]?.sourceContentHash).toEqual(expect.any(String));
+  });
+
+  it('stores the sha256 of the session markdown artifact bytes in the index record', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'file-session-store-'));
+    tempDirs.push(tempDir);
+
+    const store = new FileSessionStore({
+      cwd: tempDir,
+      sessionId: 'session_hash_bytes'
+    });
+
+    await store.open();
+    await store.put(createEntry({
+      sessionId: 'session_hash_bytes',
+      hash: 'markdown123456'
+    }));
+
+    const index = JSON.parse(await readFile(store.paths().memoryPath, 'utf8')) as {
+      entries: Array<{ hash: string; markdownPath: string; sourceContentHash?: string }>;
+    };
+    const record = index.entries.find((entry) => entry.hash === 'markdown123456');
+    const markdownBytes = await readFile(String(record?.markdownPath));
+    const expectedHash = createHash('sha256').update(markdownBytes).digest('hex');
+
+    expect(record?.sourceContentHash).toBe(expectedHash);
   });
 
   it('recalls by hash prefix only within the current session and updates touch metadata', async () => {
@@ -301,6 +337,82 @@ describe('FileSessionStore', () => {
       uri: 'mv2://sessions/session_ollama/memory/abc123def456',
       track: 'session:session_ollama'
     }));
+  });
+
+  it('reads legacy session index records that do not include sourceContentHash', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'file-session-store-'));
+    tempDirs.push(tempDir);
+
+    const store = new FileSessionStore({
+      cwd: tempDir,
+      sessionId: 'session_legacy'
+    });
+
+    await store.open();
+    await writeFile(store.paths().memoryPath, JSON.stringify({
+      entries: [
+        {
+          hash: 'legacy123456',
+          sessionId: 'session_legacy',
+          kind: 'fact',
+          fullText: 'Legacy memory text.',
+          summaryText: 'Legacy memory.',
+          essenceText: 'Legacy essence.',
+          tags: ['legacy'],
+          source: 'turn-legacy',
+          createdAt: '2026-04-05T10:00:00.000Z',
+          lastAccessed: '2026-04-05T10:00:00.000Z',
+          accessCount: 0,
+          importance: 0.8,
+          explicitSave: true,
+          markdownPath: '/tmp/legacy.md',
+          updatedAt: '2026-04-05T10:00:00.000Z',
+          status: 'active'
+        }
+      ]
+    }, null, 2));
+
+    const recalled = await store.recall('legacy', { k: 5 });
+    expect(recalled).toEqual(expect.arrayContaining([
+      expect.objectContaining({ hash: 'legacy123456' })
+    ]));
+  });
+
+  it('rejects session index records when sourceContentHash is present but not a string', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'file-session-store-'));
+    tempDirs.push(tempDir);
+
+    const store = new FileSessionStore({
+      cwd: tempDir,
+      sessionId: 'session_invalid_hash'
+    });
+
+    await store.open();
+    await writeFile(store.paths().memoryPath, JSON.stringify({
+      entries: [
+        {
+          hash: 'invalidhash12',
+          sessionId: 'session_invalid_hash',
+          kind: 'fact',
+          fullText: 'Invalid hash type memory text.',
+          summaryText: 'Invalid hash type memory.',
+          essenceText: 'Invalid hash type essence.',
+          tags: ['invalid'],
+          source: 'turn-invalid',
+          createdAt: '2026-04-05T10:00:00.000Z',
+          lastAccessed: '2026-04-05T10:00:00.000Z',
+          accessCount: 0,
+          importance: 0.8,
+          explicitSave: true,
+          markdownPath: '/tmp/invalid.md',
+          sourceContentHash: 123,
+          updatedAt: '2026-04-05T10:00:00.000Z',
+          status: 'active'
+        }
+      ]
+    }, null, 2));
+
+    await expect(store.recall('invalid', { k: 5 })).resolves.toEqual([]);
   });
 
   it('recalls safely when recall query contains unmatched parentheses', async () => {
@@ -414,6 +526,372 @@ describe('FileSessionStore', () => {
   });
 });
 
+describe('EmbeddingSessionStore', () => {
+  it('requests embeddings from local Ollama and recalls by vector similarity', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'embedding-session-store-'));
+    tempDirs.push(tempDir);
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({
+          model: 'bge-m3',
+          embeddings: [[1, 0]]
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({
+          model: 'bge-m3',
+          embeddings: [[0, 1]]
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({
+          model: 'bge-m3',
+          embeddings: [[1, 0]]
+        })
+      });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const store = new EmbeddingSessionStore({
+      cwd: tempDir,
+      sessionId: 'session_embed',
+      memoryConfig: {
+        provider: 'ollama',
+        model: 'bge-m3',
+        baseUrl: 'http://localhost:11434'
+      }
+    });
+
+    await store.open();
+    await store.put(createEntry({
+      sessionId: 'session_embed',
+      hash: 'embed1111111',
+      summaryText: 'Deploy checklist first.',
+      essenceText: 'Deployment procedure.',
+      fullText: 'Always run the deployment checklist first.'
+    }));
+    await store.put(createEntry({
+      sessionId: 'session_embed',
+      hash: 'embed2222222',
+      summaryText: 'Answer in Vietnamese.',
+      essenceText: 'Language preference.',
+      fullText: 'Always answer in Vietnamese by default.'
+    }));
+
+    const recalled = await store.recall('deploy checklist', { k: 2 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('http://localhost:11434/api/embed');
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      model: 'bge-m3',
+      input: 'Deploy checklist first. Deployment procedure. Always run the deployment checklist first.'
+    });
+    expect(recalled).toHaveLength(1);
+    expect(recalled[0]).toEqual(expect.objectContaining({
+      hash: 'embed1111111',
+      sessionId: 'session_embed'
+    }));
+    expect(recalled[0]!.retrievalScore).toBeGreaterThan(0);
+  });
+
+  it('drops zero-score embedding matches instead of returning unrelated memories', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'embedding-session-store-zero-score-'));
+    tempDirs.push(tempDir);
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({ model: 'bge-m3', embeddings: [[1, 0]] })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({ model: 'bge-m3', embeddings: [[0, 1]] })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({ model: 'bge-m3', embeddings: [[0, 0]] })
+      });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const store = new EmbeddingSessionStore({
+      cwd: tempDir,
+      sessionId: 'session_embed_zero',
+      memoryConfig: {
+        provider: 'ollama',
+        model: 'bge-m3',
+        baseUrl: 'http://localhost:11434'
+      }
+    });
+
+    await store.open();
+    await store.put(createEntry({
+      sessionId: 'session_embed_zero',
+      hash: 'zero11111111',
+      summaryText: 'Deploy checklist first.',
+      essenceText: 'Deployment procedure.',
+      fullText: 'Always run the deployment checklist first.'
+    }));
+    await store.put(createEntry({
+      sessionId: 'session_embed_zero',
+      hash: 'zero22222222',
+      summaryText: 'Answer in Vietnamese.',
+      essenceText: 'Language preference.',
+      fullText: 'Always answer in Vietnamese by default.'
+    }));
+
+    const recalled = await store.recall('today date', { k: 2 });
+
+    expect(recalled).toEqual([]);
+  });
+
+  it('reuses cached query embeddings when the same recall input repeats', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'embedding-session-store-cache-'));
+    tempDirs.push(tempDir);
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({ model: 'bge-m3', embeddings: [[1, 0]] })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({ model: 'bge-m3', embeddings: [[0, 1]] })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({ model: 'bge-m3', embeddings: [[1, 0]] })
+      });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const store = new EmbeddingSessionStore({
+      cwd: tempDir,
+      sessionId: 'session_embed_cache',
+      memoryConfig: {
+        provider: 'ollama',
+        model: 'bge-m3',
+        baseUrl: 'http://localhost:11434'
+      }
+    });
+
+    await store.open();
+    await store.put(createEntry({
+      sessionId: 'session_embed_cache',
+      hash: 'cache1111111',
+      summaryText: 'Deploy checklist first.',
+      essenceText: 'Deployment procedure.',
+      fullText: 'Always run the deployment checklist first.'
+    }));
+    await store.put(createEntry({
+      sessionId: 'session_embed_cache',
+      hash: 'cache2222222',
+      summaryText: 'Answer in Vietnamese.',
+      essenceText: 'Language preference.',
+      fullText: 'Always answer in Vietnamese by default.'
+    }));
+
+    await store.recall('deploy checklist', { k: 2 });
+    await store.recall('deploy checklist', { k: 2 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('EmbeddingGlobalMemoryStore', () => {
+  it('requests embeddings from local Ollama and recalls global memories by vector similarity', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'embedding-global-store-'));
+    tempDirs.push(tempDir);
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({
+          model: 'bge-m3',
+          embeddings: [[1, 0]]
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({
+          model: 'bge-m3',
+          embeddings: [[0, 1]]
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({
+          model: 'bge-m3',
+          embeddings: [[1, 0]]
+        })
+      });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const store = new EmbeddingGlobalMemoryStore({
+      baseDirectory: tempDir,
+      memoryConfig: {
+        provider: 'ollama',
+        model: 'bge-m3',
+        baseUrl: 'http://localhost:11434'
+      }
+    });
+
+    await store.open();
+    await store.put(createEntry({
+      sessionId: 'session_global_source',
+      hash: 'globalembed1',
+      summaryText: 'Deploy checklist first.',
+      essenceText: 'Deployment procedure.',
+      fullText: 'Always run the deployment checklist first.'
+    }));
+    await store.put(createEntry({
+      sessionId: 'session_global_source',
+      hash: 'globalembed2',
+      summaryText: 'Answer in Vietnamese.',
+      essenceText: 'Language preference.',
+      fullText: 'Always answer in Vietnamese by default.'
+    }));
+
+    const recalled = await store.recall('deploy checklist', { k: 2 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(recalled).toHaveLength(1);
+    expect(recalled[0]).toEqual(expect.objectContaining({
+      hash: 'globalembed1',
+      sessionId: 'user-global'
+    }));
+    expect(recalled[0]!.retrievalScore).toBeGreaterThan(0);
+  });
+
+  it('drops zero-score global embedding matches instead of returning unrelated memories', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'embedding-global-store-zero-score-'));
+    tempDirs.push(tempDir);
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({ model: 'bge-m3', embeddings: [[1, 0]] })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({ model: 'bge-m3', embeddings: [[0, 1]] })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({ model: 'bge-m3', embeddings: [[0, 0]] })
+      });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const store = new EmbeddingGlobalMemoryStore({
+      baseDirectory: tempDir,
+      memoryConfig: {
+        provider: 'ollama',
+        model: 'bge-m3',
+        baseUrl: 'http://localhost:11434'
+      }
+    });
+
+    await store.open();
+    await store.put(createEntry({
+      sessionId: 'session_global_source',
+      hash: 'globalzero1',
+      summaryText: 'Deploy checklist first.',
+      essenceText: 'Deployment procedure.',
+      fullText: 'Always run the deployment checklist first.'
+    }));
+    await store.put(createEntry({
+      sessionId: 'session_global_source',
+      hash: 'globalzero2',
+      summaryText: 'Answer in Vietnamese.',
+      essenceText: 'Language preference.',
+      fullText: 'Always answer in Vietnamese by default.'
+    }));
+
+    const recalled = await store.recall('today date', { k: 2 });
+
+    expect(recalled).toEqual([]);
+  });
+
+  it('reuses cached query embeddings for repeated global recall input', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'embedding-global-store-cache-'));
+    tempDirs.push(tempDir);
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({ model: 'bge-m3', embeddings: [[1, 0]] })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({ model: 'bge-m3', embeddings: [[0, 1]] })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({ model: 'bge-m3', embeddings: [[1, 0]] })
+      });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const store = new EmbeddingGlobalMemoryStore({
+      baseDirectory: tempDir,
+      memoryConfig: {
+        provider: 'ollama',
+        model: 'bge-m3',
+        baseUrl: 'http://localhost:11434'
+      }
+    });
+
+    await store.open();
+    await store.put(createEntry({
+      sessionId: 'session_global_source',
+      hash: 'globalcache1',
+      summaryText: 'Deploy checklist first.',
+      essenceText: 'Deployment procedure.',
+      fullText: 'Always run the deployment checklist first.'
+    }));
+    await store.put(createEntry({
+      sessionId: 'session_global_source',
+      hash: 'globalcache2',
+      summaryText: 'Answer in Vietnamese.',
+      essenceText: 'Language preference.',
+      fullText: 'Always answer in Vietnamese by default.'
+    }));
+
+    await store.recall('deploy checklist', { k: 2 });
+    await store.recall('deploy checklist', { k: 2 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe('GlobalMemoryStore', () => {
   it('writes a markdown artifact under date and type directories for each global memory entry', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'global-memory-store-'));
@@ -438,6 +916,35 @@ describe('GlobalMemoryStore', () => {
     expect(markdown).toContain('# Use concise Vietnamese.');
     expect(markdown).toContain('User prefers concise Vietnamese responses in this session.');
     expect(markdown).toContain('- Session: user-global');
+
+    const index = JSON.parse(await readFile(store.paths().memoryPath, 'utf8')) as {
+      entries: Array<Record<string, unknown>>;
+    };
+    expect(index.entries[0]?.sourceContentHash).toEqual(expect.any(String));
+  });
+
+  it('stores the sha256 of the global markdown artifact bytes in the index record', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'global-memory-store-'));
+    tempDirs.push(tempDir);
+
+    const store = new GlobalMemoryStore({
+      baseDirectory: tempDir
+    });
+
+    await store.open();
+    await store.put(createEntry({
+      sessionId: 'session_global_source',
+      hash: 'global123456'
+    }));
+
+    const index = JSON.parse(await readFile(store.paths().memoryPath, 'utf8')) as {
+      entries: Array<{ hash: string; markdownPath: string; sourceContentHash?: string }>;
+    };
+    const record = index.entries.find((entry) => entry.hash === 'global123456');
+    const markdownBytes = await readFile(String(record?.markdownPath));
+    const expectedHash = createHash('sha256').update(markdownBytes).digest('hex');
+
+    expect(record?.sourceContentHash).toBe(expectedHash);
   });
 
   it('recalls global memories from file-based index data', async () => {

@@ -40,6 +40,10 @@ export function getCheckpointStorePath(cwd: string): string {
   return join(cwd, '.qiclaw', 'checkpoint.sqlite');
 }
 
+export function getTaskLedgerPath(cwd: string): string {
+  return join(cwd, '.qiclaw', 'witness-ledger.jsonl');
+}
+
 function isInteractiveCheckpointPayload(value: unknown): value is InteractiveCheckpointPayload {
   if (!value || typeof value !== 'object') {
     return false;

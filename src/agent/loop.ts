@@ -24,6 +24,10 @@ import type { Tool } from '../tools/registry.js';
 
 import { buildDoneCriteria, type DoneCriteria } from './doneCriteria.js';
 import type { AgentCompletionSpec, ResolvedAgentPackage } from './spec.js';
+import { getTaskLedgerPath } from '../session/session.js';
+import { createWitnessContract, finalizeWitnessTurn } from './witness.js';
+import type { TaskContract } from './taskContract.js';
+import type { TaskVerdict } from './taskVerdict.js';
 import { verifyAgentTurn, type AgentTurnVerification } from './verifier.js';
 
 export interface RunAgentTurnInput {
@@ -39,6 +43,7 @@ export interface RunAgentTurnInput {
   skillsText?: string;
   historySummary?: string;
   history?: Message[];
+  sessionId?: string;
 }
 
 export type AgentTurnStopReason = 'completed' | 'max_tool_rounds_reached';
@@ -65,6 +70,8 @@ export interface RunAgentTurnResult {
   toolRoundsUsed: number;
   doneCriteria: DoneCriteria;
   verification: AgentTurnVerification;
+  taskContract: TaskContract;
+  taskVerdict: TaskVerdict;
 }
 
 export interface RunAgentTurnExecution {
@@ -89,6 +96,7 @@ export type TurnEvent =
       toolRoundsUsed: number;
       doneCriteria: DoneCriteria;
       turnCompleted: boolean;
+      taskContract: TaskContract;
     }
   | { type: 'turn_failed'; error: unknown };
 
@@ -101,6 +109,7 @@ interface CollectedTurnState {
   toolRoundsUsed: number;
   doneCriteria: DoneCriteria;
   turnCompleted: boolean;
+  taskContract: TaskContract;
 }
 
 const DEFAULT_PROVIDER_TIMEOUT_MS = 120_000;
@@ -685,7 +694,8 @@ export function createRunAgentTurnExecution(input: RunAgentTurnInput): RunAgentT
             structuredOutputParsed: event.structuredOutputParsed,
             toolRoundsUsed: event.toolRoundsUsed,
             doneCriteria: event.doneCriteria,
-            turnCompleted: event.turnCompleted
+            turnCompleted: event.turnCompleted,
+            taskContract: event.taskContract
           };
         }
 
@@ -696,7 +706,7 @@ export function createRunAgentTurnExecution(input: RunAgentTurnInput): RunAgentT
         throw new Error('Turn stream ended without terminal event.');
       }
 
-      resolveTurnResult?.(buildResult(observer, telemetry, terminal, input.maxToolRounds));
+      resolveTurnResult?.(buildResult(observer, telemetry, terminal, input.maxToolRounds, input));
     } catch (error) {
       observer.record(
         createTelemetryEvent('turn_failed', 'completion_check', {
@@ -734,7 +744,8 @@ export async function collectCompletedTurn(stream: AsyncIterable<TurnEvent>): Pr
         structuredOutputParsed: event.structuredOutputParsed,
         toolRoundsUsed: event.toolRoundsUsed,
         doneCriteria: event.doneCriteria,
-        turnCompleted: event.turnCompleted
+        turnCompleted: event.turnCompleted,
+        taskContract: event.taskContract
       };
       continue;
     }
@@ -801,6 +812,12 @@ export async function* runAgentTurnStream(
   const resolvedPolicy = input.resolvedPackage?.effectivePolicy;
   const doneCriteria = buildDoneCriteria(input.userInput, completionSpec);
   const telemetry = state?.telemetry ?? createTurnTelemetryState();
+  const taskContract = createWitnessContract({
+    taskId: telemetry.turnId,
+    userInput: input.userInput,
+    criteria: doneCriteria,
+    createdAt: new Date().toISOString()
+  });
   let finalAnswer = '';
   let finalMemoryCandidates: ModelMemoryCandidate[] = [];
   let finalStructuredOutputParsed = false;
@@ -994,7 +1011,8 @@ export async function* runAgentTurnStream(
           structuredOutputParsed: finalStructuredOutputParsed,
           toolRoundsUsed: telemetry.toolRound,
           doneCriteria,
-          turnCompleted: true
+          turnCompleted: true,
+          taskContract
         });
         return;
       }
@@ -1008,7 +1026,8 @@ export async function* runAgentTurnStream(
           structuredOutputParsed: finalStructuredOutputParsed,
           toolRoundsUsed: telemetry.toolRound,
           doneCriteria,
-          turnCompleted: false
+          turnCompleted: false,
+          taskContract
         });
         return;
       }
@@ -1099,7 +1118,8 @@ export async function* runAgentTurnStream(
           structuredOutputParsed: finalStructuredOutputParsed,
           toolRoundsUsed: telemetry.toolRound,
           doneCriteria,
-          turnCompleted: false
+          turnCompleted: false,
+          taskContract
         });
         return;
       }
@@ -1114,14 +1134,27 @@ function buildResult(
   observer: TelemetryObserver,
   telemetry: TurnTelemetryState,
   collected: CollectedTurnState,
-  maxToolRounds: number
+  maxToolRounds: number,
+  input: RunAgentTurnInput
 ): RunAgentTurnResult {
-  const { stopReason, finalAnswer, history, memoryCandidates, structuredOutputParsed, toolRoundsUsed, doneCriteria, turnCompleted } = collected;
+  const { stopReason, finalAnswer, history, memoryCandidates, structuredOutputParsed, toolRoundsUsed, doneCriteria, turnCompleted, taskContract } = collected;
   const verification = verifyAgentTurn({
     criteria: doneCriteria,
     finalAnswer,
     history,
     turnCompleted
+  });
+  const witness = finalizeWitnessTurn({
+    contract: taskContract,
+    verification,
+    finalAnswer,
+    stopReason,
+    turnCompleted,
+    ledgerPath: getTaskLedgerPath(input.cwd),
+    sessionId: input.sessionId,
+    userInput: input.userInput,
+    toolRoundsUsed,
+    createdAt: new Date().toISOString()
   });
 
   observer.record(
@@ -1181,7 +1214,9 @@ function buildResult(
     structuredOutputParsed,
     toolRoundsUsed,
     doneCriteria,
-    verification
+    verification,
+    taskContract: witness.contract,
+    taskVerdict: witness.verdict
   };
 }
 
@@ -1195,7 +1230,8 @@ function buildTurnCompletedEvent(input: Omit<Extract<TurnEvent, { type: 'turn_co
     structuredOutputParsed: input.structuredOutputParsed,
     toolRoundsUsed: input.toolRoundsUsed,
     doneCriteria: input.doneCriteria,
-    turnCompleted: input.turnCompleted
+    turnCompleted: input.turnCompleted,
+    taskContract: input.taskContract
   };
 }
 

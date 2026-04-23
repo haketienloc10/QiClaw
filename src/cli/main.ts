@@ -1,10 +1,13 @@
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import pc from 'picocolors';
+import { buildDoneCriteria } from '../agent/doneCriteria.js';
 import { createAgentPackagePreview } from '../agent/packagePreview.js';
 import { resolveAgentPackage as resolveAgentPackageForPreview } from '../agent/packageResolver.js';
 import { createAgentRuntime, type AgentRuntime } from '../agent/runtime.js';
 import type { ResolvedAgentPackage } from '../agent/spec.js';
+import { createTaskContract } from '../agent/taskContract.js';
+import { createTaskVerdict } from '../agent/taskVerdict.js';
 import {
   createRunAgentTurnExecution,
   type ModelMemoryCandidate,
@@ -79,6 +82,48 @@ interface PendingFooterRenderState {
   toolRoundsUsed: number;
 }
 
+function createSyntheticTurnResult(args: {
+  taskId: string;
+  userInput: string;
+  finalAnswer: string;
+  history: Message[];
+}): Pick<RunAgentTurnResult, 'stopReason' | 'finalAnswer' | 'history' | 'memoryCandidates' | 'structuredOutputParsed' | 'toolRoundsUsed' | 'doneCriteria' | 'verification' | 'taskContract' | 'taskVerdict'> {
+  const doneCriteria = buildDoneCriteria(args.userInput);
+  const taskContract = createTaskContract({
+    taskId: args.taskId,
+    userInput: args.userInput,
+    criteria: doneCriteria
+  });
+  const verification: RunAgentTurnResult['verification'] = {
+    isVerified: args.finalAnswer.length > 0,
+    finalAnswerIsNonEmpty: args.finalAnswer.length > 0,
+    finalAnswerIsSubstantive: args.finalAnswer.length > 0,
+    toolEvidenceSatisfied: true,
+    noUnresolvedToolErrors: true,
+    toolMessagesCount: 0,
+    checks: []
+  };
+
+  return {
+    stopReason: 'completed',
+    finalAnswer: args.finalAnswer,
+    history: args.history,
+    memoryCandidates: [],
+    structuredOutputParsed: false,
+    toolRoundsUsed: 0,
+    doneCriteria,
+    verification,
+    taskContract,
+    taskVerdict: createTaskVerdict({
+      contract: taskContract,
+      verification,
+      finalAnswer: args.finalAnswer,
+      stopReason: 'completed',
+      turnCompleted: true
+    })
+  };
+}
+
 interface MemoryCandidatesDebugRecord {
   type: 'memory_candidates';
   timestamp: string;
@@ -145,29 +190,12 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
         const turnResult = execution.turnResult;
 
         return {
-          stopReason: 'completed',
-          finalAnswer: '',
-          history: [],
-          memoryCandidates: [],
-          structuredOutputParsed: false,
-          toolRoundsUsed: 0,
-          doneCriteria: {
-            goal: input.userInput,
-            checklist: [input.userInput],
-            requiresNonEmptyFinalAnswer: true,
-            requiresToolEvidence: false,
-            requiresSubstantiveFinalAnswer: false,
-            forbidSuccessAfterToolErrors: false
-          },
-          verification: {
-            isVerified: false,
-            finalAnswerIsNonEmpty: false,
-            finalAnswerIsSubstantive: false,
-            toolEvidenceSatisfied: false,
-            noUnresolvedToolErrors: false,
-            toolMessagesCount: 0,
-            checks: []
-          },
+          ...createSyntheticTurnResult({
+            taskId: `cli-preview-${Date.now()}`,
+            userInput: input.userInput,
+            finalAnswer: '',
+            history: []
+          }),
           turnStream: execution.turnStream,
           finalResult: turnResult
         };
@@ -381,21 +409,12 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
               const recallInput = userInput.slice('/recal'.length).trim();
 
               if (recallInput.length === 0) {
-                return {
-                  stopReason: 'completed' as const,
+                return createSyntheticTurnResult({
+                  taskId: `recal-usage-${Date.now()}`,
+                  userInput,
                   finalAnswer: 'Usage: /recal <input>',
-                  history,
-                  toolRoundsUsed: 0,
-                  verification: {
-                    isVerified: true,
-                    finalAnswerIsNonEmpty: true,
-                    finalAnswerIsSubstantive: true,
-                    toolEvidenceSatisfied: true,
-                    noUnresolvedToolErrors: true,
-                    toolMessagesCount: 0,
-                    checks: []
-                  }
-                };
+                  history
+                });
               }
 
               const historyContext = buildPromptHistoryContext(history, historySummary);
@@ -429,21 +448,12 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
                 })
               });
 
-              return {
-                stopReason: 'completed' as const,
+              return createSyntheticTurnResult({
+                taskId: `recal-${Date.now()}`,
+                userInput,
                 finalAnswer: inspection.renderedText,
-                history,
-                toolRoundsUsed: 0,
-                verification: {
-                  isVerified: true,
-                  finalAnswerIsNonEmpty: inspection.renderedText.length > 0,
-                  finalAnswerIsSubstantive: inspection.renderedText.length > 0,
-                  toolEvidenceSatisfied: true,
-                  noUnresolvedToolErrors: true,
-                  toolMessagesCount: 0,
-                  checks: []
-                }
-              };
+                history
+              });
             }
 
             let preparedMemory:

@@ -293,6 +293,40 @@ Quy tắc phân loại:
 - nếu failure chỉ là noise tạm thời, không có bài học tái sử dụng, không tạo candidate
 
 ====================
+FAILURE CANONICALIZATION RULE
+====================
+
+Khi tạo memory từ tool failure, không được đặt title/summary theo lỗi bề mặt hoặc tên lệnh vừa fail.
+Phải chuẩn hóa candidate về:
+1. tình huống người dùng sẽ gặp lại trong tương lai
+2. cách làm đúng hoặc caveat tái sử dụng
+3. từ khóa mà future recall nhiều khả năng sẽ dùng
+
+Ưu tiên format tư duy:
+- "Khi cần X, hãy dùng Y thay vì Z"
+- "Đối với bài toán X, tool Y là đường đi đúng"
+- "Tool Z không phù hợp cho X vì ràng buộc/schema/precondition A"
+
+Ví dụ:
+- Xấu: "shell with date failed"
+- Tốt: "Khi cần ngày giờ hiện tại, dùng tool thời gian thay vì shell date"
+
+====================
+TITLE RETRIEVAL RULE
+====================
+
+title phải được viết theo future retrieval intent, không viết theo incident log.
+Không bắt đầu title bằng tên tool vừa fail, trừ khi bản thân tri thức cần được recall chính bởi tên tool đó.
+
+====================
+KEYWORD TARGETING RULE
+====================
+
+keywords phải ưu tiên các từ mà future query sẽ dùng để recall memory.
+Nếu memory nói về một use-case (ví dụ: hỏi ngày giờ), keywords phải chứa use-case đó.
+Không để phần lớn keywords chỉ mô tả lỗi nội bộ, stack detail, hoặc tên field schema.
+
+====================
 SELF-CHECK BEFORE OUTPUT
 ====================
 

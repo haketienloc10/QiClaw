@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,10 @@ import { copyFixtureTree, writePackageFixture } from './packageTestUtils.js';
 
 const fixtureRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'agent-packages');
 const sharedQiclawPath = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'agent', 'shared', 'QICLAW.md');
+
+function normalizeLineEndings(content: string): string {
+  return content.replace(/\r\n/g, '\n');
+}
 
 describe('packageResolver', () => {
   const tempDirs: string[] = [];
@@ -27,6 +31,7 @@ describe('packageResolver', () => {
     const cwd = join(tempDir, 'workspace');
     const homeDirectory = join(tempDir, 'home');
     const builtinPackagesDirectory = join(tempDir, 'builtin-packages');
+    const sharedQiclawContent = normalizeLineEndings(await readFile(sharedQiclawPath, 'utf8'));
     await mkdir(cwd, { recursive: true });
 
     await copyFixtureTree(join(fixtureRoot, 'project', 'reviewer'), join(cwd, '.qiclaw', 'agents', 'reviewer'));
@@ -53,7 +58,7 @@ describe('packageResolver', () => {
       effectivePromptFiles: {
         'QICLAW.md': {
           filePath: sharedQiclawPath,
-          content: '# QICLAW.md\n\nHãy ưu tiên các quy tắc và dữ kiện đặc thù của QiClaw trước các hướng dẫn prompt chung khác khi chúng cùng áp dụng.\n'
+          content: sharedQiclawContent
         },
         'AGENT.md': {
           content: 'Project reviewer override\n'
@@ -160,6 +165,7 @@ describe('packageResolver', () => {
     const cwd = join(tempDir, 'workspace');
     const homeDirectory = join(tempDir, 'home');
     const builtinPackagesDirectory = join(tempDir, 'builtin-packages');
+    const sharedQiclawContent = normalizeLineEndings(await readFile(sharedQiclawPath, 'utf8'));
     await mkdir(cwd, { recursive: true });
 
     await writePackageFixture(join(builtinPackagesDirectory, 'base'), {
@@ -196,7 +202,7 @@ describe('packageResolver', () => {
     expect(resolved.effectivePromptOrder).toEqual(['QICLAW.md', 'SOUL.md', 'AGENT.md', 'USER.md', 'STYLE.md']);
     expect(resolved.effectivePromptFiles['QICLAW.md']).toMatchObject({
       filePath: sharedQiclawPath,
-      content: '# QICLAW.md\n\nHãy ưu tiên các quy tắc và dữ kiện đặc thù của QiClaw trước các hướng dẫn prompt chung khác khi chúng cùng áp dụng.\n'
+      content: sharedQiclawContent
     });
     expect(sharedQiclawPaths).toEqual([sharedQiclawPath]);
   });

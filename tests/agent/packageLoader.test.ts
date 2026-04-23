@@ -28,7 +28,7 @@ describe('packageLoader', () => {
         extends: 'readonly',
         promptFiles: ['CUSTOM.md', 'AGENT.md'],
         policy: {
-          allowedCapabilityClasses: ['read', 'search'],
+          allowedCapabilityClasses: ['read'],
           maxToolRounds: 4,
           mutationMode: 'none'
         }
@@ -50,7 +50,7 @@ describe('packageLoader', () => {
         extends: 'readonly',
         promptFiles: ['CUSTOM.md', 'AGENT.md'],
         policy: {
-          allowedCapabilityClasses: ['read', 'search'],
+          allowedCapabilityClasses: ['read'],
           maxToolRounds: 4,
           mutationMode: 'none'
         }

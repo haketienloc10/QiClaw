@@ -55,6 +55,115 @@ describe('summaryTool', () => {
     ).not.toThrow();
   });
 
+  it('accepts messages via validateToolInput', async () => {
+    const { summaryTool } = await loadSummaryToolWithExeca();
+
+    expect(() =>
+      validateToolInput(summaryTool, {
+        messages: [
+          { role: 'user', content: 'First message' },
+          { role: 'assistant', content: 'Second message' }
+        ],
+        mode: 'normal',
+        dedupeSentences: true
+      })
+    ).not.toThrow();
+  });
+
+  it('passes only message content to the worker when execute receives transcript-style messages', async () => {
+    const { summaryTool, execaMock } = await loadSummaryToolWithExeca(async () => ({
+      stdout: JSON.stringify({
+        summary: 'Condensed summary'
+      })
+    }));
+
+    await summaryTool.execute(
+      {
+        messages: [
+          {
+            role: 'assistant',
+            content: 'Assistant tool preamble',
+            toolCalls: [
+              {
+                id: 'call_123',
+                name: 'summary',
+                input: { mode: 'normal' }
+              }
+            ]
+          },
+          {
+            role: 'tool',
+            name: 'summary',
+            toolCallId: 'call_123',
+            content: 'Tool result content'
+          },
+          {
+            role: 'assistant',
+            name: 'summary',
+            toolCallId: 'call_123',
+            content: 'Assistant follow-up'
+          }
+        ],
+        mode: 'normal',
+        dedupeSentences: false
+      } as never,
+      { cwd: process.cwd() }
+    );
+
+    expect(execaMock).toHaveBeenCalledTimes(1);
+    const firstCall = execaMock.mock.calls[0];
+    expect(firstCall).toBeDefined();
+    const execaOptions = firstCall?.[2];
+    expect(execaOptions).toBeDefined();
+    const workerPayload = JSON.parse(String(execaOptions?.input ?? ''));
+
+    expect(workerPayload).toMatchObject({
+      texts: ['Assistant tool preamble', 'Tool result content', 'Assistant follow-up'],
+      mode: 'normal',
+      dedupe_sentences: false,
+      input_truncated: false
+    });
+    expect(workerPayload.texts).not.toContain('summary');
+    expect(JSON.stringify(workerPayload.texts)).not.toContain('call_123');
+    expect(JSON.stringify(workerPayload.texts)).not.toContain('mode');
+  });
+
+  it('rejects when both texts and messages are missing', async () => {
+    const { summaryTool, execaMock } = await loadSummaryToolWithExeca();
+
+    await expect(
+      summaryTool.execute(
+        {
+          mode: 'normal',
+          dedupeSentences: false
+        } as never,
+        { cwd: process.cwd() }
+      )
+    ).rejects.toThrow(/SUMMARY_TOOL_INVALID_INPUT/);
+
+    expect(execaMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects when all message content is empty or whitespace-only', async () => {
+    const { summaryTool, execaMock } = await loadSummaryToolWithExeca();
+
+    await expect(
+      summaryTool.execute(
+        {
+          messages: [
+            { role: 'user', content: '   ' },
+            { role: 'assistant', content: '' }
+          ],
+          mode: 'normal',
+          dedupeSentences: false
+        } as never,
+        { cwd: process.cwd() }
+      )
+    ).rejects.toThrow(/SUMMARY_TOOL_INVALID_INPUT/);
+
+    expect(execaMock).not.toHaveBeenCalled();
+  });
+
   it('rejects semantic invalid input at execute time with SUMMARY_TOOL_INVALID_INPUT', async () => {
     const { summaryTool } = await loadSummaryToolWithExeca();
 

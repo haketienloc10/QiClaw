@@ -25,7 +25,7 @@ export interface CreateAgentRuntimeOptions extends ResolvedProviderConfig {
 }
 
 const builtinToolNamesByCapabilityClass: Record<AgentCapabilityClass, string[]> = {
-  read: ['file', 'shell', 'git', 'web_fetch', 'summary_tool'],
+  read: ['file', 'shell', 'git', 'web_fetch'],
   write: ['file', 'shell', 'git']
 };
 

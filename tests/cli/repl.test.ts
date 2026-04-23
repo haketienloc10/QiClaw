@@ -75,6 +75,8 @@ function createSuccessfulRunTurn(): (input: { userInput: string }) => Promise<Cl
     stopReason: 'completed',
     finalAnswer: `handled: ${input.userInput}`,
     history: [],
+    memoryCandidates: [],
+    structuredOutputParsed: false,
     toolRoundsUsed: 0,
     doneCriteria: {
       goal: input.userInput,
@@ -326,6 +328,8 @@ describe('createRepl', () => {
         finalAnswer: 'echo: hello',
         stopReason: 'completed',
         history: [],
+        memoryCandidates: [],
+        structuredOutputParsed: false,
         toolRoundsUsed: 0,
         doneCriteria: {
           goal: 'hello',
@@ -671,7 +675,7 @@ describe('createRepl', () => {
     const writes: string[] = [];
     const prepareSessionMemory = vi.fn(async () => ({
       memoryText: '',
-      store: { stub: true },
+      store: undefined,
       recalled: [],
       checkpointState: {
         storeSessionId: 'session-repl-recal',
@@ -842,6 +846,8 @@ describe('createRepl', () => {
           stopReason: 'completed',
           finalAnswer: 'Tôi sẽ kiểm tra trước.\n\nTóm tắt:\n- xong',
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 1,
           doneCriteria: {
             goal: input.userInput,
@@ -940,6 +946,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: `handled: ${input.userInput}`,
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 0,
           doneCriteria: {
             goal: input.userInput,
@@ -982,6 +990,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: `handled: ${input.userInput}`,
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 0,
           doneCriteria: {
             goal: input.userInput,
@@ -1068,6 +1078,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: `handled: ${input.userInput}`,
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 1,
           doneCriteria: {
             goal: input.userInput,
@@ -1147,6 +1159,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: `handled: ${input.userInput}`,
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 1,
           doneCriteria: {
             goal: input.userInput,
@@ -1219,6 +1233,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: `handled: ${input.userInput}`,
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 1,
           doneCriteria: {
             goal: input.userInput,
@@ -1366,6 +1382,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: `handled: ${input.userInput}`,
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 1,
           doneCriteria: {
             goal: input.userInput,
@@ -1405,7 +1423,14 @@ describe('buildCli', () => {
           toolRound: 0,
           messageCount: 2,
           promptRawChars: 42,
-          toolNames: ['git', 'web_fetch']
+          toolNames: ['git', 'web_fetch'],
+          messageSummaries: [
+            { role: 'system', rawChars: 12, contentBlockCount: 1, messageSource: 'system' },
+            { role: 'user', rawChars: 20, contentBlockCount: 1, messageSource: 'user' }
+          ],
+          totalContentBlockCount: 2,
+          hasSystemPrompt: true,
+          promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"}]}'
         }));
         input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
           turnId: 'turn-1',
@@ -1435,7 +1460,16 @@ describe('buildCli', () => {
           toolRound: 1,
           messageCount: 4,
           promptRawChars: 84,
-          toolNames: ['git', 'web_fetch']
+          toolNames: ['git', 'web_fetch'],
+          messageSummaries: [
+            { role: 'system', rawChars: 12, contentBlockCount: 1, messageSource: 'system' },
+            { role: 'user', rawChars: 20, contentBlockCount: 1, messageSource: 'user' },
+            { role: 'assistant', rawChars: 18, contentBlockCount: 1, messageSource: 'assistant_text' },
+            { role: 'tool', rawChars: 34, contentBlockCount: 1, messageSource: 'tool_result' }
+          ],
+          totalContentBlockCount: 4,
+          hasSystemPrompt: true,
+          promptRawPreviewRedacted: '{"messages":[{"role":"system"},{"role":"user"},{"role":"assistant"},{"role":"tool"}]}'
         }));
         input.observer?.record(createTelemetryEvent('tool_call_started', 'tool_execution', {
           turnId: 'turn-1',
@@ -1492,6 +1526,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: `handled: ${input.userInput}`,
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 2,
           doneCriteria: {
             goal: input.userInput,
@@ -1631,6 +1667,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: `handled: ${input.userInput}`,
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 1,
           doneCriteria: {
             goal: input.userInput,
@@ -1732,6 +1770,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: `handled: ${input.userInput}`,
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 1,
           doneCriteria: {
             goal: input.userInput,
@@ -1784,7 +1824,8 @@ describe('buildCli', () => {
           availableTools: [],
           cwd: tempDir,
           observer: runtimeOptions.observer ?? createNoopObserver(),
-            systemPrompt: 'Test prompt',
+          resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
+          systemPrompt: 'Test prompt',
           maxToolRounds: 3
         }),
         runTurn: async (input) => {
@@ -1802,6 +1843,8 @@ describe('buildCli', () => {
             stopReason: 'completed',
             finalAnswer: `handled: ${input.userInput}`,
             history: [],
+            memoryCandidates: [],
+            structuredOutputParsed: false,
             toolRoundsUsed: 1,
             doneCriteria: {
               goal: input.userInput,
@@ -1864,7 +1907,7 @@ describe('buildCli', () => {
         }),
         prepareSessionMemory: async () => ({
           memoryText: '',
-          store: {} as never,
+          store: undefined as never,
           globalStore: undefined,
           recalled: [],
           checkpointState: {
@@ -1974,7 +2017,7 @@ describe('buildCli', () => {
         }),
         prepareSessionMemory: async () => ({
           memoryText: '',
-          store: {} as never,
+          store: undefined as never,
           globalStore: undefined,
           recalled: [],
           checkpointState: {
@@ -2060,7 +2103,8 @@ describe('buildCli', () => {
           availableTools: [],
           cwd: tempDir,
           observer: runtimeOptions.observer ?? createNoopObserver(),
-            systemPrompt: 'Test prompt',
+          resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
+          systemPrompt: 'Test prompt',
           maxToolRounds: 3
         }),
         runTurn: async (input) => {
@@ -2078,6 +2122,8 @@ describe('buildCli', () => {
             stopReason: 'completed',
             finalAnswer: `handled: ${input.userInput}`,
             history: [],
+            memoryCandidates: [],
+            structuredOutputParsed: false,
             toolRoundsUsed: 0,
             doneCriteria: {
               goal: input.userInput,
@@ -2133,7 +2179,8 @@ describe('buildCli', () => {
           availableTools: [],
           cwd: tempDir,
           observer: runtimeOptions.observer ?? createNoopObserver(),
-            systemPrompt: 'Test prompt',
+          resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
+          systemPrompt: 'Test prompt',
           maxToolRounds: 3
         }),
         runTurn: async (input) => {
@@ -2192,6 +2239,8 @@ describe('buildCli', () => {
             stopReason: 'completed',
             finalAnswer: `handled: ${input.userInput}`,
             history: [],
+            memoryCandidates: [],
+            structuredOutputParsed: false,
             toolRoundsUsed: 0,
             doneCriteria: {
               goal: input.userInput,
@@ -2328,6 +2377,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: `handled: ${input.userInput}`,
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 0,
           doneCriteria: {
             goal: input.userInput,
@@ -2448,6 +2499,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: `handled: ${input.userInput}`,
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 4,
           doneCriteria: {
             goal: input.userInput,
@@ -2551,6 +2604,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: 'handled: inspect package.json',
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 0,
           doneCriteria: {
             goal: input.userInput,
@@ -2654,6 +2709,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: '',
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 0,
           doneCriteria: {
             goal: input.userInput,
@@ -2742,6 +2799,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: `handled: ${input.userInput}`,
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 0,
           doneCriteria: {
             goal: input.userInput,
@@ -2838,6 +2897,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: `handled: ${input.userInput}`,
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 0,
           doneCriteria: {
             goal: input.userInput,
@@ -2975,6 +3036,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: `handled: ${input.userInput}`,
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 0,
           doneCriteria: {
             goal: input.userInput,
@@ -3056,7 +3119,8 @@ describe('buildCli', () => {
             availableTools: [],
             cwd: '/tmp/qiclaw-test',
             observer: runtimeOptions.observer ?? createNoopObserver(),
-                systemPrompt: 'Test prompt',
+            resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
+            systemPrompt: 'Test prompt',
             maxToolRounds: 3
           };
         },
@@ -3064,6 +3128,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: `handled: ${input.userInput}`,
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 0,
           doneCriteria: {
             goal: input.userInput,
@@ -3097,6 +3163,8 @@ describe('buildCli', () => {
         stopReason: 'completed',
         finalAnswer: 'Xin chào',
         history: [],
+        memoryCandidates: [],
+        structuredOutputParsed: false,
         toolRoundsUsed: 0,
         doneCriteria: {
           goal: input.userInput,
@@ -3129,6 +3197,8 @@ describe('buildCli', () => {
             finalAnswer: 'Xin chào',
             stopReason: 'completed',
             history: [],
+            memoryCandidates: [],
+            structuredOutputParsed: false,
             toolRoundsUsed: 0,
             doneCriteria: {
               goal: input.userInput,
@@ -3169,6 +3239,8 @@ describe('buildCli', () => {
         stopReason: 'completed',
         finalAnswer: 'Xin chào',
         history: [],
+        memoryCandidates: [],
+        structuredOutputParsed: false,
         toolRoundsUsed: 0,
         doneCriteria: {
           goal: input.userInput,
@@ -3203,6 +3275,8 @@ describe('buildCli', () => {
             finalAnswer: 'Xin chào',
             stopReason: 'completed',
             history: [],
+            memoryCandidates: [],
+            structuredOutputParsed: false,
             toolRoundsUsed: 0,
             doneCriteria: {
               goal: input.userInput,
@@ -3249,6 +3323,8 @@ describe('buildCli', () => {
             stopReason: 'completed',
             finalAnswer: 'Xin chào',
             history: [],
+            memoryCandidates: [],
+            structuredOutputParsed: false,
             toolRoundsUsed: 0,
             doneCriteria: {
               goal: input.userInput,
@@ -3323,6 +3399,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: 'Xin chào',
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 0,
           doneCriteria: {
             goal: input.userInput,
@@ -3369,6 +3447,8 @@ describe('buildCli', () => {
               finalAnswer: 'Xin chào',
               stopReason: 'completed',
               history: [],
+              memoryCandidates: [],
+              structuredOutputParsed: false,
               toolRoundsUsed: 0,
               doneCriteria: {
                 goal: input.userInput,
@@ -3434,6 +3514,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: 'Alpha text\nBeta text\n',
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 2,
           doneCriteria: {
             goal: input.userInput,
@@ -3506,6 +3588,8 @@ describe('buildCli', () => {
               finalAnswer: 'Alpha text\nBeta text\n',
               stopReason: 'completed',
               history: [],
+              memoryCandidates: [],
+              structuredOutputParsed: false,
               toolRoundsUsed: 2,
               doneCriteria: {
                 goal: input.userInput,
@@ -3576,6 +3660,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: '',
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 1,
           doneCriteria: {
             goal: input.userInput,
@@ -3657,6 +3743,8 @@ describe('buildCli', () => {
               finalAnswer: '',
               stopReason: 'completed',
               history: [],
+              memoryCandidates: [],
+              structuredOutputParsed: false,
               toolRoundsUsed: 1,
               doneCriteria: {
                 goal: input.userInput,
@@ -3708,6 +3796,8 @@ describe('buildCli', () => {
         stopReason: 'completed',
         finalAnswer: '',
         history: [],
+        memoryCandidates: [],
+        structuredOutputParsed: false,
         toolRoundsUsed: 1,
         doneCriteria: {
           goal: 'run tool please',
@@ -3947,6 +4037,8 @@ describe('buildCli', () => {
         stopReason: 'completed',
         finalAnswer: 'Xin chào\n',
         history: [],
+        memoryCandidates: [],
+        structuredOutputParsed: false,
         toolRoundsUsed: 0,
         doneCriteria: {
           goal: input.userInput,
@@ -3977,6 +4069,8 @@ describe('buildCli', () => {
             finalAnswer: 'Xin chào\n',
             stopReason: 'completed',
             history: [],
+            memoryCandidates: [],
+            structuredOutputParsed: false,
             toolRoundsUsed: 0,
             doneCriteria: {
               goal: input.userInput,
@@ -4023,6 +4117,8 @@ describe('buildCli', () => {
             stopReason: 'completed',
             finalAnswer: 'Xin chào\n',
             history: [],
+            memoryCandidates: [],
+            structuredOutputParsed: false,
             toolRoundsUsed: 0,
             doneCriteria: {
               goal: input.userInput,
@@ -4088,6 +4184,8 @@ describe('buildCli', () => {
         stopReason: 'completed',
         finalAnswer: '',
         history: [],
+        memoryCandidates: [],
+        structuredOutputParsed: false,
         toolRoundsUsed: 1,
         doneCriteria: {
           goal: 'run tool please',
@@ -4175,6 +4273,8 @@ describe('buildCli', () => {
         stopReason: 'completed',
         finalAnswer: '',
         history: [],
+        memoryCandidates: [],
+        structuredOutputParsed: false,
         toolRoundsUsed: 1,
         doneCriteria: {
           goal: 'run tool please',
@@ -4271,6 +4371,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: `handled: ${input.userInput}`,
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 0,
           doneCriteria: {
             goal: input.userInput,
@@ -4333,6 +4435,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: `handled: ${input.userInput}`,
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 0,
           doneCriteria: {
             goal: input.userInput,
@@ -4402,6 +4506,8 @@ describe('buildCli', () => {
         stopReason: 'completed',
         finalAnswer: `handled: ${input.userInput}`,
         history: [],
+        memoryCandidates: [],
+        structuredOutputParsed: false,
         toolRoundsUsed: 0,
         doneCriteria: {
           goal: input.userInput,
@@ -4466,6 +4572,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: `handled: ${input.userInput}`,
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 0,
           doneCriteria: {
             goal: input.userInput,
@@ -4705,6 +4813,8 @@ describe('buildCli', () => {
         stopReason: 'completed',
         finalAnswer: `handled: ${input.userInput}`,
         history: [],
+        memoryCandidates: [],
+        structuredOutputParsed: false,
         toolRoundsUsed: 0,
         doneCriteria: {
           goal: input.userInput,
@@ -5208,6 +5318,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: 'Tóm tắt:\n- handled',
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 1,
           doneCriteria: {
             goal: input.userInput,
@@ -5600,6 +5712,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: '',
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 0,
           doneCriteria: {
             goal: input.userInput,
@@ -5630,6 +5744,8 @@ describe('buildCli', () => {
               stopReason: 'completed',
               finalAnswer: 'resolved final answer',
               history: finalHistory,
+              memoryCandidates: [],
+              structuredOutputParsed: false,
               toolRoundsUsed: 0,
               doneCriteria: {
                 goal: input.userInput,
@@ -5655,6 +5771,8 @@ describe('buildCli', () => {
               finalAnswer: 'resolved final answer',
               stopReason: 'completed',
               history: finalHistory,
+              memoryCandidates: [],
+              structuredOutputParsed: false,
               toolRoundsUsed: 0,
               doneCriteria: {
                 goal: input.userInput,
@@ -5725,6 +5843,8 @@ describe('buildCli', () => {
           stopReason: 'completed',
           finalAnswer: `handled: ${input.userInput}`,
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           historySummary: 'should not persist',
           toolRoundsUsed: 0,
           doneCriteria: {
@@ -6076,6 +6196,8 @@ describe('buildCli', () => {
             { role: 'user', content: input.userInput },
             { role: 'assistant', content: 'fresh answer' }
           ],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           historySummary: 'fresh summary',
           toolRoundsUsed: 0,
           doneCriteria: {
@@ -6186,6 +6308,8 @@ describe('buildCli', () => {
             { role: 'user', content: input.userInput },
             { role: 'assistant', content: `answer: ${input.userInput}` }
           ],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           historySummary: `Summary after ${input.userInput}`,
           toolRoundsUsed: 0,
           doneCriteria: {
@@ -6256,13 +6380,7 @@ describe('buildCli', () => {
       const debugLogPath = join(tempDir, 'debug', 'telemetry.jsonl');
       const rotatedLogPath = join(tempDir, 'debug', 'telemetry-2026-04-17.jsonl');
 
-      const prepareSessionMemory = vi.fn(async (input: { onBackendFallback?: (event: {
-        phase: string;
-        scope: 'session' | 'global';
-        backend: 'embedding';
-        fallback: 'lexical';
-        message: string;
-      }) => void }) => {
+      const prepareSessionMemory = vi.fn(async (input) => {
         input.onBackendFallback?.({
           phase: 'recall',
           scope: 'session',
@@ -6273,7 +6391,7 @@ describe('buildCli', () => {
 
         return {
           memoryText: '',
-          store: {} as never,
+          store: undefined as never,
           globalStore: undefined,
           recalled: [],
           checkpointState: {
@@ -6327,6 +6445,8 @@ describe('buildCli', () => {
               { role: 'user', content: input.userInput },
               { role: 'assistant', content: `answer: ${input.userInput}` }
             ],
+            memoryCandidates: [],
+            structuredOutputParsed: false,
             historySummary: `Summary after ${input.userInput}`,
             toolRoundsUsed: 0,
             doneCriteria: {

@@ -16,6 +16,9 @@ export async function writePackageFixture(directoryPath: string, fixture: Packag
   }
 
   for (const [fileName, content] of Object.entries(fixture.sections ?? {})) {
+    if (content === undefined) {
+      continue;
+    }
     await writeFile(join(directoryPath, fileName), content);
   }
 }

@@ -260,6 +260,8 @@ describe('interactive session memory flow', () => {
             { role: 'user', content: input.userInput },
             { role: 'assistant', content: finalAnswer }
           ],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           historySummary: 'editor preference stored',
           toolRoundsUsed: 0,
           doneCriteria: {
@@ -356,6 +358,8 @@ describe('interactive session memory flow', () => {
             { role: 'user' as const, content: input.userInput },
             ...toolMessages
           ],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           historySummary: firstTurn ? 'package version checked from package.json' : 'procedure memory recalled',
           toolRoundsUsed: firstTurn ? 1 : 0,
           doneCriteria: {
@@ -451,6 +455,8 @@ describe('interactive session memory flow', () => {
             { role: 'user' as const, content: input.userInput },
             ...toolMessages
           ],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           historySummary: firstTurn ? 'deployment runbook read failed; retry with a valid path before giving steps' : 'checked failed procedure recall',
           toolRoundsUsed: firstTurn ? 1 : 0,
           doneCriteria: {
@@ -533,6 +539,8 @@ describe('interactive session memory flow', () => {
             { role: 'user', content: input.userInput },
             { role: 'assistant', content: finalAnswer }
           ],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           historySummary: 'đã lưu sở thích trả lời bằng tiếng Việt',
           toolRoundsUsed: 0,
           doneCriteria: {
@@ -628,6 +636,8 @@ describe('interactive session memory flow', () => {
             { role: 'user' as const, content: input.userInput },
             ...toolMessages
           ],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           historySummary: firstTurn ? 'đã kiểm tra phiên bản package từ package.json' : 'đã recall procedure memory tiếng Việt',
           toolRoundsUsed: firstTurn ? 1 : 0,
           doneCriteria: {
@@ -696,6 +706,8 @@ describe('interactive session memory flow', () => {
             { role: 'user', content: input.userInput },
             { role: 'assistant', content: 'I will remember that you always want concise answers.' }
           ],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           historySummary: 'concise answer preference stored',
           toolRoundsUsed: 0,
           doneCriteria: {
@@ -753,7 +765,9 @@ describe('interactive session memory flow', () => {
               { role: 'user', content: input.userInput },
               { role: 'assistant', content: 'I should answer concisely by default.' }
             ],
-            historySummary: 'global preference recalled',
+            memoryCandidates: [],
+          structuredOutputParsed: false,
+          historySummary: 'global preference recalled',
             toolRoundsUsed: 0,
             doneCriteria: {
               goal: input.userInput,
@@ -881,6 +895,8 @@ describe('interactive session memory flow', () => {
             { role: 'user', content: input.userInput },
             { role: 'assistant', content: 'You deploy to staging first.' }
           ],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           historySummary: 'staging deployment preference restored',
           toolRoundsUsed: 0,
           doneCriteria: {
@@ -996,6 +1012,8 @@ describe('interactive session memory flow', () => {
             { role: 'user', content: input.userInput },
             { role: 'assistant', content: 'No stored preference in this session.' }
           ],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           historySummary: 'no restored memory bleed',
           toolRoundsUsed: 0,
           doneCriteria: {
@@ -1100,6 +1118,8 @@ describe('interactive session memory flow', () => {
       runTurn: async (input) => {
         runInputs.push({
           historyLength: input.history?.length ?? 0,
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           historySummary: input.historySummary
         });
 
@@ -1111,6 +1131,8 @@ describe('interactive session memory flow', () => {
             { role: 'user', content: input.userInput },
             { role: 'assistant', content: 'continued' }
           ],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           historySummary: 'turn summary',
           toolRoundsUsed: 0,
           doneCriteria: {

@@ -49,6 +49,22 @@ const defaultResolvedPackage = resolveBuiltinAgentPackage('default');
 const readonlyResolvedPackage = resolveBuiltinAgentPackage('readonly');
 const toolInput = { action: 'read', path: 'note.txt' };
 
+function getRuntimeAvailableTools() {
+  return createAgentRuntime({
+    provider: 'anthropic',
+    model: 'claude-sonnet-4-20250514',
+    cwd: '/tmp/runtime-tools'
+  }).availableTools;
+}
+
+async function collectAsync<T>(iterable: AsyncIterable<T>): Promise<T[]> {
+  const items: T[] = [];
+  for await (const item of iterable) {
+    items.push(item);
+  }
+  return items;
+}
+
 function createBridgeResolvedPackage(options: {
   policy: ResolvedAgentPackage['effectivePolicy'];
   completion?: ResolvedAgentPackage['effectiveCompletion'];
@@ -339,7 +355,7 @@ describe('provider normalization, provider, and dispatcher', () => {
           isError: false
         }
       ],
-      availableTools: getBuiltinTools()
+      availableTools: getRuntimeAvailableTools()
     });
 
     expect(request.system).toBe('System prompt');
@@ -358,7 +374,7 @@ describe('provider normalization, provider, and dispatcher', () => {
         ]
       }
     ]);
-    expect(request.tools?.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch', 'summary_tool']);
+    expect(request.tools?.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch']);
   });
 
   it('rejects Anthropic tool messages without a toolCallId', () => {
@@ -465,7 +481,7 @@ describe('provider normalization, provider, and dispatcher', () => {
           isError: true
         }
       ],
-      availableTools: getBuiltinTools()
+      availableTools: getRuntimeAvailableTools()
     });
 
     expect(request.instructions).toBe('System prompt');
@@ -491,7 +507,7 @@ describe('provider normalization, provider, and dispatcher', () => {
         output: 'note contents'
       }
     ]);
-    expect(request.tools).toHaveLength(5);
+    expect(request.tools).toHaveLength(4);
     expect(request.tools?.[0]).toMatchObject({
       type: 'function',
       name: 'file',
@@ -913,7 +929,7 @@ describe('agent loop', () => {
       generate
     };
 
-    const events = await Array.fromAsync(runAgentTurnStream({
+    const events = await collectAsync(runAgentTurnStream({
       provider,
       availableTools: [],
       baseSystemPrompt: 'system',
@@ -1120,11 +1136,12 @@ describe('agent loop', () => {
         content: 'The note says: agent note'
       })
     ];
+    const availableTools = getRuntimeAvailableTools();
 
     const streamedTurnCompletedEvents: Array<Record<string, unknown>> = [];
     for await (const event of runAgentTurnStream({
       provider: createScriptedProvider(scriptedResponses),
-      availableTools: getBuiltinTools(),
+      availableTools,
       baseSystemPrompt: 'You are helpful.',
       userInput: 'Read note.txt and summarize it.',
       cwd: workspace,
@@ -1139,7 +1156,7 @@ describe('agent loop', () => {
 
     const result = await runAgentTurn({
       provider: createScriptedProvider(scriptedResponses),
-      availableTools: getBuiltinTools(),
+      availableTools,
       baseSystemPrompt: 'You are helpful.',
       userInput: 'Read note.txt and summarize it.',
       cwd: workspace,
@@ -1606,7 +1623,7 @@ describe('agent loop', () => {
       }
     };
 
-    const events = await Array.fromAsync(runAgentTurnStream({
+    const events = await collectAsync(runAgentTurnStream({
       provider,
       availableTools: [],
       baseSystemPrompt: 'system',
@@ -1650,7 +1667,7 @@ describe('agent loop', () => {
       }
     };
 
-    const events = await Array.fromAsync(runAgentTurnStream({
+    const events = await collectAsync(runAgentTurnStream({
       provider,
       availableTools: [],
       baseSystemPrompt: 'system',
@@ -1696,7 +1713,7 @@ describe('agent loop', () => {
       }
     };
 
-    const events = await Array.fromAsync(runAgentTurnStream({
+    const events = await collectAsync(runAgentTurnStream({
       provider,
       availableTools: [],
       baseSystemPrompt: 'system',
@@ -1742,7 +1759,7 @@ describe('agent loop', () => {
       }
     };
 
-    const events = await Array.fromAsync(runAgentTurnStream({
+    const events = await collectAsync(runAgentTurnStream({
       provider,
       availableTools: [],
       baseSystemPrompt: 'system',
@@ -1882,10 +1899,11 @@ describe('agent loop', () => {
         toolCalls: []
       }
     ], calls);
+    const availableTools = getRuntimeAvailableTools();
 
     const result = await runAgentTurn({
       provider,
-      availableTools: getBuiltinTools(),
+      availableTools,
       baseSystemPrompt: 'You are helpful.',
       userInput: 'Read note.txt and summarize it.',
       cwd: workspace,
@@ -1911,7 +1929,7 @@ describe('agent loop', () => {
     expect(calls).toEqual([
       {
         messages: ['system:You are helpful.', 'user:Read note.txt and summarize it.'],
-        availableToolNames: ['file', 'shell', 'git', 'web_fetch', 'summary_tool']
+        availableToolNames: ['file', 'shell', 'git', 'web_fetch']
       },
       {
         messages: [
@@ -1920,7 +1938,7 @@ describe('agent loop', () => {
           'assistant:I will read the file first.',
           'tool:agent note'
         ],
-        availableToolNames: ['file', 'shell', 'git', 'web_fetch', 'summary_tool']
+        availableToolNames: ['file', 'shell', 'git', 'web_fetch']
       }
     ]);
   });
@@ -2341,7 +2359,7 @@ describe('agent loop', () => {
     });
 
     expect(runtime.cwd).toBe('/tmp/runtime-compose');
-    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch', 'summary_tool']);
+    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch']);
     expect(runtime.provider.name).toBe('anthropic');
     expect(runtime.provider.model).toBe('claude-sonnet-4-20250514');
     expect(runtime.observer.record).toBeTypeOf('function');
@@ -2381,7 +2399,7 @@ describe('agent loop', () => {
     });
 
     expect(runtime.cwd).toBe('/tmp/runtime-openai');
-    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch', 'summary_tool']);
+    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch']);
     expect(runtime.provider.name).toBe('openai');
     expect(runtime.provider.model).toBe('gpt-4.1');
     expect(runtime.observer.record).toBeTypeOf('function');
@@ -2412,7 +2430,7 @@ describe('agent loop', () => {
     });
 
     expect(runtime.resolvedPackage).toBe(resolvedPackage);
-    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch', 'summary_tool']);
+    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch']);
     expect(runtime.systemPrompt).toContain('Purpose: Bridge agent purpose');
     expect(runtime.systemPrompt).toContain('Bridge agent purpose');
     expect(runtime.systemPrompt).toContain('- Include memory: no');
@@ -2561,7 +2579,7 @@ describe('agent loop', () => {
 
     expect(runtime.cwd).toBe('/tmp/runtime-readonly');
     expect(runtime.resolvedPackage.effectivePolicy.allowedCapabilityClasses).toEqual(['read']);
-    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch', 'summary_tool']);
+    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch']);
     expect(runtime.maxToolRounds).toBe(6);
     expect(runtime.systemPrompt).toContain('Behavioral framing: Be concise, inspection-focused, and explicit about evidence gathered from the project surface.');
     expect(runtime.systemPrompt).toContain('- Allowed capability classes: read');
@@ -2629,6 +2647,7 @@ describe('agent loop', () => {
 
     const observedEvents: TelemetryEvent[] = [];
     const metrics = createInMemoryMetricsObserver();
+    const availableTools = getRuntimeAvailableTools();
     const provider = createScriptedProvider([
       normalizeProviderResponse({
         content: 'I will read the file first.',
@@ -2715,7 +2734,7 @@ describe('agent loop', () => {
 
     const result = await runAgentTurn({
       provider,
-      availableTools: getBuiltinTools(),
+      availableTools,
       baseSystemPrompt: 'You are helpful.',
       userInput: 'Read note.txt and summarize it.',
       cwd: workspace,
@@ -2763,7 +2782,7 @@ describe('agent loop', () => {
       data: {
         cwd: workspace,
         maxToolRounds: 3,
-        toolNames: ['file', 'shell', 'git', 'web_fetch', 'summary_tool'],
+        toolNames: ['file', 'shell', 'git', 'web_fetch'],
         userInput: 'Read note.txt and summarize it.',
         providerRound: 0,
         toolRound: 0,
@@ -2802,7 +2821,7 @@ describe('agent loop', () => {
           { role: 'system', content: 'You are helpful.' },
           { role: 'user', content: 'Read note.txt and summarize it.' }
         ]).length,
-        toolNames: ['file', 'shell', 'git', 'web_fetch', 'summary_tool'],
+        toolNames: ['file', 'shell', 'git', 'web_fetch'],
         messageSummaries: [
           {
             role: 'system',
@@ -3000,7 +3019,7 @@ describe('agent loop', () => {
             isError: false
           }
         ]).length,
-        toolNames: ['file', 'shell', 'git', 'web_fetch', 'summary_tool'],
+        toolNames: ['file', 'shell', 'git', 'web_fetch'],
         messageSummaries: [
           {
             role: 'system',
@@ -3834,6 +3853,8 @@ describe('agent loop', () => {
           { role: 'user' as const, content: 'Read note.txt carefully.' },
           { role: 'assistant' as const, content: 'Round 1' }
         ],
+        memoryCandidates: [],
+        structuredOutputParsed: false,
         toolRoundsUsed: 1,
         doneCriteria: {
           goal: 'Read note.txt carefully.',
@@ -3893,6 +3914,8 @@ describe('agent loop', () => {
         finalAnswer: 'first',
         stopReason: 'completed' as const,
         history: [{ role: 'assistant' as const, content: 'first' }],
+        memoryCandidates: [],
+        structuredOutputParsed: false,
         toolRoundsUsed: 0,
         doneCriteria: {
           goal: 'Answer briefly.',
@@ -3909,6 +3932,8 @@ describe('agent loop', () => {
         finalAnswer: 'second',
         stopReason: 'completed' as const,
         history: [{ role: 'assistant' as const, content: 'second' }],
+        memoryCandidates: [],
+        structuredOutputParsed: false,
         toolRoundsUsed: 0,
         doneCriteria: {
           goal: 'Answer briefly.',
@@ -3933,6 +3958,8 @@ describe('agent loop', () => {
         finalAnswer: 'done',
         stopReason: 'completed' as const,
         history: undefined as unknown as Array<{ role: 'user' | 'assistant' | 'tool'; content: string }>,
+        memoryCandidates: [],
+        structuredOutputParsed: false,
         toolRoundsUsed: 0,
         doneCriteria: {
           goal: 'Answer briefly.',
@@ -3957,6 +3984,8 @@ describe('agent loop', () => {
         finalAnswer: 'done',
         stopReason: 'completed' as const,
         history: [{ role: 'assistant' as const, content: 'done' }],
+        memoryCandidates: [],
+        structuredOutputParsed: false,
         toolRoundsUsed: 0,
         doneCriteria: {
           goal: 'Answer briefly.',

@@ -37,7 +37,7 @@ describe('tool surface migration', () => {
       cwd: '/tmp/runtime-compose'
     });
 
-    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch', 'summary_tool']);
+    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch']);
     expect(runtime.resolvedPackage?.effectivePolicy.allowedCapabilityClasses).toEqual(['read', 'write']);
   });
 
@@ -50,7 +50,7 @@ describe('tool surface migration', () => {
       agentSpecName: 'readonly'
     });
 
-    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch', 'summary_tool']);
+    expect(runtime.availableTools.map((tool) => tool.name)).toEqual(['file', 'shell', 'git', 'web_fetch']);
     expect(runtime.resolvedPackage?.effectivePolicy.allowedCapabilityClasses).toEqual(['read']);
   });
 

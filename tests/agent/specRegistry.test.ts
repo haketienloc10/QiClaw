@@ -37,6 +37,9 @@ async function writeBuiltinPackageFixture(
   await writeFile(join(directoryPath, 'agent.json'), `${JSON.stringify(fixture.manifest, null, 2)}\n`);
 
   for (const [fileName, content] of Object.entries(fixture.promptFiles ?? {})) {
+    if (content === undefined) {
+      continue;
+    }
     await writeFile(join(directoryPath, fileName), content);
   }
 }

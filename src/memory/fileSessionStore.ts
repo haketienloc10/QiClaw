@@ -43,7 +43,7 @@ const META_ENGINE = 'file-session-memory-store';
 export class FileSessionStore {
   private readonly sessionId: string;
   private readonly artifactPaths: SessionMemoryArtifactPaths;
-  private readonly memoryConfig?: MemoryEmbeddingConfig;
+  protected readonly memoryConfig?: MemoryEmbeddingConfig;
 
   constructor(options: FileSessionStoreOptions) {
     this.sessionId = options.sessionId;

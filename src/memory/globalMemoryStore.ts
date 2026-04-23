@@ -42,7 +42,7 @@ const TRACK = 'user-global';
 
 export class GlobalMemoryStore {
   private readonly artifactPaths: SessionMemoryArtifactPaths;
-  private readonly memoryConfig?: MemoryEmbeddingConfig;
+  protected readonly memoryConfig?: MemoryEmbeddingConfig;
 
   constructor(options: GlobalMemoryStoreOptions = {}) {
     this.memoryConfig = options.memoryConfig;

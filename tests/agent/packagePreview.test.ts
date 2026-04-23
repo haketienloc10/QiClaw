@@ -50,7 +50,7 @@ const resolvedPackage: ResolvedAgentPackage = {
       manifestPath: '/builtin/readonly/agent.json',
       manifest: {
         policy: {
-          allowedCapabilityClasses: ['read', 'search'],
+          allowedCapabilityClasses: ['read'],
           maxToolRounds: 6,
           mutationMode: 'none',
           includeSkills: true

@@ -3,12 +3,14 @@ import { fileURLToPath } from 'node:url';
 
 import { execa } from 'execa';
 
+import type { Message } from '../core/types.js';
 import type { Tool } from './tool.js';
 
 type SummaryMode = 'normal' | 'concise' | 'memory';
 
 type SummaryToolInput = {
-  texts: string[];
+  texts?: string[];
+  messages?: Message[];
   mode?: string;
   dedupeSentences?: boolean;
 };
@@ -55,10 +57,36 @@ export const summaryTool: Tool<SummaryToolInput> = {
         type: 'array',
         items: { type: 'string' }
       },
+      messages: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            role: { type: 'string' },
+            content: { type: 'string' },
+            name: { type: 'string' },
+            toolCallId: { type: 'string' },
+            toolCalls: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  name: { type: 'string' },
+                  input: {}
+                },
+                required: ['id', 'name'],
+                additionalProperties: true
+              }
+            }
+          },
+          required: ['role', 'content'],
+          additionalProperties: true
+        }
+      },
       mode: { type: 'string' },
       dedupeSentences: { type: 'boolean' }
     },
-    required: ['texts'],
     additionalProperties: false
   },
   async execute(input, context) {
@@ -81,25 +109,37 @@ export const summaryTool: Tool<SummaryToolInput> = {
   }
 };
 
+function normalizeTranscriptMessages(messages: Message[]): string[] {
+  return messages
+    .map((message) => message.content)
+    .filter((content) => content.trim().length > 0);
+}
+
 function normalizeAndValidateInput(input: SummaryToolInput): {
   texts: string[];
   mode: SummaryMode;
   dedupeSentences: boolean;
 } {
-  if (!Array.isArray(input.texts) || input.texts.length === 0) {
-    throw new Error('SUMMARY_TOOL_INVALID_INPUT: texts must be a non-empty array.');
+  const textsFromInput = Array.isArray(input.texts) ? input.texts : undefined;
+  const textsFromMessages = Array.isArray(input.messages)
+    ? normalizeTranscriptMessages(input.messages)
+    : undefined;
+
+  const texts = textsFromInput ?? textsFromMessages;
+  if (!texts || texts.length === 0) {
+    throw new Error('SUMMARY_TOOL_INVALID_INPUT: provide non-empty texts or messages.');
   }
 
-  if (input.texts.length > MAX_BLOCKS) {
+  if (texts.length > MAX_BLOCKS) {
     throw new Error(`SUMMARY_TOOL_INVALID_INPUT: texts must contain no more than ${MAX_BLOCKS} blocks.`);
   }
 
-  if (input.texts.some((text) => typeof text !== 'string')) {
+  if (texts.some((text) => typeof text !== 'string')) {
     throw new Error('SUMMARY_TOOL_INVALID_INPUT: texts must contain only strings.');
   }
 
-  const texts = input.texts.map((text) => text);
-  if (texts.some((text) => text.trim().length === 0)) {
+  const normalizedTexts = texts.map((text) => text);
+  if (normalizedTexts.some((text) => text.trim().length === 0)) {
     throw new Error('SUMMARY_TOOL_INVALID_INPUT: text blocks must be non-empty after trimming.');
   }
 
@@ -114,7 +154,7 @@ function normalizeAndValidateInput(input: SummaryToolInput): {
   }
 
   return {
-    texts,
+    texts: normalizedTexts,
     mode,
     dedupeSentences
   };

@@ -14,14 +14,11 @@ interface EmbeddingIndex {
 }
 
 export class EmbeddingSessionStore extends FileSessionStore {
-  private readonly memoryConfig;
-
   constructor(options: FileSessionStoreOptions) {
     super(options);
     if (!options.memoryConfig) {
       throw new Error('EmbeddingSessionStore requires memoryConfig');
     }
-    this.memoryConfig = options.memoryConfig;
   }
 
   override async open(): Promise<void> {
@@ -31,7 +28,7 @@ export class EmbeddingSessionStore extends FileSessionStore {
 
   override async put(entry: Parameters<FileSessionStore['put']>[0]): Promise<string> {
     const uri = await super.put(entry);
-    const [vector] = await embedTexts(this.memoryConfig, buildEmbeddingInput(entry));
+    const [vector] = await embedTexts(this.memoryConfig!, buildEmbeddingInput(entry));
     const index = await this.readEmbeddingIndex();
     index.entries = [
       ...index.entries.filter((candidate) => candidate.hash !== entry.hash),
@@ -42,7 +39,7 @@ export class EmbeddingSessionStore extends FileSessionStore {
   }
 
   override async recall(query: string, options: { k: number }): Promise<SessionMemoryCandidate[]> {
-    const [queryVector] = await embedTexts(this.memoryConfig, query);
+    const [queryVector] = await embedTexts(this.memoryConfig!, query);
     const records = await this.readMemoryRecords();
     const meta = await this.readMeta();
     const vectorByHash = new Map((await this.readEmbeddingIndex()).entries.map((entry) => [entry.hash, entry.vector]));

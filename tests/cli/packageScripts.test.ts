@@ -3,14 +3,15 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 describe('package scripts', () => {
-  it('rebuilds the Rust TUI before npm run dev launches the CLI', () => {
+  it('keeps npm run dev focused on the CLI entrypoint while dev:tui rebuilds the Rust TUI first', () => {
     const packageJson = JSON.parse(
       readFileSync(new URL('../../package.json', import.meta.url), 'utf8')
     ) as {
       scripts?: Record<string, string>;
     };
 
-    expect(packageJson.scripts?.dev).toContain('build:tui');
-    expect(packageJson.scripts?.dev).toContain('tsx src/cli/main.ts');
+    expect(packageJson.scripts?.dev).toBe('tsx src/cli/main.ts');
+    expect(packageJson.scripts?.dev).not.toContain('build:tui');
+    expect(packageJson.scripts?.['dev:tui']).toBe('npm run build:tui && tsx src/cli/main.ts');
   });
 });

@@ -11,6 +11,10 @@ import {
   type SessionMemoryCheckpointState
 } from '../memory/sessionMemoryEngine.js';
 import { resolveMemoryEmbeddingConfig } from '../memory/memoryEmbeddingConfig.js';
+import {
+  captureInteractiveBlueprintOutcome,
+  prepareInteractiveBlueprintContext
+} from '../blueprint/engine.js';
 import type { CheckpointStore } from '../session/checkpointStore.js';
 import {
   createInteractiveCheckpointJson,
@@ -34,6 +38,8 @@ export interface TuiControllerOptions {
   }>;
   prepareSessionMemory?: typeof prepareInteractiveSessionMemory;
   captureTurnMemory?: typeof captureInteractiveTurnMemory;
+  prepareBlueprint?: typeof prepareInteractiveBlueprintContext;
+  captureBlueprint?: typeof captureInteractiveBlueprintOutcome;
   createSessionId?: () => string;
   runDirectCommand?: (request: DirectCommandRequest) => Promise<{ transcriptCells: Array<{ id: string; kind: 'user' | 'assistant' | 'tool' | 'status' | 'diff' | 'shell' | 'summary'; text: string; title?: string; toolName?: string; isError?: boolean }>; footer?: string }>;
   updateModel?: (argsText: string) => { provider: string; model: string };
@@ -156,6 +162,8 @@ export function createTuiController(options: TuiControllerOptions): TuiControlle
   });
   const prepareSessionMemory = options.prepareSessionMemory ?? prepareInteractiveSessionMemory;
   const captureTurnMemory = options.captureTurnMemory ?? captureInteractiveTurnMemory;
+  const prepareBlueprint = options.prepareBlueprint ?? prepareInteractiveBlueprintContext;
+  const captureBlueprint = options.captureBlueprint ?? captureInteractiveBlueprintOutcome;
   const createSession = options.createSessionId ?? createSessionId;
   const directCommandRunner = options.runDirectCommand ?? ((request) => runDirectCommand(request, options.cwd));
   const memoryConfig = resolveMemoryEmbeddingConfig(process.env);
@@ -410,6 +418,7 @@ export function createTuiController(options: TuiControllerOptions): TuiControlle
       }
     };
     let preparedMemory: PrepareInteractiveSessionMemoryResult | undefined;
+    let preparedBlueprint: Awaited<ReturnType<typeof prepareInteractiveBlueprintContext>> | undefined;
 
     try {
       preparedMemory = await prepareSessionMemory({
@@ -427,6 +436,15 @@ export function createTuiController(options: TuiControllerOptions): TuiControlle
     const historyContext = buildPromptHistoryContext(history, historySummary);
 
     try {
+      preparedBlueprint = await prepareBlueprint({
+        userInput: prompt,
+        historySummary: historyContext.historySummary
+      });
+    } catch {
+      preparedBlueprint = undefined;
+    }
+
+    try {
       const result = await executeTurn({
         provider: options.runtime.provider,
         availableTools: options.runtime.availableTools,
@@ -439,6 +457,7 @@ export function createTuiController(options: TuiControllerOptions): TuiControlle
         history: historyContext.history,
         historySummary: historyContext.historySummary,
         memoryText: preparedMemory?.memoryText ?? '',
+        blueprintText: preparedBlueprint?.blueprintText ?? '',
         sessionId
       });
       const resultWithSummary = result as RunAgentTurnResult & {
@@ -496,6 +515,15 @@ export function createTuiController(options: TuiControllerOptions): TuiControlle
         } catch (error) {
           emit({ type: 'warning', text: error instanceof Error ? error.message : String(error) });
         }
+      }
+
+      try {
+        await captureBlueprint({
+          matchedBlueprint: preparedBlueprint?.matchedBlueprint,
+          result: settled
+        });
+      } catch {
+        // best effort only
       }
 
       emit({

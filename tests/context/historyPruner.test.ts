@@ -329,4 +329,26 @@ describe('buildPromptWithContext', () => {
       message('user', 'Newest user follow-up')
     ]);
   });
+
+  it('places blueprint context after memory and before conversation history', () => {
+    const result = buildPromptWithContext({
+      baseSystemPrompt: 'Base system prompt',
+      memoryText: 'Memory:\n- stable recalled fact',
+      blueprintText: 'Blueprint:\n- When task matches deploy rollback, inspect logs first.',
+      historySummary: 'History summary:\n- older context',
+      history: [
+        message('user', 'Recent user question'),
+        message('assistant', 'Recent assistant reply')
+      ]
+    });
+
+    expect(result.systemPrompt).toBe('Base system prompt\n\nHistory summary:\n- older context');
+    expect(result.messages).toEqual([
+      message('system', 'Base system prompt\n\nHistory summary:\n- older context'),
+      message('user', 'Memory:\n- stable recalled fact'),
+      message('user', 'Blueprint:\n- When task matches deploy rollback, inspect logs first.'),
+      message('user', 'Recent user question'),
+      message('assistant', 'Recent assistant reply')
+    ]);
+  });
 });

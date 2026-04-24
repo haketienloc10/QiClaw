@@ -331,6 +331,138 @@ describe('tuiController', () => {
     expect(emitted).toContainEqual(expect.objectContaining({ type: 'status', text: 'Session cleared.' }));
   });
 
+  it('does not retain transient blueprint context across /clear before the next turn', async () => {
+    const emitted: HostEvent[] = [];
+    const executeTurn = vi.fn(async ({ userInput, blueprintText }) => ({
+      stopReason: 'completed' as const,
+      finalAnswer: `answer for ${userInput}`,
+      history: [
+        { role: 'user', content: userInput },
+        { role: 'assistant', content: `answer for ${userInput}` }
+      ],
+      historySummary: undefined,
+      memoryCandidates: [],
+      structuredOutputParsed: false,
+      toolRoundsUsed: 0,
+      doneCriteria: {
+        goal: userInput,
+        checklist: [userInput],
+        requiresNonEmptyFinalAnswer: true,
+        requiresToolEvidence: false,
+        requiresSubstantiveFinalAnswer: false,
+        forbidSuccessAfterToolErrors: false
+      },
+      verification: {
+        isVerified: true,
+        finalAnswerIsNonEmpty: true,
+        finalAnswerIsSubstantive: true,
+        toolEvidenceSatisfied: true,
+        noUnresolvedToolErrors: true,
+        toolMessagesCount: 0,
+        checks: []
+      },
+      observedBlueprintText: blueprintText
+    }));
+    const prepareBlueprint = vi.fn(async ({ userInput }) => ({
+      blueprintText: userInput === 'second question' ? '' : 'Blueprint: inspect logs before rollback',
+      matchedBlueprint: userInput === 'second question'
+        ? undefined
+        : {
+            id: 'bp_deploy_rollback',
+            title: 'Deploy rollback investigation',
+            goal: 'Handle deploy rollback requests safely.',
+            trigger: { title: 'Deploy rollback', patterns: ['deploy rollback'], tags: ['deploy'] },
+            preconditions: [],
+            steps: [],
+            branches: [],
+            expectedEvidence: [],
+            failureModes: [],
+            tags: ['deploy'],
+            source: 'fixture:test',
+            createdAt: '2026-04-23T10:00:00.000Z',
+            updatedAt: '2026-04-23T10:00:00.000Z',
+            status: 'active' as const,
+            stats: { useCount: 0, successCount: 0, failureCount: 0 },
+            markdownPath: '/tmp/bp_deploy_rollback.md'
+          }
+    }));
+    const captureBlueprint = vi.fn(async () => undefined);
+
+    const controller = createTuiController({
+      cwd: '/tmp/qiclaw-controller-blueprint-clear',
+      runtime: {
+        provider: { name: 'openai', model: 'gpt-test' },
+        availableTools: [],
+        systemPrompt: 'system prompt',
+        cwd: '/tmp/qiclaw-controller-blueprint-clear',
+        maxToolRounds: 3,
+        observer: { record() {} }
+      },
+      checkpointStore: {
+        getLatest() {
+          return undefined;
+        },
+        save() {}
+      },
+      createSessionId: () => 'session-blueprint-clear',
+      prepareSessionMemory: vi.fn(async () => ({
+        memoryText: '',
+        store: { stub: true },
+        recalled: [],
+        checkpointState: {
+          storeSessionId: 'session-blueprint-clear',
+          engine: 'file-session-memory',
+          version: 1,
+          memoryPath: '/tmp/memory.jsonl',
+          metaPath: '/tmp/meta.json',
+          totalEntries: 0,
+          lastCompactedAt: null
+        }
+      })),
+      captureTurnMemory: vi.fn(async () => ({
+        saved: true,
+        checkpointState: {
+          storeSessionId: 'session-blueprint-clear',
+          engine: 'file-session-memory',
+          version: 1,
+          memoryPath: '/tmp/memory.jsonl',
+          metaPath: '/tmp/meta.json',
+          totalEntries: 0,
+          lastCompactedAt: null
+        }
+      })),
+      prepareBlueprint,
+      captureBlueprint,
+      executeTurn,
+      emit(message) {
+        emitted.push(parseBridgeMessage(message));
+      }
+    });
+
+    await controller.start();
+    await controller.handleAction({ type: 'submit_prompt', prompt: 'first question' });
+    await controller.handleAction({ type: 'run_slash_command', command: '/clear' });
+    await controller.handleAction({ type: 'submit_prompt', prompt: 'second question' });
+
+    expect(executeTurn).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      userInput: 'first question',
+      blueprintText: 'Blueprint: inspect logs before rollback'
+    }));
+    expect(executeTurn).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      userInput: 'second question',
+      blueprintText: ''
+    }));
+    expect(captureBlueprint).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      matchedBlueprint: expect.objectContaining({ id: 'bp_deploy_rollback' })
+    }));
+    expect(captureBlueprint).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      matchedBlueprint: undefined,
+      result: expect.objectContaining({ finalAnswer: 'answer for second question' })
+    }));
+    expect(emitted).toContainEqual({ type: 'transcript_seed', cells: [] });
+    expect(emitted).toContainEqual(expect.objectContaining({ type: 'status', text: 'Session cleared.' }));
+  });
+
   it('saves and restores local slash and shell transcript cells via checkpoint state', async () => {
     const emitted: HostEvent[] = [];
     const savedRecords: Array<{ sessionId: string; checkpointJson: string }> = [];

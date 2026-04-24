@@ -1,13 +1,10 @@
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import pc from 'picocolors';
-import { buildDoneCriteria } from '../agent/doneCriteria.js';
 import { createAgentPackagePreview } from '../agent/packagePreview.js';
 import { resolveAgentPackage as resolveAgentPackageForPreview } from '../agent/packageResolver.js';
 import { createAgentRuntime, type AgentRuntime } from '../agent/runtime.js';
 import type { ResolvedAgentPackage } from '../agent/spec.js';
-import { createTaskContract } from '../agent/taskContract.js';
-import { createTaskVerdict } from '../agent/taskVerdict.js';
 import {
   createRunAgentTurnExecution,
   type ModelMemoryCandidate,
@@ -32,6 +29,11 @@ import {
   type RecallInputsDebugRecord
 } from '../memory/sessionMemoryEngine.js';
 import { resolveMemoryEmbeddingConfig } from '../memory/memoryEmbeddingConfig.js';
+import {
+  captureInteractiveBlueprintOutcome,
+  prepareInteractiveBlueprintContext
+} from '../blueprint/engine.js';
+import { importBlueprintJson } from '../blueprint/importer.js';
 import { createCompositeObserver } from '../telemetry/composite.js';
 import {
   createCompactCliTelemetryObserver,
@@ -46,8 +48,6 @@ import type { Message } from '../core/types.js';
 import { createTuiController, type TuiController } from './tuiController.js';
 import { launchTui as launchTuiFrontend, type TuiLaunchOptions } from './tuiLauncher.js';
 import { parseBridgeMessage, type HostEvent } from './tuiProtocol.js';
-import { runSpecialistOrchestrator } from '../specialist/orchestrator.js';
-import { executeSpecialistTurn } from '../specialist/runtime.js';
 
 export type Cli = {
   run(): Promise<number>;
@@ -82,48 +82,6 @@ type CliDisplayMode = 'compact' | 'plain' | 'interactive';
 interface PendingFooterRenderState {
   isVerified: boolean;
   toolRoundsUsed: number;
-}
-
-function createSyntheticTurnResult(args: {
-  taskId: string;
-  userInput: string;
-  finalAnswer: string;
-  history: Message[];
-}): Pick<RunAgentTurnResult, 'stopReason' | 'finalAnswer' | 'history' | 'memoryCandidates' | 'structuredOutputParsed' | 'toolRoundsUsed' | 'doneCriteria' | 'verification' | 'taskContract' | 'taskVerdict'> {
-  const doneCriteria = buildDoneCriteria(args.userInput);
-  const taskContract = createTaskContract({
-    taskId: args.taskId,
-    userInput: args.userInput,
-    criteria: doneCriteria
-  });
-  const verification: RunAgentTurnResult['verification'] = {
-    isVerified: args.finalAnswer.length > 0,
-    finalAnswerIsNonEmpty: args.finalAnswer.length > 0,
-    finalAnswerIsSubstantive: args.finalAnswer.length > 0,
-    toolEvidenceSatisfied: true,
-    noUnresolvedToolErrors: true,
-    toolMessagesCount: 0,
-    checks: []
-  };
-
-  return {
-    stopReason: 'completed',
-    finalAnswer: args.finalAnswer,
-    history: args.history,
-    memoryCandidates: [],
-    structuredOutputParsed: false,
-    toolRoundsUsed: 0,
-    doneCriteria,
-    verification,
-    taskContract,
-    taskVerdict: createTaskVerdict({
-      contract: taskContract,
-      verification,
-      finalAnswer: args.finalAnswer,
-      stopReason: 'completed',
-      turnCompleted: true
-    })
-  };
 }
 
 interface MemoryCandidatesDebugRecord {
@@ -168,6 +126,8 @@ export interface BuildCliOptions {
   runTurn?: (input: CliRunTurnInput) => Promise<CliRunTurnResult>;
   prepareSessionMemory?: typeof prepareInteractiveSessionMemory;
   captureTurnMemory?: typeof captureInteractiveTurnMemory;
+  prepareBlueprint?: typeof prepareInteractiveBlueprintContext;
+  captureBlueprint?: typeof captureInteractiveBlueprintOutcome;
   createTuiController?: (options: Parameters<typeof createTuiController>[0]) => TuiController;
   launchTui?: (options: TuiLaunchOptions) => Promise<number>;
 }
@@ -183,61 +143,43 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
   const sessionIdFactory = options.createSessionId ?? createSessionId;
   const prepareSessionMemory = options.prepareSessionMemory ?? prepareInteractiveSessionMemory;
   const captureTurnMemory = options.captureTurnMemory ?? captureInteractiveTurnMemory;
+  const prepareBlueprint = options.prepareBlueprint ?? prepareInteractiveBlueprintContext;
+  const captureBlueprint = options.captureBlueprint ?? captureInteractiveBlueprintOutcome;
   const tuiControllerFactory = options.createTuiController ?? ((controllerOptions: Parameters<typeof createTuiController>[0]) => createTuiController(controllerOptions));
   const launchTui = options.launchTui ?? ((launchOptions: TuiLaunchOptions) => launchTuiFrontend(launchOptions));
   const executeTurn: (input: CliRunTurnInput) => Promise<CliRunTurnResult & { finalResult?: Promise<CliRunTurnResult> }> = options.runTurn
     ? options.runTurn
-    : async ({ sessionId, ...input }) => {
-        const routed = await runSpecialistOrchestrator({
-          sessionId,
-          parentTaskId: undefined,
-          userInput: input.userInput,
-          history: input.history ?? [],
-          historySummary: input.historySummary,
-          memoryText: input.memoryText,
-          availableTools: input.availableTools,
-          observer: input.observer,
-          executeMainTurn: async () => {
-            const execution = createRunAgentTurnExecution(input);
-            const turnResult = execution.turnResult;
+    : async ({ sessionId: _sessionId, ...input }) => {
+        const execution = createRunAgentTurnExecution(input);
+        const turnResult = execution.turnResult;
 
-            return {
-              ...createSyntheticTurnResult({
-                taskId: `cli-preview-${Date.now()}`,
-                userInput: input.userInput,
-                finalAnswer: '',
-                history: []
-              }),
-              turnStream: execution.turnStream,
-              finalResult: turnResult
-            };
+        return {
+          stopReason: 'completed',
+          finalAnswer: '',
+          history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
           },
-          executeSpecialistTurn: async ({ brief, availableTools, observer }) => executeSpecialistTurn({
-            provider: input.provider,
-            cwd: input.cwd,
-            brief,
-            availableTools,
-            observer
-          })
-        });
-
-        if ('mode' in routed && routed.mode === 'specialist') {
-          const history = [...(input.history ?? []), { role: 'user', content: input.userInput }, { role: 'assistant', content: routed.finalAnswer }];
-          const result = createSyntheticTurnResult({
-            taskId: `specialist-${Date.now()}`,
-            userInput: input.userInput,
-            finalAnswer: routed.finalAnswer,
-            history
-          });
-
-          return {
-            ...result,
-            structuredOutputParsed: routed.parsed,
-            historySummary: input.historySummary
-          };
-        }
-
-        return routed;
+          verification: {
+            isVerified: false,
+            finalAnswerIsNonEmpty: false,
+            finalAnswerIsSubstantive: false,
+            toolEvidenceSatisfied: false,
+            noUnresolvedToolErrors: false,
+            toolMessagesCount: 0,
+            checks: []
+          },
+          turnStream: execution.turnStream,
+          finalResult: turnResult
+        };
       };
 
   return {
@@ -250,6 +192,21 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
 
         if (parsed.agentSpecPreviewName) {
           stdout.write(await formatAgentSpecPreview(parsed.agentSpecPreviewName, cwd));
+          return 0;
+        }
+
+        if (parsed.blueprintImportPath) {
+          const importPath = isAbsolute(parsed.blueprintImportPath)
+            ? parsed.blueprintImportPath
+            : join(cwd, parsed.blueprintImportPath);
+          const result = await importBlueprintJson({
+            inputPath: importPath
+          });
+          stdout.write(`Imported ${result.importedCount} blueprint(s) from ${importPath}.\n`);
+          if (result.supersededCount > 0) {
+            stdout.write(`Superseded ${result.supersededCount} blueprint(s).\n`);
+          }
+          stdout.write(`Imported IDs: ${result.importedIds.join(', ')}\n`);
           return 0;
         }
 
@@ -287,6 +244,8 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
               executeTurn,
               prepareSessionMemory,
               captureTurnMemory,
+              prepareBlueprint,
+              captureBlueprint,
               createSessionId: sessionIdFactory,
               updateModel(argsText) {
                 const trimmed = argsText.trim();
@@ -448,12 +407,21 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
               const recallInput = userInput.slice('/recal'.length).trim();
 
               if (recallInput.length === 0) {
-                return createSyntheticTurnResult({
-                  taskId: `recal-usage-${Date.now()}`,
-                  userInput,
+                return {
+                  stopReason: 'completed' as const,
                   finalAnswer: 'Usage: /recal <input>',
-                  history
-                });
+                  history,
+                  toolRoundsUsed: 0,
+                  verification: {
+                    isVerified: true,
+                    finalAnswerIsNonEmpty: true,
+                    finalAnswerIsSubstantive: true,
+                    toolEvidenceSatisfied: true,
+                    noUnresolvedToolErrors: true,
+                    toolMessagesCount: 0,
+                    checks: []
+                  }
+                };
               }
 
               const historyContext = buildPromptHistoryContext(history, historySummary);
@@ -487,16 +455,28 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
                 })
               });
 
-              return createSyntheticTurnResult({
-                taskId: `recal-${Date.now()}`,
-                userInput,
+              return {
+                stopReason: 'completed' as const,
                 finalAnswer: inspection.renderedText,
-                history
-              });
+                history,
+                toolRoundsUsed: 0,
+                verification: {
+                  isVerified: true,
+                  finalAnswerIsNonEmpty: inspection.renderedText.length > 0,
+                  finalAnswerIsSubstantive: inspection.renderedText.length > 0,
+                  toolEvidenceSatisfied: true,
+                  noUnresolvedToolErrors: true,
+                  toolMessagesCount: 0,
+                  checks: []
+                }
+              };
             }
 
             let preparedMemory:
               | Awaited<ReturnType<typeof prepareInteractiveSessionMemory>>
+              | undefined;
+            let preparedBlueprint:
+              | Awaited<ReturnType<typeof prepareInteractiveBlueprintContext>>
               | undefined;
             const historyContext = buildPromptHistoryContext(history, historySummary);
 
@@ -526,6 +506,15 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
               });
             }
 
+            try {
+              preparedBlueprint = await prepareBlueprint({
+                userInput,
+                historySummary: historyContext.historySummary
+              });
+            } catch {
+              preparedBlueprint = undefined;
+            }
+
             const result = await executeTurn({
               provider: runtime.provider,
               availableTools: runtime.availableTools,
@@ -538,6 +527,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
               history: historyContext.history,
               historySummary: historyContext.historySummary,
               memoryText: preparedMemory?.memoryText ?? '',
+              blueprintText: preparedBlueprint?.blueprintText ?? '',
               sessionId
             });
             const settledResultPromise = (result.finalResult
@@ -565,31 +555,40 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
                 }
 
                 if (preparedMemory) {
-                    try {
-                      const captureResult = await captureTurnMemory({
-                        store: preparedMemory.store,
-                        sessionId: sessionMemoryState?.storeSessionId ?? sessionId,
-                        userInput,
-                        finalAnswer: settledResult.finalAnswer,
-                        history,
-                        memoryCandidates,
-                        memoryConfig
-                      });
+                  try {
+                    const captureResult = await captureTurnMemory({
+                      store: preparedMemory.store,
+                      sessionId: sessionMemoryState?.storeSessionId ?? sessionId,
+                      userInput,
+                      finalAnswer: settledResult.finalAnswer,
+                      history,
+                      memoryCandidates,
+                      memoryConfig
+                    });
 
-                      sessionMemoryState = captureResult.saved
-                        ? captureResult.checkpointState
-                        : preparedMemory.checkpointState;
-                    } catch (error) {
-                      sessionMemoryState = preparedMemory.checkpointState;
-                      recordInteractiveMemoryFallback(cliObserver.observer, {
-                        sessionId,
-                        message: formatCliError(error),
-                        kind: 'capture'
-                      });
-                    }
+                    sessionMemoryState = captureResult.saved
+                      ? captureResult.checkpointState
+                      : preparedMemory.checkpointState;
+                  } catch (error) {
+                    sessionMemoryState = preparedMemory.checkpointState;
+                    recordInteractiveMemoryFallback(cliObserver.observer, {
+                      sessionId,
+                      message: formatCliError(error),
+                      kind: 'capture'
+                    });
                   }
+                }
 
-                  checkpointStore.save({
+                try {
+                  await captureBlueprint({
+                    matchedBlueprint: preparedBlueprint?.matchedBlueprint,
+                    result: settledResult
+                  });
+                } catch {
+                  // best effort only
+                }
+
+                checkpointStore.save({
                     sessionId,
                     taskId: 'interactive',
                     status: settledResult.stopReason === 'completed' ? 'completed' : 'running',
@@ -1414,6 +1413,7 @@ function parseArgs(argv: string[]): {
   debugLogPath?: string;
   agentSpecName?: string;
   agentSpecPreviewName?: string;
+  blueprintImportPath?: string;
 } {
   let prompt: string | undefined;
   let provider = resolveDefaultProviderFromEnv();
@@ -1423,6 +1423,7 @@ function parseArgs(argv: string[]): {
   let debugLogPath: string | undefined;
   let agentSpecName: string | undefined;
   let agentSpecPreviewName: string | undefined;
+  let blueprintImportPath: string | undefined;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -1523,6 +1524,18 @@ function parseArgs(argv: string[]): {
       continue;
     }
 
+    if (token === '--blueprint-import') {
+      const value = argv[index + 1];
+
+      if (!value || value.startsWith('--')) {
+        throw new Error('Missing value for --blueprint-import');
+      }
+
+      blueprintImportPath = value;
+      index += 1;
+      continue;
+    }
+
     if (token.startsWith('--')) {
       throw new Error(`Unknown argument: ${token}`);
     }
@@ -1538,7 +1551,8 @@ function parseArgs(argv: string[]): {
     apiKey,
     debugLogPath,
     agentSpecName,
-    agentSpecPreviewName
+    agentSpecPreviewName,
+    blueprintImportPath
   };
 }
 

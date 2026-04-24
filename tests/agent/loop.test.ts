@@ -868,11 +868,7 @@ describe('agent loop', () => {
         checklist: ['say hi'],
         requiresToolEvidence: false
       }),
-      turnCompleted: true,
-      taskContract: expect.objectContaining({
-        taskId: expect.any(String),
-        goal: 'say hi'
-      })
+      turnCompleted: true
     });
 
     const result = await runAgentTurn(input);
@@ -889,16 +885,6 @@ describe('agent loop', () => {
         goal: 'say hi',
         checklist: ['say hi'],
         requiresToolEvidence: false
-      }),
-      taskContract: expect.objectContaining({
-        taskId: expect.any(String),
-        goal: 'say hi',
-        expectedEvidence: []
-      }),
-      taskVerdict: expect.objectContaining({
-        taskId: expect.any(String),
-        status: 'passed',
-        isCompleted: true
       })
     });
   });
@@ -967,11 +953,6 @@ describe('agent loop', () => {
         ],
         memoryCandidates: [],
         structuredOutputParsed: true,
-        taskContract: expect.objectContaining({
-          taskId: expect.any(String),
-          goal: 'say hi',
-          expectedEvidence: []
-        }),
         toolRoundsUsed: 0,
         doneCriteria: expect.objectContaining({
           goal: 'say hi',
@@ -1263,7 +1244,7 @@ describe('agent loop', () => {
     }
 
     expect(executedToolCalls).toEqual(['note.txt']);
-    expect(events).toMatchObject([
+    expect(events).toEqual([
       { type: 'turn_started' },
       { type: 'provider_started', provider: 'openai', model: 'gpt-test' },
       {
@@ -1406,7 +1387,7 @@ describe('agent loop', () => {
     }
 
     expect(executedToolCalls).toEqual(['note.txt']);
-    expect(events).toMatchObject([
+    expect(events).toEqual([
       { type: 'turn_started' },
       { type: 'provider_started', provider: 'openai', model: 'gpt-test' },
       {
@@ -2095,6 +2076,42 @@ describe('agent loop', () => {
     ]);
   });
 
+  it('includes blueprint context as a separate user message before conversation history', async () => {
+    const seenRequests: string[][] = [];
+    const provider = createScriptedProvider(
+      [
+        {
+          message: { role: 'assistant', content: 'Done.' },
+          toolCalls: []
+        }
+      ],
+      seenRequests
+    );
+
+    await runAgentTurn({
+      provider,
+      availableTools: getBuiltinTools(),
+      baseSystemPrompt: 'Base prompt',
+      userInput: 'Answer briefly.',
+      cwd: '/tmp/runtime',
+      maxToolRounds: 1,
+      memoryText: 'Memory: user prefers concise answers',
+      blueprintText: 'Blueprint: inspect logs before rollback',
+      historySummary: 'Summary: prior attempt failed',
+      history: [{ role: 'assistant', content: 'Earlier answer.' }]
+    });
+
+    expect(seenRequests).toEqual([
+      [
+        'system:Base prompt\n\nSummary: prior attempt failed',
+        'user:Memory: user prefers concise answers',
+        'user:Blueprint: inspect logs before rollback',
+        'assistant:Earlier answer.',
+        'user:Answer briefly.'
+      ]
+    ]);
+  });
+
   it('applies resolvedPackage completion booleans to verification', async () => {
     const calls: string[][] = [];
     const provider = createScriptedProvider([
@@ -2259,10 +2276,6 @@ describe('agent loop', () => {
           details: 'Tool-error consistency check not required for this goal.'
         }
       ]
-    });
-    expect(result.taskVerdict).toMatchObject({
-      status: 'inconclusive',
-      isCompleted: false
     });
   });
 
@@ -3887,16 +3900,7 @@ describe('agent loop', () => {
           requiresSubstantiveFinalAnswer: false,
           forbidSuccessAfterToolErrors: false
         },
-        turnCompleted: false,
-        taskContract: {
-          taskId: 'task-1',
-          goal: 'Read note.txt carefully.',
-          expectedEvidence: ['at least one successful tool result'],
-          requiresToolEvidence: true,
-          requiresSubstantiveFinalAnswer: false,
-          forbidSuccessAfterToolErrors: false,
-          createdAt: '2026-04-23T10:00:00.000Z'
-        }
+        turnCompleted: false
       };
     }
 
@@ -3918,16 +3922,7 @@ describe('agent loop', () => {
         requiresSubstantiveFinalAnswer: false,
         forbidSuccessAfterToolErrors: false
       },
-      turnCompleted: false,
-      taskContract: {
-        taskId: 'task-1',
-        goal: 'Read note.txt carefully.',
-        expectedEvidence: ['at least one successful tool result'],
-        requiresToolEvidence: true,
-        requiresSubstantiveFinalAnswer: false,
-        forbidSuccessAfterToolErrors: false,
-        createdAt: '2026-04-23T10:00:00.000Z'
-      }
+      turnCompleted: false
     });
   });
 

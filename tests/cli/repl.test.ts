@@ -927,6 +927,68 @@ describe('createRepl', () => {
 });
 
 describe('buildCli', () => {
+  it('imports blueprint JSON via --blueprint-import without entering prompt or interactive execution', async () => {
+    await withProviderEnvSnapshot(async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-blueprint-import-'));
+      tempDirs.push(tempDir);
+
+      const blueprintsDir = join(tempDir, 'blueprints');
+      const storeDir = join(tempDir, 'store');
+      process.env.QICLAW_GLOBAL_BLUEPRINT_DIR = storeDir;
+      await mkdir(blueprintsDir, { recursive: true });
+      await writeFile(join(blueprintsDir, 'review.json'), JSON.stringify({
+        version: 1,
+        blueprints: [
+          {
+            id: 'bp_cli_import_review',
+            title: 'CLI import review',
+            goal: 'Import through CLI.',
+            trigger: {
+              title: 'CLI import review',
+              patterns: ['cli import review'],
+              tags: ['review']
+            },
+            preconditions: [],
+            steps: [
+              {
+                id: 'scan_scope',
+                title: 'Scan scope',
+                instruction: 'Inspect the diff.',
+                kind: 'inspect'
+              }
+            ],
+            branches: [],
+            expectedEvidence: [],
+            failureModes: [],
+            tags: ['review']
+          }
+        ]
+      }, null, 2));
+
+      const stdoutWrites: string[] = [];
+      const cli = buildCli({
+        argv: ['--blueprint-import', 'blueprints'],
+        cwd: tempDir,
+        stdout: {
+          write(chunk: string | Uint8Array) {
+            stdoutWrites.push(String(chunk));
+            return true;
+          }
+        },
+        createRuntime() {
+          throw new Error('createRuntime should not be called for --blueprint-import');
+        },
+        runTurn: async () => {
+          throw new Error('runTurn should not be called for --blueprint-import');
+        }
+      });
+
+      await expect(cli.run()).resolves.toBe(0);
+      expect(stdoutWrites.join('')).toContain('Imported 1 blueprint(s)');
+      await expect(readFile(join(storeDir, 'index.json'), 'utf8')).resolves.toContain('bp_cli_import_review');
+    });
+  });
+
   it('passes runtime resolvedPackage through prompt-mode turn execution during the bridge phase', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'repl-cli-resolved-package-prompt-'));
     tempDirs.push(tempDir);
@@ -6368,6 +6430,128 @@ describe('buildCli', () => {
         })
       })
     ]);
+  });
+
+  it('passes prepared blueprint context into interactive runTurn and captures outcome after the turn', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'qiclaw-cli-blueprint-'));
+    tempDirs.push(tempDir);
+
+    const prepareBlueprint = vi.fn(async () => ({
+      blueprintText: 'Blueprint: inspect logs before rollback',
+      matchedBlueprint: {
+        id: 'bp_deploy_rollback',
+        title: 'Deploy rollback investigation',
+        goal: 'Handle deploy rollback requests safely.',
+        trigger: { title: 'Deploy rollback', patterns: ['deploy rollback'], tags: ['deploy'] },
+        preconditions: [],
+        steps: [],
+        branches: [],
+        expectedEvidence: [],
+        failureModes: [],
+        tags: ['deploy'],
+        source: 'fixture:test',
+        createdAt: '2026-04-23T10:00:00.000Z',
+        updatedAt: '2026-04-23T10:00:00.000Z',
+        status: 'active' as const,
+        stats: { useCount: 0, successCount: 0, failureCount: 0 },
+        markdownPath: '/tmp/bp_deploy_rollback.md'
+      }
+    }));
+    const captureBlueprint = vi.fn(async () => undefined);
+    const runTurnInputs: Array<{ userInput: string; blueprintText?: string }> = [];
+
+    const cli = buildCli({
+      argv: [],
+      cwd: tempDir,
+      createSessionId: () => 'session-blueprint-1',
+      readLine: (() => {
+        const inputs = ['deploy rollback now', '/exit'];
+        return async () => inputs.shift();
+      })(),
+      stdout: { write() { return true; } },
+      createRuntime: (runtimeOptions) => ({
+        provider: createNoopTestProvider(),
+        availableTools: [],
+        cwd: tempDir,
+        observer: runtimeOptions.observer ?? createNoopObserver(),
+        resolvedPackage: defaultResolvedPackage,
+        systemPrompt: 'Test prompt',
+        maxToolRounds: 3
+      }),
+      prepareSessionMemory: async () => ({
+        memoryText: '',
+        store: undefined as never,
+        globalStore: undefined,
+        recalled: [],
+        checkpointState: {
+          storeSessionId: 'session-blueprint-1',
+          engine: 'file-session-memory-store',
+          version: 1,
+          memoryPath: '/tmp/memory.json',
+          metaPath: '/tmp/meta.json',
+          totalEntries: 0,
+          lastCompactedAt: null
+        }
+      }),
+      captureTurnMemory: async () => ({
+        saved: false,
+        checkpointState: {
+          storeSessionId: 'session-blueprint-1',
+          engine: 'file-session-memory-store',
+          version: 1,
+          memoryPath: '/tmp/memory.json',
+          metaPath: '/tmp/meta.json',
+          totalEntries: 0,
+          lastCompactedAt: null
+        }
+      }),
+      prepareBlueprint,
+      captureBlueprint,
+      runTurn: async (input) => {
+        runTurnInputs.push({ userInput: input.userInput, blueprintText: input.blueprintText });
+        return {
+          stopReason: 'completed',
+          finalAnswer: `answer: ${input.userInput}`,
+          history: [
+            { role: 'user', content: input.userInput },
+            { role: 'assistant', content: `answer: ${input.userInput}` }
+          ],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
+          historySummary: `Summary after ${input.userInput}`,
+          toolRoundsUsed: 0,
+          doneCriteria: {
+            goal: input.userInput,
+            checklist: [input.userInput],
+            requiresNonEmptyFinalAnswer: true as const,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          },
+          verification: {
+            isVerified: true,
+            finalAnswerIsNonEmpty: true,
+            finalAnswerIsSubstantive: true,
+            toolEvidenceSatisfied: true,
+            noUnresolvedToolErrors: true,
+            toolMessagesCount: 0,
+            checks: []
+          }
+        };
+      }
+    });
+
+    await expect(cli.run()).resolves.toBe(0);
+    expect(runTurnInputs).toEqual([
+      { userInput: 'deploy rollback now', blueprintText: 'Blueprint: inspect logs before rollback' }
+    ]);
+    expect(prepareBlueprint).toHaveBeenCalledWith(expect.objectContaining({
+      userInput: 'deploy rollback now'
+    }));
+    expect(captureBlueprint).toHaveBeenCalledWith(expect.objectContaining({
+      matchedBlueprint: expect.objectContaining({ id: 'bp_deploy_rollback' }),
+      result: expect.objectContaining({ finalAnswer: 'answer: deploy rollback now' })
+    }));
   });
 
   it('logs prepare fallback telemetry when embedding recall falls back to lexical', async () => {

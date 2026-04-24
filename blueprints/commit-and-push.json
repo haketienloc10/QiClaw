@@ -1,0 +1,161 @@
+{
+  "version": 1,
+  "blueprints": [
+    {
+      "id": "bp_commit_and_push_code",
+      "title": "Commit code and push to remote repository",
+      "goal": "Prepare a safe commit from local changes and push it to the tracked remote branch.",
+      "trigger": {
+        "title": "Commit and push code",
+        "patterns": [
+          "commit code",
+          "git commit",
+          "commit and push",
+          "push code",
+          "push lên repo",
+          "đẩy code lên repo"
+        ],
+        "tags": ["git", "commit", "push", "repo"]
+      },
+      "preconditions": [
+        {
+          "description": "The repository has local changes that are intended to be committed.",
+          "required": true
+        },
+        {
+          "description": "The target branch and remote are known or can be verified before pushing.",
+          "required": true
+        }
+      ],
+      "steps": [
+        {
+          "id": "inspect_changes",
+          "title": "Inspect local changes",
+          "instruction": "Read git status, review the staged and unstaged diff, and inspect recent commit messages before deciding what should be included in the commit.",
+          "kind": "inspect",
+          "expectedEvidence": [
+            "git status reviewed",
+            "diff reviewed",
+            "recent commit style reviewed"
+          ],
+          "nextStepId": "stage_and_validate"
+        },
+        {
+          "id": "stage_and_validate",
+          "title": "Stage intended files and validate scope",
+          "instruction": "Stage only the intended files, exclude secrets or unrelated changes, and confirm the final staged diff matches the requested scope.",
+          "kind": "verify",
+          "expectedEvidence": [
+            "intended files staged",
+            "staged diff verified"
+          ],
+          "nextStepId": "commit_changes"
+        },
+        {
+          "id": "commit_changes",
+          "title": "Create commit",
+          "instruction": "Create a new commit with a concise message that explains why the change exists, then verify the working tree state after the commit.",
+          "kind": "act",
+          "expectedEvidence": [
+            "commit created",
+            "post-commit status reviewed"
+          ],
+          "nextStepId": "verify_remote_state"
+        },
+        {
+          "id": "verify_remote_state",
+          "title": "Verify remote push target",
+          "instruction": "Check the current branch tracking state and confirm which remote branch will receive the push before sending any changes.",
+          "kind": "verify",
+          "expectedEvidence": [
+            "tracking branch verified",
+            "remote push target confirmed"
+          ],
+          "nextStepId": "push_changes"
+        },
+        {
+          "id": "push_changes",
+          "title": "Push changes",
+          "instruction": "Push the committed branch to the remote without using force, then report the resulting branch or remote state clearly.",
+          "kind": "act",
+          "expectedEvidence": [
+            "push completed",
+            "remote branch updated"
+          ],
+          "nextStepId": "report_result"
+        },
+        {
+          "id": "report_result",
+          "title": "Report result",
+          "instruction": "Summarize what was committed, where it was pushed, and mention any follow-up actions or blockers that remain.",
+          "kind": "communicate",
+          "expectedEvidence": [
+            "commit and push summary reported"
+          ]
+        }
+      ],
+      "branches": [
+        {
+          "id": "branch_no_changes",
+          "condition": "If there are no intended changes to commit, stop and report that no commit should be created.",
+          "gotoStepId": "report_result"
+        },
+        {
+          "id": "branch_push_requires_confirmation",
+          "condition": "If the push target is unclear, shared, or potentially risky, stop and confirm the exact branch or remote before pushing.",
+          "gotoStepId": "report_result"
+        }
+      ],
+      "expectedEvidence": [
+        {
+          "description": "Git status and diff were inspected before committing.",
+          "kind": "tool_result",
+          "required": true
+        },
+        {
+          "description": "The final staged scope was verified before commit.",
+          "kind": "tool_result",
+          "required": true
+        },
+        {
+          "description": "The target remote branch was verified before push.",
+          "kind": "tool_result",
+          "required": true
+        },
+        {
+          "description": "A final summary described the commit and push result.",
+          "kind": "final_answer",
+          "required": true
+        }
+      ],
+      "failureModes": [
+        {
+          "title": "Commiting unrelated or sensitive files",
+          "signals": [
+            "git add used too broadly",
+            "staged diff not reviewed",
+            "secret-like files included"
+          ],
+          "mitigation": "Stage files explicitly and inspect the staged diff before creating the commit."
+        },
+        {
+          "title": "Pushing to the wrong remote or branch",
+          "signals": [
+            "tracking branch not checked",
+            "push target assumed"
+          ],
+          "mitigation": "Inspect tracking information and name the exact push target before pushing."
+        },
+        {
+          "title": "Using destructive git operations as a shortcut",
+          "signals": [
+            "force push proposed",
+            "history rewrite suggested without request"
+          ],
+          "mitigation": "Prefer a normal push and stop for confirmation before any destructive git action."
+        }
+      ],
+      "tags": ["git", "commit", "push", "repo"]
+    }
+  ]
+}

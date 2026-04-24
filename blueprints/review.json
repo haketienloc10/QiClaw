@@ -1,0 +1,104 @@
+{
+  "version": 1,
+  "blueprints": [
+    {
+      "id": "bp_review_diff_general",
+      "title": "Review general git diff",
+      "goal": "Review code changes from the current git diff before merging.",
+      "trigger": {
+        "title": "Review git diff",
+        "patterns": [
+          "review diff",
+          "review patch",
+          "review current git diff",
+          "code review",
+          "check this patch"
+        ],
+        "tags": ["review", "git-diff", "code-review"]
+      },
+      "preconditions": [
+        {
+          "description": "A git diff or changed files are available for inspection.",
+          "required": true
+        }
+      ],
+      "steps": [
+        {
+          "id": "scan_scope",
+          "title": "Scan scope",
+          "instruction": "Read git diff --stat and identify the files and subsystems touched by the patch.",
+          "kind": "inspect",
+          "expectedEvidence": [
+            "changed files identified",
+            "scope summarized"
+          ],
+          "nextStepId": "inspect_risks"
+        },
+        {
+          "id": "inspect_risks",
+          "title": "Inspect risks",
+          "instruction": "Read the changed source and tests to verify invariants, side effects, and regression risks.",
+          "kind": "verify",
+          "expectedEvidence": [
+            "source reviewed",
+            "tests reviewed",
+            "key risks identified"
+          ],
+          "nextStepId": "report_findings"
+        },
+        {
+          "id": "report_findings",
+          "title": "Report findings",
+          "instruction": "Summarize blocking issues, non-blocking issues, and the final review verdict with concrete evidence.",
+          "kind": "communicate",
+          "expectedEvidence": [
+            "review verdict reported"
+          ]
+        }
+      ],
+      "branches": [
+        {
+          "id": "missing_tests_branch",
+          "condition": "If behavior changes but no test covers the changed path, raise it as a review concern.",
+          "gotoStepId": "report_findings"
+        }
+      ],
+      "expectedEvidence": [
+        {
+          "description": "Diff scope and changed files were inspected.",
+          "kind": "tool_result",
+          "required": true
+        },
+        {
+          "description": "Source or tests were inspected for regressions.",
+          "kind": "tool_result",
+          "required": true
+        },
+        {
+          "description": "A final review verdict was reported.",
+          "kind": "final_answer",
+          "required": true
+        }
+      ],
+      "failureModes": [
+        {
+          "title": "Review too shallow",
+          "signals": [
+            "only diff stat inspected",
+            "changed files not read"
+          ],
+          "mitigation": "Read the changed source and tests before reporting a verdict."
+        },
+        {
+          "title": "Missed regression risk",
+          "signals": [
+            "invariants not checked",
+            "side effects not reviewed"
+          ],
+          "mitigation": "Explicitly inspect behavior changes, affected tests, and subsystem boundaries."
+        }
+      ],
+      "tags": ["review", "git-diff", "code-review"]
+    }
+  ]
+}

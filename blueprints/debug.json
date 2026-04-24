@@ -1,0 +1,181 @@
+{
+  "version": 1,
+  "blueprints": [
+    {
+      "id": "bp_debug_root_cause_general",
+      "title": "Debug a bug or failing path by finding the root cause",
+      "goal": "Investigate a bug, crash, failing test, or unexpected behavior by gathering evidence, isolating the failure path, and identifying the root cause before proposing or applying a fix.",
+      "trigger": {
+        "title": "Debug and find root cause",
+        "patterns": [
+          "debug bug",
+          "find root cause",
+          "investigate failing test",
+          "fix this bug",
+          "unexpected behavior",
+          "why is this failing",
+          "debug this crash",
+          "analyze this error"
+        ],
+        "tags": ["debug", "bug", "root-cause", "failing-test", "investigation"]
+      },
+      "preconditions": [
+        {
+          "description": "There is a concrete symptom to investigate, such as a failing test, error message, stack trace, incorrect output, or reproducible bug report.",
+          "required": true
+        },
+        {
+          "description": "The relevant code, logs, test command, or runtime context can be inspected before any fix is proposed.",
+          "required": true
+        }
+      ],
+      "steps": [
+        {
+          "id": "capture_symptom",
+          "title": "Capture the exact symptom",
+          "instruction": "Restate the observed failure precisely and collect the immediate evidence first: error text, failing assertion, stack trace, incorrect output, reproduction steps, or the exact command that fails. Do not jump to causes yet.",
+          "kind": "inspect",
+          "expectedEvidence": [
+            "failing symptom captured",
+            "error or reproduction evidence collected"
+          ],
+          "nextStepId": "establish_reproduction"
+        },
+        {
+          "id": "establish_reproduction",
+          "title": "Establish reproduction or scope",
+          "instruction": "Verify whether the issue is reproducible, intermittent, or only seen in one environment. If exact reproduction is not possible, narrow the scope using the strongest available evidence and state what is still unknown.",
+          "kind": "verify",
+          "expectedEvidence": [
+            "reproduction status identified",
+            "affected scope described"
+          ],
+          "nextStepId": "trace_execution_path"
+        },
+        {
+          "id": "trace_execution_path",
+          "title": "Trace the failure path backward",
+          "instruction": "Follow the failing path through the relevant code, configuration, inputs, and boundaries until you can explain where the bad state or wrong assumption originates. Prefer tracing backward from the symptom to the source over guessing likely fixes.",
+          "kind": "inspect",
+          "expectedEvidence": [
+            "failing path traced",
+            "candidate source of bad state identified"
+          ],
+          "nextStepId": "compare_working_vs_broken"
+        },
+        {
+          "id": "compare_working_vs_broken",
+          "title": "Compare working and broken behavior",
+          "instruction": "Find a nearby working path, prior expected behavior, or a passing case and compare it against the broken case. Use the differences to rule out broad guesses and isolate what changed or what assumption no longer holds.",
+          "kind": "verify",
+          "expectedEvidence": [
+            "working baseline identified",
+            "meaningful differences listed"
+          ],
+          "nextStepId": "form_hypothesis"
+        },
+        {
+          "id": "form_hypothesis",
+          "title": "Form one root-cause hypothesis",
+          "instruction": "State one concrete root-cause hypothesis that explains the symptom and the evidence gathered so far. The hypothesis should be specific enough to test, not a vague list of possibilities.",
+          "kind": "communicate",
+          "expectedEvidence": [
+            "single testable hypothesis stated"
+          ],
+          "nextStepId": "validate_hypothesis"
+        },
+        {
+          "id": "validate_hypothesis",
+          "title": "Validate the hypothesis with minimal change or targeted evidence",
+          "instruction": "Use the smallest possible confirmation step to validate or falsify the hypothesis: a focused test, direct inspection, a minimal instrumentation point, or a narrow experiment. Avoid bundling multiple fixes or unrelated edits.",
+          "kind": "verify",
+          "expectedEvidence": [
+            "hypothesis validated or falsified",
+            "minimal confirmation evidence captured"
+          ],
+          "nextStepId": "report_conclusion"
+        },
+        {
+          "id": "report_conclusion",
+          "title": "Report root cause and next step",
+          "instruction": "Summarize the confirmed root cause, the evidence supporting it, what was ruled out, and the smallest sensible next step. If the hypothesis was not confirmed, report the strongest remaining unknown instead of pretending the cause is settled.",
+          "kind": "communicate",
+          "expectedEvidence": [
+            "root cause or unresolved blocker reported"
+          ]
+        }
+      ],
+      "branches": [
+        {
+          "id": "branch_no_reproduction",
+          "condition": "If exact reproduction is not possible, continue using logs, stack traces, code path inspection, and environment differences, but explicitly mark the conclusion as provisional unless the evidence is still strong enough to confirm the root cause.",
+          "gotoStepId": "trace_execution_path"
+        },
+        {
+          "id": "branch_hypothesis_failed",
+          "condition": "If the first hypothesis is falsified, return to the traced path and comparison evidence, then form a new single hypothesis instead of piling on additional fixes.",
+          "gotoStepId": "trace_execution_path"
+        }
+      ],
+      "expectedEvidence": [
+        {
+          "description": "The exact symptom and failure evidence were captured before discussing fixes.",
+          "kind": "tool_result",
+          "required": true
+        },
+        {
+          "description": "The failing path was traced and compared against a working or expected baseline.",
+          "kind": "tool_result",
+          "required": true
+        },
+        {
+          "description": "A single root-cause hypothesis was tested using targeted evidence or a minimal experiment.",
+          "kind": "tool_result",
+          "required": true
+        },
+        {
+          "description": "The final answer states either a confirmed root cause or the strongest unresolved blocker, with supporting evidence.",
+          "kind": "final_answer",
+          "required": true
+        }
+      ],
+      "failureModes": [
+        {
+          "title": "Guessing the fix before understanding the problem",
+          "signals": [
+            "proposed fix appears before evidence review",
+            "root cause is asserted without tracing the failure path",
+            "multiple speculative fixes are suggested at once"
+          ],
+          "mitigation": "Capture the exact symptom, trace the failing path, and test one hypothesis at a time before recommending a fix."
+        },
+        {
+          "title": "Treating the symptom as the root cause",
+          "signals": [
+            "analysis stops at the thrown error",
+            "only the final failing line is discussed",
+            "upstream state or input origin is not examined"
+          ],
+          "mitigation": "Trace backward from the failure site until the originating bad state, wrong input, or broken assumption is identified."
+        },
+        {
+          "title": "No comparison against a working baseline",
+          "signals": [
+            "working behavior is not described",
+            "differences between passing and failing paths are not listed"
+          ],
+          "mitigation": "Compare the broken path with a working case, expected behavior, or prior invariant to isolate what changed."
+        },
+        {
+          "title": "Bundling diagnosis and repair into one jump",
+          "signals": [
+            "several code changes are proposed before validating the hypothesis",
+            "a broad refactor is suggested as the first move"
+          ],
+          "mitigation": "Use the smallest possible experiment or observation to confirm the hypothesis before proposing broader changes."
+        }
+      ],
+      "tags": ["debug", "bug", "root-cause", "investigation", "failing-test"]
+    }
+  ]
+}

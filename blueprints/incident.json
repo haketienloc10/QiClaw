@@ -1,0 +1,179 @@
+{
+  "version": 1,
+  "blueprints": [
+    {
+      "id": "bp_incident_investigation_general",
+      "title": "Investigate an incident or production issue safely",
+      "goal": "Investigate a production issue, deploy problem, degraded service, or incident report by establishing impact, gathering runtime evidence, separating symptom from cause, and proposing the safest next step.",
+      "trigger": {
+        "title": "Investigate incident",
+        "patterns": [
+          "investigate incident",
+          "production issue",
+          "service is down",
+          "deploy issue",
+          "analyze outage",
+          "investigate degraded service",
+          "check production problem",
+          "why did this deployment fail"
+        ],
+        "tags": ["incident", "production", "deploy", "outage", "runtime", "investigation"]
+      },
+      "preconditions": [
+        {
+          "description": "There is a real or suspected operational issue affecting users, systems, deploys, or runtime behavior.",
+          "required": true
+        },
+        {
+          "description": "Some runtime evidence is available or can be collected, such as logs, alerts, metrics, rollout state, health checks, or environment status.",
+          "required": true
+        }
+      ],
+      "steps": [
+        {
+          "id": "capture_incident_scope",
+          "title": "Capture the incident scope",
+          "instruction": "State what is happening operationally: what broke, when it started, who or what is affected, and whether the issue is active, intermittent, or already mitigated. Distinguish observed impact from assumptions.",
+          "kind": "inspect",
+          "expectedEvidence": [
+            "incident scope summarized",
+            "affected surface identified"
+          ],
+          "nextStepId": "check_current_state"
+        },
+        {
+          "id": "check_current_state",
+          "title": "Check current runtime and rollout state",
+          "instruction": "Inspect the live state first: deployment status, service health, recent releases, traffic behavior, process state, or environment differences. Confirm whether the system is still failing and under what conditions.",
+          "kind": "verify",
+          "expectedEvidence": [
+            "current runtime state reviewed",
+            "recent rollout or environment state reviewed"
+          ],
+          "nextStepId": "gather_runtime_evidence"
+        },
+        {
+          "id": "gather_runtime_evidence",
+          "title": "Gather runtime evidence",
+          "instruction": "Collect the strongest available evidence from logs, metrics, alerts, traces, health checks, error reports, or state transitions. Prefer evidence that narrows timing, affected components, and failure boundaries.",
+          "kind": "inspect",
+          "expectedEvidence": [
+            "runtime evidence collected",
+            "timeline or failure boundaries narrowed"
+          ],
+          "nextStepId": "separate_symptom_from_cause"
+        },
+        {
+          "id": "separate_symptom_from_cause",
+          "title": "Separate symptom from probable cause",
+          "instruction": "Identify which observations are direct symptoms and which ones may point toward an underlying cause. Avoid treating downstream errors, user-visible effects, or mitigation side effects as the root cause without stronger evidence.",
+          "kind": "verify",
+          "expectedEvidence": [
+            "symptoms distinguished from causes",
+            "candidate causal chain described"
+          ],
+          "nextStepId": "assess_blast_radius"
+        },
+        {
+          "id": "assess_blast_radius",
+          "title": "Assess blast radius and urgency",
+          "instruction": "Estimate the blast radius: affected users, services, environments, regions, workflows, or data paths. Note whether the safest next step is observation, containment, rollback consideration, or deeper diagnosis.",
+          "kind": "verify",
+          "expectedEvidence": [
+            "blast radius assessed",
+            "urgency and next-step class identified"
+          ],
+          "nextStepId": "recommend_safe_action"
+        },
+        {
+          "id": "recommend_safe_action",
+          "title": "Recommend the safest next action",
+          "instruction": "Recommend the smallest safe next action based on evidence: continue investigation, apply containment, verify a rollback target, pause rollout, or gather one more decisive signal. If action is risky or user-visible, make that explicit.",
+          "kind": "communicate",
+          "expectedEvidence": [
+            "safe next action proposed"
+          ],
+          "nextStepId": "report_incident_summary"
+        },
+        {
+          "id": "report_incident_summary",
+          "title": "Report incident summary",
+          "instruction": "Summarize impact, current state, strongest evidence, leading hypothesis if any, blast radius, and the recommended next action. Make uncertainty explicit where evidence is incomplete.",
+          "kind": "communicate",
+          "expectedEvidence": [
+            "incident summary reported"
+          ]
+        }
+      ],
+      "branches": [
+        {
+          "id": "branch_no_runtime_evidence",
+          "condition": "If runtime evidence is sparse, keep the summary explicit about uncertainty and prioritize gathering one decisive operational signal before recommending a risky action.",
+          "gotoStepId": "recommend_safe_action"
+        },
+        {
+          "id": "branch_candidate_rollback",
+          "condition": "If rollback is being considered, verify the exact target and expected blast-radius reduction before recommending it as the next action.",
+          "gotoStepId": "recommend_safe_action"
+        }
+      ],
+      "expectedEvidence": [
+        {
+          "description": "The current incident scope and affected surface were established from observed behavior.",
+          "kind": "tool_result",
+          "required": true
+        },
+        {
+          "description": "Runtime evidence such as logs, metrics, rollout state, or health checks was reviewed.",
+          "kind": "tool_result",
+          "required": true
+        },
+        {
+          "description": "Blast radius and urgency were assessed before recommending action.",
+          "kind": "tool_result",
+          "required": true
+        },
+        {
+          "description": "The final answer reports impact, strongest evidence, uncertainty, and the safest next step.",
+          "kind": "final_answer",
+          "required": true
+        }
+      ],
+      "failureModes": [
+        {
+          "title": "Jumping straight to rollback or fix without state verification",
+          "signals": [
+            "rollback is suggested before checking current rollout state",
+            "runtime health is not inspected first"
+          ],
+          "mitigation": "Verify the live state, active rollout condition, and likely blast-radius effect before recommending rollback or containment."
+        },
+        {
+          "title": "Confusing symptoms with root cause",
+          "signals": [
+            "user-visible failures are treated as the cause",
+            "downstream errors are labeled root cause without upstream evidence"
+          ],
+          "mitigation": "Separate direct symptoms from the leading causal chain and keep uncertain hypotheses explicitly provisional."
+        },
+        {
+          "title": "Ignoring blast radius",
+          "signals": [
+            "analysis never states who or what is affected",
+            "next action is proposed without urgency or impact context"
+          ],
+          "mitigation": "Assess the affected users, systems, environments, and workflows before recommending the next move."
+        },
+        {
+          "title": "Treating sparse evidence as certainty",
+          "signals": [
+            "conclusion sounds definitive despite missing runtime signals",
+            "no uncertainty is acknowledged"
+          ],
+          "mitigation": "Name uncertainty explicitly and recommend the next decisive signal when evidence is incomplete."
+        }
+      ],
+      "tags": ["incident", "production", "deploy", "runtime", "outage", "investigation"]
+    }
+  ]
+}

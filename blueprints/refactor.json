@@ -1,0 +1,181 @@
+{
+  "version": 1,
+  "blueprints": [
+    {
+      "id": "bp_safe_refactor_general",
+      "title": "Refactor existing code safely without changing intended behavior",
+      "goal": "Restructure or simplify existing code while preserving intended behavior, keeping scope tight, and verifying that the refactor does not introduce side effects or speculative abstractions.",
+      "trigger": {
+        "title": "Safe refactor",
+        "patterns": [
+          "refactor this",
+          "clean up this code",
+          "restructure this module",
+          "simplify this implementation",
+          "make this code cleaner",
+          "reduce duplication",
+          "safe refactor",
+          "improve structure without changing behavior"
+        ],
+        "tags": ["refactor", "cleanup", "simplify", "maintainability", "behavior-preserving"]
+      },
+      "preconditions": [
+        {
+          "description": "There is existing code with known behavior that should be preserved while improving structure, readability, or maintainability.",
+          "required": true
+        },
+        {
+          "description": "The current behavior can be inspected through tests, call sites, invariants, or direct code reading before changes are made.",
+          "required": true
+        }
+      ],
+      "steps": [
+        {
+          "id": "define_behavior_boundary",
+          "title": "Define the behavior boundary",
+          "instruction": "State what behavior must remain unchanged: outputs, side effects, invariants, public interfaces, ordering constraints, or error behavior that callers rely on. Identify what is in scope to improve and what must stay out of scope.",
+          "kind": "inspect",
+          "expectedEvidence": [
+            "behavior boundary defined",
+            "refactor scope stated"
+          ],
+          "nextStepId": "inspect_current_structure"
+        },
+        {
+          "id": "inspect_current_structure",
+          "title": "Inspect the current structure and pain points",
+          "instruction": "Read the existing implementation and identify the concrete pain points motivating the refactor: duplication, mixed responsibilities, unclear naming, tangled control flow, or oversized units. Keep the diagnosis tied to the current code, not hypothetical future needs.",
+          "kind": "inspect",
+          "expectedEvidence": [
+            "current pain points identified",
+            "existing structure understood"
+          ],
+          "nextStepId": "find_behavior_evidence"
+        },
+        {
+          "id": "find_behavior_evidence",
+          "title": "Find evidence of existing behavior",
+          "instruction": "Identify the strongest available evidence for current behavior: tests, stable call sites, invariants, fixtures, expected outputs, or explicit constraints in code. If coverage is weak, note which part of the behavior boundary is least protected.",
+          "kind": "verify",
+          "expectedEvidence": [
+            "current behavior evidence identified",
+            "weakly protected areas noted if any"
+          ],
+          "nextStepId": "choose_smallest_cut"
+        },
+        {
+          "id": "choose_smallest_cut",
+          "title": "Choose the smallest safe refactor cut",
+          "instruction": "Pick the smallest structural change that addresses the real pain point without expanding scope. Prefer one cohesive extraction or simplification over a sweeping rewrite, and avoid adding abstractions that are only justified by hypothetical reuse.",
+          "kind": "verify",
+          "expectedEvidence": [
+            "smallest safe refactor cut chosen",
+            "scope expansion avoided"
+          ],
+          "nextStepId": "apply_refactor"
+        },
+        {
+          "id": "apply_refactor",
+          "title": "Apply the refactor",
+          "instruction": "Perform the behavior-preserving restructuring itself: simplify flow, extract cohesive pieces, rename for clarity, or remove local duplication while keeping the defined boundary intact.",
+          "kind": "act",
+          "expectedEvidence": [
+            "refactor applied",
+            "structure improved within scope"
+          ],
+          "nextStepId": "verify_behavior_preserved"
+        },
+        {
+          "id": "verify_behavior_preserved",
+          "title": "Verify behavior is preserved",
+          "instruction": "Verify the refactor against the strongest behavior evidence available. Confirm that outputs, interfaces, side effects, and key invariants still hold. If anything changed intentionally, call it out explicitly instead of presenting it as a pure refactor.",
+          "kind": "verify",
+          "expectedEvidence": [
+            "behavior preservation verified",
+            "changed behavior explicitly called out if any"
+          ],
+          "nextStepId": "report_refactor_result"
+        },
+        {
+          "id": "report_refactor_result",
+          "title": "Report refactor result",
+          "instruction": "Summarize what structural problem was improved, what behavior boundary was preserved, what evidence supports safety, and any residual risk or follow-up work that was deliberately left out of scope.",
+          "kind": "communicate",
+          "expectedEvidence": [
+            "refactor summary reported"
+          ]
+        }
+      ],
+      "branches": [
+        {
+          "id": "branch_weak_behavior_coverage",
+          "condition": "If behavior evidence is weak, narrow the refactor cut further and make the uncertainty explicit rather than expanding the change anyway.",
+          "gotoStepId": "choose_smallest_cut"
+        },
+        {
+          "id": "branch_behavior_change_detected",
+          "condition": "If the change alters behavior, stop calling it a pure refactor and either reduce scope or explicitly treat the work as a behavior change with separate justification.",
+          "gotoStepId": "report_refactor_result"
+        }
+      ],
+      "expectedEvidence": [
+        {
+          "description": "The intended behavior boundary and refactor scope were defined before changing structure.",
+          "kind": "tool_result",
+          "required": true
+        },
+        {
+          "description": "Concrete current pain points and the strongest behavior evidence were identified.",
+          "kind": "tool_result",
+          "required": true
+        },
+        {
+          "description": "The refactor was kept to the smallest safe structural cut and verified against existing behavior evidence.",
+          "kind": "tool_result",
+          "required": true
+        },
+        {
+          "description": "The final answer explains what was improved, what stayed invariant, and what risk remains.",
+          "kind": "final_answer",
+          "required": true
+        }
+      ],
+      "failureModes": [
+        {
+          "title": "Scope creep disguised as refactor",
+          "signals": [
+            "adjacent modules are changed without need",
+            "new abstractions are introduced for hypothetical future reuse",
+            "multiple independent cleanups are bundled together"
+          ],
+          "mitigation": "Keep the change focused on one structural pain point and choose the smallest safe refactor cut."
+        },
+        {
+          "title": "Behavior changed without being acknowledged",
+          "signals": [
+            "outputs or side effects shift but the change is still described as a pure refactor",
+            "public interface or ordering changes are not called out"
+          ],
+          "mitigation": "Define the behavior boundary first and explicitly reclassify the work if behavior changes are introduced."
+        },
+        {
+          "title": "Refactoring without evidence of current behavior",
+          "signals": [
+            "no tests, invariants, or stable call-site expectations are consulted",
+            "safety is asserted from intuition alone"
+          ],
+          "mitigation": "Use the strongest available behavior evidence before and after the change, and narrow scope if evidence is weak."
+        },
+        {
+          "title": "Cleaning up based on hypothetical design goals",
+          "signals": [
+            "future flexibility drives the refactor more than current pain points",
+            "generalized abstractions appear before a real need is shown"
+          ],
+          "mitigation": "Tie each structural change to a concrete current pain point and avoid speculative abstraction."
+        }
+      ],
+      "tags": ["refactor", "cleanup", "simplify", "maintainability", "behavior-preserving"]
+    }
+  ]
+}

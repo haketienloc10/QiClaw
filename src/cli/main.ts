@@ -46,6 +46,8 @@ import type { Message } from '../core/types.js';
 import { createTuiController, type TuiController } from './tuiController.js';
 import { launchTui as launchTuiFrontend, type TuiLaunchOptions } from './tuiLauncher.js';
 import { parseBridgeMessage, type HostEvent } from './tuiProtocol.js';
+import { runSpecialistOrchestrator } from '../specialist/orchestrator.js';
+import { executeSpecialistTurn } from '../specialist/runtime.js';
 
 export type Cli = {
   run(): Promise<number>;
@@ -185,20 +187,57 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
   const launchTui = options.launchTui ?? ((launchOptions: TuiLaunchOptions) => launchTuiFrontend(launchOptions));
   const executeTurn: (input: CliRunTurnInput) => Promise<CliRunTurnResult & { finalResult?: Promise<CliRunTurnResult> }> = options.runTurn
     ? options.runTurn
-    : async ({ sessionId: _sessionId, ...input }) => {
-        const execution = createRunAgentTurnExecution(input);
-        const turnResult = execution.turnResult;
+    : async ({ sessionId, ...input }) => {
+        const routed = await runSpecialistOrchestrator({
+          sessionId,
+          parentTaskId: undefined,
+          userInput: input.userInput,
+          history: input.history ?? [],
+          historySummary: input.historySummary,
+          memoryText: input.memoryText,
+          availableTools: input.availableTools,
+          observer: input.observer,
+          executeMainTurn: async () => {
+            const execution = createRunAgentTurnExecution(input);
+            const turnResult = execution.turnResult;
 
-        return {
-          ...createSyntheticTurnResult({
-            taskId: `cli-preview-${Date.now()}`,
+            return {
+              ...createSyntheticTurnResult({
+                taskId: `cli-preview-${Date.now()}`,
+                userInput: input.userInput,
+                finalAnswer: '',
+                history: []
+              }),
+              turnStream: execution.turnStream,
+              finalResult: turnResult
+            };
+          },
+          executeSpecialistTurn: async ({ brief, availableTools, observer }) => executeSpecialistTurn({
+            provider: input.provider,
+            cwd: input.cwd,
+            brief,
+            availableTools,
+            observer
+          })
+        });
+
+        if ('mode' in routed && routed.mode === 'specialist') {
+          const history = [...(input.history ?? []), { role: 'user', content: input.userInput }, { role: 'assistant', content: routed.finalAnswer }];
+          const result = createSyntheticTurnResult({
+            taskId: `specialist-${Date.now()}`,
             userInput: input.userInput,
-            finalAnswer: '',
-            history: []
-          }),
-          turnStream: execution.turnStream,
-          finalResult: turnResult
-        };
+            finalAnswer: routed.finalAnswer,
+            history
+          });
+
+          return {
+            ...result,
+            structuredOutputParsed: routed.parsed,
+            historySummary: input.historySummary
+          };
+        }
+
+        return routed;
       };
 
   return {

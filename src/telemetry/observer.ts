@@ -15,7 +15,11 @@ export type TelemetryEventType =
   | 'turn_stopped'
   | 'turn_summary'
   | 'turn_failed'
-  | 'interactive_memory_fallback';
+  | 'interactive_memory_fallback'
+  | 'specialist_selected'
+  | 'specialist_started'
+  | 'specialist_completed'
+  | 'specialist_parse_failed';
 
 export type TelemetryStage =
   | 'input_received'
@@ -177,6 +181,25 @@ export interface InteractiveMemoryFallbackTelemetryData {
   message: string;
 }
 
+export interface SpecialistTelemetryData extends TelemetryEventContextData {
+  sessionId?: string;
+  parentTaskId?: string;
+  kind: 'research' | 'debug' | 'review';
+  routeReason: 'explicit' | 'heuristic';
+  matchedRule: string;
+  contextChars: number;
+  historyMessageCount: number;
+}
+
+export interface SpecialistCompletedTelemetryData extends SpecialistTelemetryData {
+  structuredArtifactParsed: boolean;
+  durationMs: number;
+}
+
+export interface SpecialistParseFailedTelemetryData extends SpecialistTelemetryData {
+  fallbackReason: string;
+}
+
 export interface TelemetryEventDataMap {
   user_input_received: UserInputReceivedTelemetryData;
   turn_started: TurnStartedTelemetryData;
@@ -193,6 +216,10 @@ export interface TelemetryEventDataMap {
   turn_summary: TurnSummaryTelemetryData;
   turn_failed: TurnFailedTelemetryData;
   interactive_memory_fallback: InteractiveMemoryFallbackTelemetryData;
+  specialist_selected: SpecialistTelemetryData;
+  specialist_started: SpecialistTelemetryData;
+  specialist_completed: SpecialistCompletedTelemetryData;
+  specialist_parse_failed: SpecialistParseFailedTelemetryData;
 }
 
 export type TelemetryEvent<TType extends TelemetryEventType = TelemetryEventType> = {

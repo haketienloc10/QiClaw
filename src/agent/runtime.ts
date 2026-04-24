@@ -29,9 +29,16 @@ const builtinToolNamesByCapabilityClass: Record<AgentCapabilityClass, string[]> 
   write: ['file', 'shell', 'git']
 };
 
+export interface ToolAccessPolicy {
+  allowedCapabilityClasses?: AgentCapabilityClass[];
+  allowedToolNames?: string[];
+}
+
 export function createAgentRuntime(options: CreateAgentRuntimeOptions): AgentRuntime {
   const resolvedPackage = options.resolvedPackage ?? resolveBuiltinAgentPackage(options.agentSpecName ?? 'default');
-  const availableTools = filterToolsForSpec(getBuiltinTools(), resolvedPackage);
+  const availableTools = filterToolsByPolicy(getBuiltinTools(), {
+    allowedCapabilityClasses: resolvedPackage.effectivePolicy.allowedCapabilityClasses
+  });
 
   return {
     provider: createProvider({
@@ -49,9 +56,13 @@ export function createAgentRuntime(options: CreateAgentRuntimeOptions): AgentRun
   };
 }
 
-function filterToolsForSpec(tools: Tool[], resolvedPackage: ResolvedAgentPackage): Tool[] {
-  const allowedCapabilityClasses = resolvedPackage.effectivePolicy.allowedCapabilityClasses ?? [];
-  const allowedToolNames = new Set(allowedCapabilityClasses.flatMap((capabilityClass) => builtinToolNamesByCapabilityClass[capabilityClass] ?? []));
+export function filterToolsByPolicy(tools: Tool[], policy: ToolAccessPolicy): Tool[] {
+  const allowedCapabilityClasses = policy.allowedCapabilityClasses ?? [];
+  const allowedToolNames = new Set([
+    ...allowedCapabilityClasses.flatMap((capabilityClass) => builtinToolNamesByCapabilityClass[capabilityClass] ?? []),
+    ...(policy.allowedToolNames ?? [])
+  ]);
 
   return tools.filter((tool) => allowedToolNames.has(tool.name));
 }
+

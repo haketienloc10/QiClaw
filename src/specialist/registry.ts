@@ -62,8 +62,10 @@ const specialistDefinitions = [
     ],
     systemPrompt: [
       'You are the Review specialist.',
-      'Assess findings, blocking issues, and verdict from the provided brief only.',
-      'Keep the review bounded and concrete.',
+      'Inspect the patch, diff, or changed files referenced by the brief before reaching a verdict.',
+      'Use available read-only tools to gather concrete evidence before reaching a verdict.',
+      'Assess findings, blocking issues, and verdict from the provided brief and any evidence you gather.',
+      'Keep the review bounded to the current patch and concrete.',
       specialistOutputContract
     ].join(' '),
     toolPolicy: {

@@ -26,14 +26,14 @@ describe('tuiLauncher bridge', () => {
           null,
           null,
           {
-            write(chunk) {
+            write(chunk: string | Uint8Array) {
               fd3Writes.push(String(chunk));
               return true;
             }
           },
           {
             setEncoding() {},
-            on(event, listener) {
+            on(event: string, listener: (chunk: string) => void) {
               if (event === 'data') {
                 fd4Listeners.push(listener as (chunk: string) => void);
               }
@@ -78,7 +78,7 @@ describe('tuiLauncher bridge', () => {
           { write() { return true; } },
           {
             setEncoding() {},
-            on(event, listener) {
+            on(event: string, listener: (chunk: string) => void) {
               if (event === 'data') {
                 fd4Listeners.push(listener as (chunk: string) => void);
               }
@@ -113,7 +113,7 @@ describe('tuiLauncher bridge', () => {
           { write() { return true; } },
           {
             setEncoding() {},
-            on(event, listener) {
+            on(event: string, listener: (chunk: string) => void) {
               if (event === 'data') {
                 fd4Listeners.push(listener as (chunk: string) => void);
               }
@@ -163,7 +163,7 @@ describe('tuiLauncher bridge', () => {
           { write() { return true; } },
           {
             setEncoding() {},
-            on(event, listener) {
+            on(event: string, listener: (chunk: string) => void) {
               if (event === 'data') {
                 fd4Listeners.push(listener as (chunk: string) => void);
               }
@@ -232,7 +232,7 @@ describe('tuiLauncher bridge', () => {
           { write() { return true; } },
           {
             setEncoding() {},
-            on(event, listener) {
+            on(event: string, listener: (chunk: string) => void) {
               if (event === 'data') {
                 fd4Listeners.push(listener as (chunk: string) => void);
               }
@@ -242,7 +242,7 @@ describe('tuiLauncher bridge', () => {
         kill() {
           return true;
         },
-        once(event, listener) {
+        once(event: string, listener: (code: number | null, signal: NodeJS.Signals | null) => void) {
           if (event === 'exit') {
             exitHandler = listener as (code: number | null, signal: NodeJS.Signals | null) => void;
           }
@@ -294,7 +294,7 @@ describe('tuiLauncher bridge', () => {
         kill() {
           return true;
         },
-        once(event, listener) {
+        once(event: string, listener: (code: number | null, signal: NodeJS.Signals | null) => void) {
           if (event === 'exit') {
             exitHandler = listener as (code: number | null, signal: NodeJS.Signals | null) => void;
           }
@@ -329,7 +329,7 @@ describe('tuiLauncher bridge', () => {
         kill() {
           return true;
         },
-        once(event, listener) {
+        once(event: string, listener: (code: number | null, signal: NodeJS.Signals | null) => void) {
           if (event === 'exit') {
             exitHandler = listener as (code: number | null, signal: NodeJS.Signals | null) => void;
           }
@@ -364,7 +364,7 @@ describe('tuiLauncher bridge', () => {
         kill() {
           return true;
         },
-        once(event, listener) {
+        once(event: string, listener: (code: number | null, signal: NodeJS.Signals | null) => void) {
           if (event === 'exit') {
             exitHandler = listener as (code: number | null, signal: NodeJS.Signals | null) => void;
           }

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ResolvedAgentPackage } from '../../src/agent/spec.js';
 import { resolveBuiltinAgentPackage } from '../../src/agent/specRegistry.js';
 import { buildCli, type CliRunTurnResult } from '../../src/cli/main.js';
+import type { PrepareInteractiveSessionMemoryResult } from '../../src/memory/sessionMemoryEngine.js';
 import type { NormalizedEvent } from '../../src/provider/model.js';
 import { createRepl } from '../../src/cli/repl.js';
 import type { TurnEvent } from '../../src/agent/loop.js';
@@ -147,6 +148,35 @@ function createTestRuntime(
     systemPrompt: overrides.systemPrompt ?? 'Test prompt',
     maxToolRounds: overrides.maxToolRounds ?? 3
   };
+}
+
+function createPromptRuntime(cwd: string, model: string, observer?: TelemetryObserver) {
+  return {
+    provider: { name: 'openai', model, async generate() { throw new Error('not used'); } },
+    availableTools: [],
+    cwd,
+    observer: observer ?? createNoopObserver(),
+    resolvedPackage: createBridgeResolvedPackage({ maxToolRounds: 3 }),
+    systemPrompt: 'Test prompt',
+    maxToolRounds: 3
+  };
+}
+
+function createPreparedSessionMemoryResult(sessionId: string) {
+  return {
+    memoryText: '',
+    store: { stub: true },
+    recalled: [],
+    checkpointState: {
+      storeSessionId: sessionId,
+      engine: 'file-session-memory',
+      version: 1,
+      memoryPath: '/tmp/memory/index.json',
+      metaPath: '/tmp/memory/meta.json',
+      totalEntries: 0,
+      lastCompactedAt: null
+    }
+  } as unknown as PrepareInteractiveSessionMemoryResult;
 }
 
 function createReadFileTool(): Tool<{ path: string }> {
@@ -673,20 +703,7 @@ describe('createRepl', () => {
 
   it('runs /recal in buildCli interactive mode without sending it to the model', async () => {
     const writes: string[] = [];
-    const prepareSessionMemory = vi.fn(async () => ({
-      memoryText: '',
-      store: undefined,
-      recalled: [],
-      checkpointState: {
-        storeSessionId: 'session-repl-recal',
-        engine: 'file-session-memory',
-        version: 1,
-        memoryPath: '/tmp/memory/index.json',
-        metaPath: '/tmp/memory/meta.json',
-        totalEntries: 0,
-        lastCompactedAt: null
-      }
-    }));
+    const prepareSessionMemory = vi.fn(async () => createPreparedSessionMemoryResult('session-repl-recal'));
     const runTurn = vi.fn(createSuccessfulRunTurn());
     const cli = buildCli({
       argv: [],
@@ -3280,7 +3297,10 @@ describe('buildCli', () => {
     expectRenderedCliOutput(writes, '\nQiClaw\n  Xin chào\n');
   });
 
+
   it('renders assistant text deltas live in interactive mode without duplicating the final block', async () => {
+    vi.useRealTimers();
+
     const writes: string[] = [];
     const cwd = join(tmpdir(), `qiclaw-interactive-live-text-${Math.random().toString(36).slice(2)}`);
     const cli = buildCli({
@@ -3426,6 +3446,8 @@ describe('buildCli', () => {
   });
 
   it('keeps streamed interactive text visible on TTY output with cursor controls', async () => {
+    vi.useRealTimers();
+
     await withProviderEnvSnapshot(async () => {
       delete process.env.QICLAW_TUI_ENABLED;
 
@@ -3541,6 +3563,8 @@ describe('buildCli', () => {
   });
 
   it('keeps both streamed interactive text segments around later tool activity on TTY output', async () => {
+    vi.useRealTimers();
+
     await withProviderEnvSnapshot(async () => {
       delete process.env.QICLAW_TUI_ENABLED;
 
@@ -4420,14 +4444,7 @@ describe('buildCli', () => {
           expect(runtimeOptions.apiKey).toBeUndefined();
           expect(runtimeOptions.cwd).toBe('/tmp/qiclaw-provider-test');
 
-          return {
-            provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
-            availableTools: [],
-            cwd: runtimeOptions.cwd,
-            observer: runtimeOptions.observer ?? createNoopObserver(),
-                systemPrompt: 'Test prompt',
-            maxToolRounds: 3
-          };
+          return createPromptRuntime(runtimeOptions.cwd, runtimeOptions.model, runtimeOptions.observer);
         },
         runTurn: async (input) => ({
           stopReason: 'completed',
@@ -4484,14 +4501,7 @@ describe('buildCli', () => {
           expect(runtimeOptions.apiKey).toBeUndefined();
           expect(runtimeOptions.cwd).toBe('/tmp/qiclaw-provider-default-test');
 
-          return {
-            provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
-            availableTools: [],
-            cwd: runtimeOptions.cwd,
-            observer: runtimeOptions.observer ?? createNoopObserver(),
-                systemPrompt: 'Test prompt',
-            maxToolRounds: 3
-          };
+          return createPromptRuntime(runtimeOptions.cwd, runtimeOptions.model, runtimeOptions.observer);
         },
         runTurn: async (input) => ({
           stopReason: 'completed',
@@ -4555,14 +4565,7 @@ describe('buildCli', () => {
       createRuntime: (runtimeOptions) => {
         expect(runtimeOptions.agentSpecName).toBe('readonly');
 
-        return {
-          provider: createNoopTestProvider(),
-          availableTools: [],
-          cwd: '/tmp/qiclaw-readonly-spec-test',
-          observer: runtimeOptions.observer ?? createNoopObserver(),
-            systemPrompt: 'Test prompt',
-          maxToolRounds: 3
-        };
+        return createTestRuntime('/tmp/qiclaw-readonly-spec-test', runtimeOptions.observer);
       },
       runTurn: async (input) => ({
         stopReason: 'completed',
@@ -4862,14 +4865,7 @@ describe('buildCli', () => {
           cwd: '/tmp/qiclaw-custom-provider-test'
         });
 
-        return {
-          provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
-          availableTools: [],
-          cwd: runtimeOptions.cwd,
-          observer: runtimeOptions.observer ?? createNoopObserver(),
-            systemPrompt: 'Test prompt',
-          maxToolRounds: 3
-        };
+        return createPromptRuntime(runtimeOptions.cwd, runtimeOptions.model, runtimeOptions.observer);
       },
       runTurn: async (input) => ({
         stopReason: 'completed',
@@ -4948,14 +4944,7 @@ describe('buildCli', () => {
             cwd: tempDir
           });
 
-          return {
-            provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
-            availableTools: [],
-            cwd: runtimeOptions.cwd,
-            observer: runtimeOptions.observer ?? createNoopObserver(),
-                systemPrompt: 'Test prompt',
-            maxToolRounds: 3
-          };
+          return createPromptRuntime(runtimeOptions.cwd, runtimeOptions.model, runtimeOptions.observer);
         },
         stdout: { write() { return true; } },
         runTurn: createSuccessfulRunTurn()
@@ -4997,14 +4986,7 @@ describe('buildCli', () => {
             cwd: tempDir
           });
 
-          return {
-            provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
-            availableTools: [],
-            cwd: runtimeOptions.cwd,
-            observer: runtimeOptions.observer ?? createNoopObserver(),
-                systemPrompt: 'Test prompt',
-            maxToolRounds: 3
-          };
+          return createPromptRuntime(runtimeOptions.cwd, runtimeOptions.model, runtimeOptions.observer);
         },
         stdout: { write() { return true; } },
         runTurn: createSuccessfulRunTurn()
@@ -5044,14 +5026,7 @@ describe('buildCli', () => {
             apiKey: 'openai-shell-key'
           });
 
-          return {
-            provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
-            availableTools: [],
-            cwd: runtimeOptions.cwd,
-            observer: runtimeOptions.observer ?? createNoopObserver(),
-                systemPrompt: 'Test prompt',
-            maxToolRounds: 3
-          };
+          return createPromptRuntime(runtimeOptions.cwd, runtimeOptions.model, runtimeOptions.observer);
         },
         stdout: { write() { return true; } },
         runTurn: createSuccessfulRunTurn()
@@ -5102,14 +5077,7 @@ describe('buildCli', () => {
             cwd: tempDir
           });
 
-          return {
-            provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
-            availableTools: [],
-            cwd: runtimeOptions.cwd,
-            observer: runtimeOptions.observer ?? createNoopObserver(),
-                systemPrompt: 'Test prompt',
-            maxToolRounds: 3
-          };
+          return createPromptRuntime(runtimeOptions.cwd, runtimeOptions.model, runtimeOptions.observer);
         },
         stdout: { write() { return true; } },
         runTurn: createSuccessfulRunTurn()
@@ -5148,14 +5116,7 @@ describe('buildCli', () => {
             cwd: tempDir
           });
 
-          return {
-            provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
-            availableTools: [],
-            cwd: runtimeOptions.cwd,
-            observer: runtimeOptions.observer ?? createNoopObserver(),
-                systemPrompt: 'Test prompt',
-            maxToolRounds: 3
-          };
+          return createPromptRuntime(runtimeOptions.cwd, runtimeOptions.model, runtimeOptions.observer);
         },
         stdout: { write() { return true; } },
         runTurn: createSuccessfulRunTurn()
@@ -5195,12 +5156,8 @@ describe('buildCli', () => {
           });
 
           return {
-            provider: { name: 'anthropic', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
-            availableTools: [],
-            cwd: runtimeOptions.cwd,
-            observer: runtimeOptions.observer ?? createNoopObserver(),
-                systemPrompt: 'Test prompt',
-            maxToolRounds: 3
+            ...createPromptRuntime(runtimeOptions.cwd, runtimeOptions.model, runtimeOptions.observer),
+            provider: { name: 'anthropic', model: runtimeOptions.model, async generate() { throw new Error('not used'); } }
           };
         },
         stdout: { write() { return true; } },
@@ -5235,14 +5192,7 @@ describe('buildCli', () => {
             cwd: tempDir
           });
 
-          return {
-            provider: { name: 'openai', model: runtimeOptions.model, async generate() { throw new Error('not used'); } },
-            availableTools: [],
-            cwd: runtimeOptions.cwd,
-            observer: runtimeOptions.observer ?? createNoopObserver(),
-                systemPrompt: 'Test prompt',
-            maxToolRounds: 3
-          };
+          return createPromptRuntime(runtimeOptions.cwd, runtimeOptions.model, runtimeOptions.observer);
         },
         stdout: { write() { return true; } },
         runTurn: createSuccessfulRunTurn()
@@ -5450,7 +5400,7 @@ describe('buildCli', () => {
 
         if (input.userInput === 'first question') {
           return {
-            stopReason: 'completed',
+            stopReason: 'completed' as const,
             finalAnswer: 'answer: first question',
             history: [
               ...(input.history ?? []),
@@ -5458,6 +5408,7 @@ describe('buildCli', () => {
               { role: 'assistant', content: 'answer: first question' }
             ],
             historySummary: 'Summary after first question',
+            memoryCandidates: [],
             toolRoundsUsed: 0,
             doneCriteria: {
               goal: input.userInput,
@@ -5488,6 +5439,8 @@ describe('buildCli', () => {
             { role: 'assistant', content: 'answer: second question' }
           ],
           historySummary: 'Summary after second question',
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 0,
           doneCriteria: {
             goal: input.userInput,
@@ -5577,7 +5530,7 @@ describe('buildCli', () => {
           ]);
 
           return {
-            stopReason: 'completed',
+            stopReason: 'completed' as const,
             finalAnswer: 'answer: resumed question',
             history: [
               ...(input.history ?? []),
@@ -5585,6 +5538,7 @@ describe('buildCli', () => {
               { role: 'assistant', content: 'answer: resumed question' }
             ],
             historySummary: undefined,
+            memoryCandidates: [],
             toolRoundsUsed: 0,
             doneCriteria: {
               goal: input.userInput,
@@ -5616,7 +5570,7 @@ describe('buildCli', () => {
         ]);
 
         return {
-          stopReason: 'completed',
+          stopReason: 'completed' as const,
           finalAnswer: 'answer: follow-up question',
           history: [
             ...(input.history ?? []),
@@ -5624,6 +5578,7 @@ describe('buildCli', () => {
             { role: 'assistant', content: 'answer: follow-up question' }
           ],
           historySummary: 'Summary after follow-up question',
+          memoryCandidates: [],
           toolRoundsUsed: 0,
           doneCriteria: {
             goal: input.userInput,
@@ -6038,6 +5993,8 @@ describe('buildCli', () => {
             { role: 'assistant', content: 'follow-up answer' }
           ],
           historySummary: 'Follow-up summary',
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 0,
           doneCriteria: {
             goal: input.userInput,

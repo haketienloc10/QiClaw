@@ -22,18 +22,36 @@ export function buildSpecialistBrief(input: BuildSpecialistBriefInput): Speciali
     input.historySummary?.trim() ? `History summary:\n${input.historySummary.trim()}` : undefined,
     evidenceSnippets.length > 0 ? `Recent messages:\n${evidenceSnippets.join('\n')}` : undefined
   ].filter((value): value is string => Boolean(value && value.length > 0));
+  const normalizedGoal = normalizeSpecialistGoal(input.specialist, input.userInput);
 
   return {
     sessionId: input.sessionId,
     parentTaskId: input.parentTaskId,
     kind: input.specialist,
-    goal: input.userInput.trim(),
+    goal: normalizedGoal,
     relevantContext: relevantParts.join('\n\n'),
     constraints: [
       'Use only the provided brief and evidence snippets.',
       'Do not assume access to the full main transcript.',
+      input.specialist === 'review'
+        ? 'If the request refers to the current patch, treat it as the current workspace diff unless a specific commit or diff is named.'
+        : undefined,
       'Keep the artifact concise and structured.'
-    ],
+    ].filter((value): value is string => Boolean(value && value.length > 0)),
     evidenceSnippets
   };
+}
+
+function normalizeSpecialistGoal(specialist: SpecialistKind, userInput: string): string {
+  const trimmedInput = userInput.trim();
+
+  if (specialist !== 'review') {
+    return trimmedInput;
+  }
+
+  if (/\bbản vá hiện tại\b/i.test(trimmedInput) || /\bcurrent patch\b/i.test(trimmedInput)) {
+    return `${trimmedInput} Review the current workspace diff unless the brief names a specific commit or diff.`;
+  }
+
+  return trimmedInput;
 }

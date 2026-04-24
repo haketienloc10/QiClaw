@@ -116,8 +116,11 @@ describe('runSpecialistOrchestrator', () => {
       'git',
       'web_fetch'
     ]);
-    expect(result.mode).toBe('specialist');
-    expect(result.artifact.kind).toBe('review');
+    if (typeof result !== 'object' || result === null || !('mode' in result) || result.mode !== 'specialist' || !('artifact' in result)) {
+      throw new Error('expected specialist result');
+    }
+    const specialistResult = result as { mode: 'specialist'; artifact: { kind: string } };
+    expect(specialistResult.artifact.kind).toBe('review');
     expect(events).toEqual(['specialist_selected', 'specialist_started', 'specialist_completed']);
   });
 
@@ -157,11 +160,108 @@ describe('runSpecialistOrchestrator', () => {
       observer
     });
 
-    expect(result.mode).toBe('specialist');
+    if (typeof result !== 'object' || result === null || !('mode' in result) || result.mode !== 'specialist') {
+      throw new Error('expected specialist result');
+    }
     expect(events).toContain('specialist_parse_failed');
   });
 
-  it('respects read-only specialist tool policy', () => {
+  it('emits explicit failure telemetry when specialist execution throws', async () => {
+    const events: string[] = [];
+    const observer = {
+      record(event: ReturnType<typeof createTelemetryEvent>) {
+        events.push(event.type);
+      }
+    };
+
+    await expect(runSpecialistOrchestrator({
+      sessionId: 'session-1',
+      parentTaskId: 'turn-1',
+      userInput: '/debug inspect this crash',
+      history: baseMessages,
+      historySummary: '',
+      memoryText: '',
+      availableTools: getBuiltinTools(),
+      executeMainTurn: vi.fn(),
+      executeSpecialistTurn: vi.fn().mockRejectedValue(new Error('debug specialist crashed')),
+      observer
+    })).rejects.toThrow('debug specialist crashed');
+
+    expect(events).toContain('specialist_failed');
+  });
+
+  it('filters specialist tools by capability class and explicit tool names', async () => {
+    const executeSpecialistTurn = vi.fn().mockResolvedValue({
+      artifact: {
+        kind: 'research',
+        summary: 'Research completed.',
+        confidence: 0.71,
+        suggestedNextSteps: ['Inspect the matching file next.'],
+        findings: ['Found the relevant module.'],
+        openQuestions: [],
+        evidence: ['src/module.ts']
+      },
+      rawOutput: '{"kind":"research"}',
+      parsed: true,
+      finalAnswer: 'Research completed.',
+      toolNames: ['file', 'git']
+    });
+
+    await runSpecialistOrchestrator({
+      sessionId: 'session-1',
+      parentTaskId: 'turn-1',
+      userInput: '/research find the relevant module',
+      history: baseMessages,
+      historySummary: 'Older summary',
+      memoryText: '',
+      availableTools: getBuiltinTools(),
+      executeMainTurn: vi.fn(),
+      executeSpecialistTurn,
+      observer: createCompositeObserver([])
+    });
+
     expect(getBuiltinToolNames()).toContain('summary_tool');
+    expect(executeSpecialistTurn).toHaveBeenCalledOnce();
+    expect(executeSpecialistTurn.mock.calls[0]?.[0].availableTools.map((tool: { name: string }) => tool.name)).toEqual([
+      'file',
+      'shell',
+      'git',
+      'web_fetch'
+    ]);
+  });
+
+  it('treats "current patch" review requests as reviewing the current workspace diff', async () => {
+    const executeSpecialistTurn = vi.fn().mockResolvedValue({
+      artifact: {
+        kind: 'review',
+        summary: 'Review completed.',
+        confidence: 0.8,
+        suggestedNextSteps: [],
+        findings: [],
+        blockingIssues: [],
+        nonBlockingIssues: [],
+        verdict: 'pass'
+      },
+      rawOutput: '{"kind":"review"}',
+      parsed: true,
+      finalAnswer: 'Review completed.',
+      toolNames: ['file', 'git']
+    });
+
+    await runSpecialistOrchestrator({
+      sessionId: 'session-1',
+      parentTaskId: 'turn-1',
+      userInput: '/review kiểm tra code bản vá hiện tại?',
+      history: baseMessages,
+      historySummary: 'Older summary',
+      memoryText: '',
+      availableTools: getBuiltinTools(),
+      executeMainTurn: vi.fn(),
+      executeSpecialistTurn,
+      observer: createCompositeObserver([])
+    });
+
+    expect(executeSpecialistTurn).toHaveBeenCalledOnce();
+    expect(executeSpecialistTurn.mock.calls[0]?.[0].brief.goal).toContain('current workspace diff');
   });
 });

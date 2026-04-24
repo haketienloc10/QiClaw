@@ -1,9 +1,87 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { TurnEvent } from '../../src/agent/loop.js';
+import type { RunAgentTurnInput, RunAgentTurnResult, TurnEvent } from '../../src/agent/loop.js';
 import { createTuiController } from '../../src/cli/tuiController.js';
 import { parseBridgeMessage, type HostEvent } from '../../src/cli/tuiProtocol.js';
 import { createInteractiveCheckpointJson, parseInteractiveCheckpointJson } from '../../src/session/session.js';
+import { resolveBuiltinAgentPackage } from '../../src/agent/specRegistry.js';
+import { createNoopObserver } from '../../src/telemetry/observer.js';
+
+function createTestProvider() {
+  return {
+    name: 'openai',
+    model: 'gpt-test',
+    async generate() {
+      throw new Error('not used');
+    }
+  };
+}
+
+function createTestRuntime(cwd: string) {
+  return {
+    provider: createTestProvider(),
+    availableTools: [],
+    systemPrompt: 'system prompt',
+    cwd,
+    maxToolRounds: 3,
+    resolvedPackage: resolveBuiltinAgentPackage('default'),
+    observer: createNoopObserver()
+  };
+}
+
+function createPreparedMemoryResult(sessionId: string, totalEntries = 0) {
+  return {
+    memoryText: '',
+    store: { stub: true },
+    recalled: [],
+    checkpointState: {
+      storeSessionId: sessionId,
+      engine: 'file-session-memory',
+      version: 1,
+      memoryPath: '/tmp/memory.jsonl',
+      metaPath: '/tmp/meta.json',
+      totalEntries,
+      lastCompactedAt: null
+    }
+  } as unknown as Awaited<ReturnType<typeof import('../../src/memory/sessionMemoryEngine.js').prepareInteractiveSessionMemory>>;
+}
+
+function createCaptureMemoryResult(sessionId: string, totalEntries = 0) {
+  return {
+    saved: false,
+    checkpointState: createPreparedMemoryResult(sessionId, totalEntries).checkpointState
+  };
+}
+
+function createTurnResult(
+  overrides: Partial<RunAgentTurnResult> & Pick<RunAgentTurnResult, 'finalAnswer' | 'history'>
+): RunAgentTurnResult {
+  return {
+    stopReason: overrides.stopReason ?? 'completed',
+    finalAnswer: overrides.finalAnswer,
+    history: overrides.history,
+    memoryCandidates: overrides.memoryCandidates ?? [],
+    structuredOutputParsed: overrides.structuredOutputParsed ?? false,
+    toolRoundsUsed: overrides.toolRoundsUsed ?? 0,
+    doneCriteria: overrides.doneCriteria ?? {
+      goal: overrides.finalAnswer,
+      checklist: [overrides.finalAnswer],
+      requiresNonEmptyFinalAnswer: true,
+      requiresToolEvidence: false,
+      requiresSubstantiveFinalAnswer: false,
+      forbidSuccessAfterToolErrors: false
+    },
+    verification: overrides.verification ?? {
+      isVerified: true,
+      finalAnswerIsNonEmpty: true,
+      finalAnswerIsSubstantive: true,
+      toolEvidenceSatisfied: true,
+      noUnresolvedToolErrors: true,
+      toolMessagesCount: 0,
+      checks: []
+    }
+  };
+}
 
 describe('tuiController', () => {
   it('emits session seed, slash catalog, streamed assistant events, and saves checkpoint on submit', async () => {
@@ -12,22 +90,15 @@ describe('tuiController', () => {
     const checkpointJson = createInteractiveCheckpointJson({
       version: 1,
       history: [
-        { role: 'user', content: 'old question' },
-        { role: 'assistant', content: 'old answer' }
+        { role: 'user' as const, content: 'old question' },
+        { role: 'assistant' as const, content: 'old answer' }
       ],
       historySummary: 'previous summary'
     });
 
     const controller = createTuiController({
       cwd: '/tmp/qiclaw-controller',
-      runtime: {
-        provider: { name: 'openai', model: 'gpt-test' },
-        availableTools: [],
-        systemPrompt: 'system prompt',
-        cwd: '/tmp/qiclaw-controller',
-        maxToolRounds: 3,
-        observer: { record() {} }
-      },
+      runtime: createTestRuntime('/tmp/qiclaw-controller'),
       checkpointStore: {
         getLatest() {
           return {
@@ -43,7 +114,7 @@ describe('tuiController', () => {
       },
       prepareSessionMemory: vi.fn(async () => ({
         memoryText: 'recall text',
-        store: { stub: true },
+        store: createPreparedMemoryResult('session-actions').store,
         recalled: [],
         checkpointState: {
           storeSessionId: 'session-restored',
@@ -70,15 +141,17 @@ describe('tuiController', () => {
       })),
       createSessionId: () => 'session-new',
       executeTurn: async () => ({
-        stopReason: 'completed',
+        stopReason: 'completed' as const,
         finalAnswer: 'new answer',
         history: [
-          { role: 'user', content: 'old question' },
-          { role: 'assistant', content: 'old answer' },
-          { role: 'user', content: 'new question' },
-          { role: 'assistant', content: 'new answer' }
+          { role: 'user' as const, content: 'old question' },
+          { role: 'assistant' as const, content: 'old answer' },
+          { role: 'user' as const, content: 'new question' },
+          { role: 'assistant' as const, content: 'new answer' }
         ],
         historySummary: 'updated summary',
+        memoryCandidates: [],
+        structuredOutputParsed: false,
         toolRoundsUsed: 1,
         doneCriteria: {
           goal: 'new question',
@@ -104,12 +177,12 @@ describe('tuiController', () => {
           yield {
             type: 'turn_completed',
             finalAnswer: 'new answer',
-            stopReason: 'completed',
+            stopReason: 'completed' as const,
             history: [
-              { role: 'user', content: 'old question' },
-              { role: 'assistant', content: 'old answer' },
-              { role: 'user', content: 'new question' },
-              { role: 'assistant', content: 'new answer' }
+              { role: 'user' as const, content: 'old question' },
+              { role: 'assistant' as const, content: 'old answer' },
+              { role: 'user' as const, content: 'new question' },
+              { role: 'assistant' as const, content: 'new answer' }
             ],
             memoryCandidates: [],
             structuredOutputParsed: false,
@@ -126,15 +199,17 @@ describe('tuiController', () => {
           };
         })(),
         finalResult: Promise.resolve({
-          stopReason: 'completed',
+          stopReason: 'completed' as const,
           finalAnswer: 'new answer',
           history: [
-            { role: 'user', content: 'old question' },
-            { role: 'assistant', content: 'old answer' },
-            { role: 'user', content: 'new question' },
-            { role: 'assistant', content: 'new answer' }
+            { role: 'user' as const, content: 'old question' },
+            { role: 'assistant' as const, content: 'old answer' },
+            { role: 'user' as const, content: 'new question' },
+            { role: 'assistant' as const, content: 'new answer' }
           ],
           historySummary: 'updated summary',
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 1,
           doneCriteria: {
             goal: 'new question',
@@ -156,7 +231,7 @@ describe('tuiController', () => {
         })
       }),
       emit(message) {
-        emitted.push(parseBridgeMessage(message));
+        emitted.push(parseBridgeMessage(message) as HostEvent);
       }
     });
 
@@ -177,14 +252,7 @@ describe('tuiController', () => {
 
     const controller = createTuiController({
       cwd: '/tmp/qiclaw-controller-actions',
-      runtime: {
-        provider: { name: 'openai', model: 'gpt-test' },
-        availableTools: [],
-        systemPrompt: 'system prompt',
-        cwd: '/tmp/qiclaw-controller-actions',
-        maxToolRounds: 3,
-        observer: { record() {} }
-      },
+      runtime: createTestRuntime('/tmp/qiclaw-controller-actions'),
       checkpointStore: {
         getLatest() {
           return undefined;
@@ -193,7 +261,7 @@ describe('tuiController', () => {
       },
       prepareSessionMemory: vi.fn(async () => ({
         memoryText: '',
-        store: { stub: true },
+        store: createPreparedMemoryResult('session-actions').store,
         recalled: [],
         checkpointState: {
           storeSessionId: 'session-actions',
@@ -218,12 +286,12 @@ describe('tuiController', () => {
         }
       })),
       createSessionId: () => 'session-actions',
-      executeTurn: vi.fn(async ({ userInput }) => ({
-        stopReason: 'completed',
+      executeTurn: async ({ userInput }) => ({
+        stopReason: 'completed' as const,
         finalAnswer: `answer for ${userInput}`,
         history: [
-          { role: 'user', content: userInput },
-          { role: 'assistant', content: `answer for ${userInput}` }
+          { role: 'user' as const, content: userInput },
+          { role: 'assistant' as const, content: `answer for ${userInput}` }
         ],
         historySummary: undefined,
         memoryCandidates: [],
@@ -246,24 +314,24 @@ describe('tuiController', () => {
           toolMessagesCount: 0,
           checks: []
         }
-      })),
-      runDirectCommand: vi.fn(async (command) => {
+      }),
+      runDirectCommand: async (command) => {
         if (command.type === 'diff') {
           return {
             transcriptCells: [
-              { id: 'diff-status', kind: 'status', text: 'git status output' },
-              { id: 'diff-patch', kind: 'diff', text: 'git diff output' }
+              { id: 'diff-status', kind: 'status' as const, text: 'git status output' },
+              { id: 'diff-patch', kind: 'diff' as const, text: 'git diff output' }
             ]
           };
         }
 
         return {
-          transcriptCells: [{ id: 'shell-1', kind: 'shell', text: 'pwd output' }],
+          transcriptCells: [{ id: 'shell-1', kind: 'shell' as const, text: 'pwd output' }],
           footer: 'shell completed'
         };
-      }),
+      },
       emit(message) {
-        emitted.push(parseBridgeMessage(message));
+        emitted.push(parseBridgeMessage(message) as HostEvent);
       }
     });
 
@@ -293,14 +361,7 @@ describe('tuiController', () => {
 
     const controller = createTuiController({
       cwd: '/tmp/qiclaw-controller-clear',
-      runtime: {
-        provider: { name: 'openai', model: 'gpt-test' },
-        availableTools: [],
-        systemPrompt: 'system prompt',
-        cwd: '/tmp/qiclaw-controller-clear',
-        maxToolRounds: 3,
-        observer: { record() {} }
-      },
+      runtime: createTestRuntime('/tmp/qiclaw-controller-clear'),
       checkpointStore: {
         getLatest() {
           return undefined;
@@ -318,7 +379,7 @@ describe('tuiController', () => {
         throw new Error('not used');
       }),
       emit(message) {
-        emitted.push(parseBridgeMessage(message));
+        emitted.push(parseBridgeMessage(message) as HostEvent);
       }
     });
 
@@ -333,35 +394,24 @@ describe('tuiController', () => {
 
   it('does not retain transient blueprint context across /clear before the next turn', async () => {
     const emitted: HostEvent[] = [];
-    const executeTurn = vi.fn(async ({ userInput, blueprintText }) => ({
-      stopReason: 'completed' as const,
-      finalAnswer: `answer for ${userInput}`,
-      history: [
-        { role: 'user', content: userInput },
-        { role: 'assistant', content: `answer for ${userInput}` }
-      ],
+    const executeTurn = vi.fn(async ({ userInput, blueprintText }: RunAgentTurnInput) => ({
+      ...createTurnResult({
+        finalAnswer: `answer for ${userInput}`,
+        history: [
+          { role: 'user' as const, content: userInput },
+          { role: 'assistant' as const, content: `answer for ${userInput}` }
+        ],
+        doneCriteria: {
+          goal: userInput,
+          checklist: [userInput],
+          requiresNonEmptyFinalAnswer: true,
+          requiresToolEvidence: false,
+          requiresSubstantiveFinalAnswer: false,
+          forbidSuccessAfterToolErrors: false
+        }
+      }),
       historySummary: undefined,
-      memoryCandidates: [],
-      structuredOutputParsed: false,
-      toolRoundsUsed: 0,
-      doneCriteria: {
-        goal: userInput,
-        checklist: [userInput],
-        requiresNonEmptyFinalAnswer: true,
-        requiresToolEvidence: false,
-        requiresSubstantiveFinalAnswer: false,
-        forbidSuccessAfterToolErrors: false
-      },
-      verification: {
-        isVerified: true,
-        finalAnswerIsNonEmpty: true,
-        finalAnswerIsSubstantive: true,
-        toolEvidenceSatisfied: true,
-        noUnresolvedToolErrors: true,
-        toolMessagesCount: 0,
-        checks: []
-      },
-      observedBlueprintText: blueprintText
+      blueprintText
     }));
     const prepareBlueprint = vi.fn(async ({ userInput }) => ({
       blueprintText: userInput === 'second question' ? '' : 'Blueprint: inspect logs before rollback',
@@ -390,14 +440,7 @@ describe('tuiController', () => {
 
     const controller = createTuiController({
       cwd: '/tmp/qiclaw-controller-blueprint-clear',
-      runtime: {
-        provider: { name: 'openai', model: 'gpt-test' },
-        availableTools: [],
-        systemPrompt: 'system prompt',
-        cwd: '/tmp/qiclaw-controller-blueprint-clear',
-        maxToolRounds: 3,
-        observer: { record() {} }
-      },
+      runtime: createTestRuntime('/tmp/qiclaw-controller-blueprint-clear'),
       checkpointStore: {
         getLatest() {
           return undefined;
@@ -407,7 +450,7 @@ describe('tuiController', () => {
       createSessionId: () => 'session-blueprint-clear',
       prepareSessionMemory: vi.fn(async () => ({
         memoryText: '',
-        store: { stub: true },
+        store: createPreparedMemoryResult('session-actions').store,
         recalled: [],
         checkpointState: {
           storeSessionId: 'session-blueprint-clear',
@@ -435,7 +478,7 @@ describe('tuiController', () => {
       captureBlueprint,
       executeTurn,
       emit(message) {
-        emitted.push(parseBridgeMessage(message));
+        emitted.push(parseBridgeMessage(message) as HostEvent);
       }
     });
 
@@ -469,14 +512,7 @@ describe('tuiController', () => {
 
     const controller = createTuiController({
       cwd: '/tmp/qiclaw-controller-persist-local',
-      runtime: {
-        provider: { name: 'openai', model: 'gpt-test' },
-        availableTools: [],
-        systemPrompt: 'system prompt',
-        cwd: '/tmp/qiclaw-controller-persist-local',
-        maxToolRounds: 3,
-        observer: { record() {} }
-      },
+      runtime: createTestRuntime('/tmp/qiclaw-controller-persist-local'),
       checkpointStore: {
         getLatest() {
           return undefined;
@@ -498,17 +534,17 @@ describe('tuiController', () => {
       runDirectCommand: vi.fn(async (command) => {
         if (command.type === 'shell') {
           return {
-            transcriptCells: [{ id: 'shell-1', kind: 'shell', text: 'git status output' }],
+            transcriptCells: [{ id: 'shell-1', kind: 'shell' as const, text: 'git status output' }],
             footer: 'shell completed'
           };
         }
 
         return {
-          transcriptCells: [{ id: 'diff-1', kind: 'diff', text: 'diff output' }]
+          transcriptCells: [{ id: 'diff-1', kind: 'diff' as const, text: 'diff output' }]
         };
       }),
       emit(message) {
-        emitted.push(parseBridgeMessage(message));
+        emitted.push(parseBridgeMessage(message) as HostEvent);
       }
     });
 
@@ -521,14 +557,7 @@ describe('tuiController', () => {
 
     const restoredController = createTuiController({
       cwd: '/tmp/qiclaw-controller-persist-local',
-      runtime: {
-        provider: { name: 'openai', model: 'gpt-test' },
-        availableTools: [],
-        systemPrompt: 'system prompt',
-        cwd: '/tmp/qiclaw-controller-persist-local',
-        maxToolRounds: 3,
-        observer: { record() {} }
-      },
+      runtime: createTestRuntime('/tmp/qiclaw-controller-persist-local'),
       checkpointStore: {
         getLatest() {
           const latest = savedRecords.at(-1);
@@ -554,7 +583,7 @@ describe('tuiController', () => {
         throw new Error('not used');
       }),
       emit(message) {
-        emitted.push(parseBridgeMessage(message));
+        emitted.push(parseBridgeMessage(message) as HostEvent);
       }
     });
 
@@ -576,14 +605,7 @@ describe('tuiController', () => {
 
     const controller = createTuiController({
       cwd: '/tmp/qiclaw-controller-host-events',
-      runtime: {
-        provider: { name: 'openai', model: 'gpt-test' },
-        availableTools: [],
-        systemPrompt: 'system prompt',
-        cwd: '/tmp/qiclaw-controller-host-events',
-        maxToolRounds: 3,
-        observer: { record() {} }
-      },
+      runtime: createTestRuntime('/tmp/qiclaw-controller-host-events'),
       checkpointStore: {
         getLatest() {
           return undefined;
@@ -603,7 +625,7 @@ describe('tuiController', () => {
         throw new Error('not used');
       }),
       emit(message) {
-        emitted.push(parseBridgeMessage(message));
+        emitted.push(parseBridgeMessage(message) as HostEvent);
       }
     });
 
@@ -617,14 +639,7 @@ describe('tuiController', () => {
     const restoredEmitted: HostEvent[] = [];
     const restoredController = createTuiController({
       cwd: '/tmp/qiclaw-controller-host-events',
-      runtime: {
-        provider: { name: 'openai', model: 'gpt-test' },
-        availableTools: [],
-        systemPrompt: 'system prompt',
-        cwd: '/tmp/qiclaw-controller-host-events',
-        maxToolRounds: 3,
-        observer: { record() {} }
-      },
+      runtime: createTestRuntime('/tmp/qiclaw-controller-host-events'),
       checkpointStore: {
         getLatest() {
           const latest = savedRecords.at(-1);
@@ -650,7 +665,7 @@ describe('tuiController', () => {
         throw new Error('not used');
       }),
       emit(message) {
-        restoredEmitted.push(parseBridgeMessage(message));
+        restoredEmitted.push(parseBridgeMessage(message) as HostEvent);
       }
     });
 
@@ -680,14 +695,7 @@ describe('tuiController', () => {
 
     const controller = createTuiController({
       cwd: '/tmp/qiclaw-controller-host-event-restore-fidelity',
-      runtime: {
-        provider: { name: 'openai', model: 'gpt-test' },
-        availableTools: [],
-        systemPrompt: 'system prompt',
-        cwd: '/tmp/qiclaw-controller-host-event-restore-fidelity',
-        maxToolRounds: 3,
-        observer: { record() {} }
-      },
+      runtime: createTestRuntime('/tmp/qiclaw-controller-host-event-restore-fidelity'),
       checkpointStore: {
         getLatest() {
           return {
@@ -710,7 +718,7 @@ describe('tuiController', () => {
         throw new Error('not used');
       }),
       emit(message) {
-        emitted.push(parseBridgeMessage(message));
+        emitted.push(parseBridgeMessage(message) as HostEvent);
       }
     });
 
@@ -732,22 +740,15 @@ describe('tuiController', () => {
     const checkpointJson = createInteractiveCheckpointJson({
       version: 1,
       history: [
-        { role: 'user', content: 'old question' },
-        { role: 'assistant', content: 'old answer' }
+        { role: 'user' as const, content: 'old question' },
+        { role: 'assistant' as const, content: 'old answer' }
       ],
       historySummary: 'legacy summary'
     });
 
     const controller = createTuiController({
       cwd: '/tmp/qiclaw-controller-legacy-checkpoint',
-      runtime: {
-        provider: { name: 'openai', model: 'gpt-test' },
-        availableTools: [],
-        systemPrompt: 'system prompt',
-        cwd: '/tmp/qiclaw-controller-legacy-checkpoint',
-        maxToolRounds: 3,
-        observer: { record() {} }
-      },
+      runtime: createTestRuntime('/tmp/qiclaw-controller-legacy-checkpoint'),
       checkpointStore: {
         getLatest() {
           return {
@@ -770,7 +771,7 @@ describe('tuiController', () => {
         throw new Error('not used');
       }),
       emit(message) {
-        emitted.push(parseBridgeMessage(message));
+        emitted.push(parseBridgeMessage(message) as HostEvent);
       }
     });
 
@@ -791,14 +792,7 @@ describe('tuiController', () => {
 
     const controller = createTuiController({
       cwd: '/tmp/qiclaw-controller-provider-stream-assistant',
-      runtime: {
-        provider: { name: 'openai', model: 'gpt-test' },
-        availableTools: [],
-        systemPrompt: 'system prompt',
-        cwd: '/tmp/qiclaw-controller-provider-stream-assistant',
-        maxToolRounds: 3,
-        observer: { record() {} }
-      },
+      runtime: createTestRuntime('/tmp/qiclaw-controller-provider-stream-assistant'),
       checkpointStore: {
         getLatest() {
           return undefined;
@@ -809,7 +803,7 @@ describe('tuiController', () => {
       },
       prepareSessionMemory: vi.fn(async () => ({
         memoryText: '',
-        store: { stub: true },
+        store: createPreparedMemoryResult('session-actions').store,
         recalled: [],
         checkpointState: {
           storeSessionId: 'session-provider-stream-assistant',
@@ -835,11 +829,11 @@ describe('tuiController', () => {
       })),
       createSessionId: () => 'session-provider-stream-assistant',
       executeTurn: async () => ({
-        stopReason: 'completed',
+        stopReason: 'completed' as const,
         finalAnswer: 'partial answer complete',
         history: [
-          { role: 'user', content: 'question' },
-          { role: 'assistant', content: 'partial answer complete' }
+          { role: 'user' as const, content: 'question' },
+          { role: 'assistant' as const, content: 'partial answer complete' }
         ],
         historySummary: undefined,
         memoryCandidates: [],
@@ -868,11 +862,11 @@ describe('tuiController', () => {
           yield { type: 'assistant_message_completed', text: 'partial answer complete' };
         })(),
         finalResult: Promise.resolve({
-          stopReason: 'completed',
+          stopReason: 'completed' as const,
           finalAnswer: 'partial answer complete',
           history: [
-            { role: 'user', content: 'question' },
-            { role: 'assistant', content: 'partial answer complete' }
+            { role: 'user' as const, content: 'question' },
+            { role: 'assistant' as const, content: 'partial answer complete' }
           ],
           historySummary: undefined,
           memoryCandidates: [],
@@ -915,14 +909,7 @@ describe('tuiController', () => {
     const restoredEmitted: HostEvent[] = [];
     const restoredController = createTuiController({
       cwd: '/tmp/qiclaw-controller-provider-stream-assistant',
-      runtime: {
-        provider: { name: 'openai', model: 'gpt-test' },
-        availableTools: [],
-        systemPrompt: 'system prompt',
-        cwd: '/tmp/qiclaw-controller-provider-stream-assistant',
-        maxToolRounds: 3,
-        observer: { record() {} }
-      },
+      runtime: createTestRuntime('/tmp/qiclaw-controller-provider-stream-assistant'),
       checkpointStore: {
         getLatest() {
           return latest
@@ -946,7 +933,7 @@ describe('tuiController', () => {
         throw new Error('not used');
       }),
       emit(message) {
-        restoredEmitted.push(parseBridgeMessage(message));
+        restoredEmitted.push(parseBridgeMessage(message) as HostEvent);
       }
     });
 
@@ -966,14 +953,7 @@ describe('tuiController', () => {
 
     const controller = createTuiController({
       cwd: '/tmp/qiclaw-controller-multi-assistant-turn',
-      runtime: {
-        provider: { name: 'openai', model: 'gpt-test' },
-        availableTools: [],
-        systemPrompt: 'system prompt',
-        cwd: '/tmp/qiclaw-controller-multi-assistant-turn',
-        maxToolRounds: 3,
-        observer: { record() {} }
-      },
+      runtime: createTestRuntime('/tmp/qiclaw-controller-multi-assistant-turn'),
       checkpointStore: {
         getLatest() {
           return undefined;
@@ -982,94 +962,22 @@ describe('tuiController', () => {
           savedRecords.push({ sessionId: record.sessionId, checkpointJson: record.checkpointJson, status: record.status });
         }
       },
-      prepareSessionMemory: vi.fn(async () => undefined),
-      captureTurnMemory: vi.fn(async () => ({ saved: false, checkpointState: undefined })),
+      prepareSessionMemory: vi.fn(async () => createPreparedMemoryResult('session-mock')),
+      captureTurnMemory: vi.fn(async () => createCaptureMemoryResult('session-mock')),
       createSessionId: () => 'session-multi-assistant-turn',
       executeTurn: vi.fn(async () => ({
-        stopReason: 'completed',
-        finalAnswer: 'Kết luận cuối',
-        history: [
-          { role: 'user', content: 'review code diff' },
-          { role: 'assistant', content: 'Review nhanh theo git diff' },
-          { role: 'tool', name: 'git', toolCallId: 'tool-1', content: '1 file changed', isError: false },
-          { role: 'assistant', content: 'Kết luận cuối' }
-        ],
-        memoryCandidates: [],
-        structuredOutputParsed: false,
-        toolRoundsUsed: 1,
-        doneCriteria: {
-          goal: 'review code diff',
-          checklist: ['review code diff'],
-          requiresNonEmptyFinalAnswer: true,
-          requiresToolEvidence: false,
-          requiresSubstantiveFinalAnswer: false,
-          forbidSuccessAfterToolErrors: false
-        },
-        verification: {
-          isVerified: true,
-          finalAnswerIsNonEmpty: true,
-          finalAnswerIsSubstantive: true,
-          toolEvidenceSatisfied: true,
-          noUnresolvedToolErrors: true,
-          toolMessagesCount: 1,
-          checks: []
-        },
-        turnStream: (async function* (): AsyncIterable<TurnEvent> {
-          yield { type: 'assistant_text_delta', text: 'Review nhanh theo git diff' };
-          yield { type: 'assistant_message_completed', text: 'Review nhanh theo git diff' };
-          yield { type: 'tool_call_started', id: 'tool-1', name: 'git', input: { command: 'git diff --stat' } };
-          yield { type: 'tool_call_completed', id: 'tool-1', name: 'git', isError: false, resultPreview: '1 file changed', durationMs: 12 };
-          yield { type: 'assistant_text_delta', text: 'Kết luận cuối' };
-          yield { type: 'assistant_message_completed', text: 'Kết luận cuối' };
-          yield {
-            type: 'turn_completed',
-            finalAnswer: 'Kết luận cuối',
-            stopReason: 'completed',
-            history: [
-              { role: 'user', content: 'review code diff' },
-              { role: 'assistant', content: 'Review nhanh theo git diff' },
-              { role: 'tool', name: 'git', toolCallId: 'tool-1', content: '1 file changed', isError: false },
-              { role: 'assistant', content: 'Kết luận cuối' }
-            ],
-            memoryCandidates: [],
-            structuredOutputParsed: false,
-            toolRoundsUsed: 1,
-            doneCriteria: {
-              goal: 'review code diff',
-              checklist: ['review code diff'],
-              requiresNonEmptyFinalAnswer: true,
-              requiresToolEvidence: false,
-              requiresSubstantiveFinalAnswer: false,
-              forbidSuccessAfterToolErrors: false
-            },
-            turnCompleted: true,
-            verification: {
-              isVerified: true,
-              finalAnswerIsNonEmpty: true,
-              finalAnswerIsSubstantive: true,
-              toolEvidenceSatisfied: true,
-              noUnresolvedToolErrors: true,
-              toolMessagesCount: 1,
-              checks: []
-            }
-          };
-        })(),
-        finalResult: Promise.resolve({
-          stopReason: 'completed',
+        ...createTurnResult({
           finalAnswer: 'Kết luận cuối',
           history: [
-            { role: 'user', content: 'review code diff' },
-            { role: 'assistant', content: 'Review nhanh theo git diff' },
-            { role: 'tool', name: 'git', toolCallId: 'tool-1', content: '1 file changed', isError: false },
-            { role: 'assistant', content: 'Kết luận cuối' }
+            { role: 'user' as const, content: 'inspect code diff' },
+            { role: 'assistant' as const, content: 'Review nhanh theo git diff' },
+            { role: 'tool' as const, name: 'git', toolCallId: 'tool-1', content: '1 file changed', isError: false },
+            { role: 'assistant' as const, content: 'Kết luận cuối' }
           ],
-          historySummary: undefined,
-          memoryCandidates: [],
-          structuredOutputParsed: false,
           toolRoundsUsed: 1,
           doneCriteria: {
-            goal: 'review code diff',
-            checklist: ['review code diff'],
+            goal: 'inspect code diff',
+            checklist: ['inspect code diff'],
             requiresNonEmptyFinalAnswer: true,
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
@@ -1084,22 +992,83 @@ describe('tuiController', () => {
             toolMessagesCount: 1,
             checks: []
           }
+        }),
+        turnStream: (async function* (): AsyncIterable<TurnEvent> {
+          yield { type: 'assistant_text_delta', text: 'Review nhanh theo git diff' };
+          yield { type: 'assistant_message_completed', text: 'Review nhanh theo git diff' };
+          yield { type: 'tool_call_started', id: 'tool-1', name: 'git', input: { command: 'git diff --stat' } };
+          yield { type: 'tool_call_completed', id: 'tool-1', name: 'git', isError: false, resultPreview: '1 file changed', durationMs: 12 };
+          yield { type: 'assistant_text_delta', text: 'Kết luận cuối' };
+          yield { type: 'assistant_message_completed', text: 'Kết luận cuối' };
+          yield {
+            type: 'turn_completed',
+            finalAnswer: 'Kết luận cuối',
+            stopReason: 'completed' as const,
+            history: [
+              { role: 'user' as const, content: 'inspect code diff' },
+              { role: 'assistant' as const, content: 'Review nhanh theo git diff' },
+              { role: 'tool' as const, name: 'git', toolCallId: 'tool-1', content: '1 file changed', isError: false },
+              { role: 'assistant' as const, content: 'Kết luận cuối' }
+            ],
+            memoryCandidates: [],
+            structuredOutputParsed: false,
+            toolRoundsUsed: 1,
+            doneCriteria: {
+              goal: 'inspect code diff',
+              checklist: ['inspect code diff'],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            },
+            turnCompleted: true
+          };
+        })(),
+        finalResult: Promise.resolve({
+          ...createTurnResult({
+            finalAnswer: 'Kết luận cuối',
+            history: [
+              { role: 'user' as const, content: 'inspect code diff' },
+              { role: 'assistant' as const, content: 'Review nhanh theo git diff' },
+              { role: 'tool' as const, name: 'git', toolCallId: 'tool-1', content: '1 file changed', isError: false },
+              { role: 'assistant' as const, content: 'Kết luận cuối' }
+            ],
+            toolRoundsUsed: 1,
+            doneCriteria: {
+              goal: 'inspect code diff',
+              checklist: ['inspect code diff'],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            },
+            verification: {
+              isVerified: true,
+              finalAnswerIsNonEmpty: true,
+              finalAnswerIsSubstantive: true,
+              toolEvidenceSatisfied: true,
+              noUnresolvedToolErrors: true,
+              toolMessagesCount: 1,
+              checks: []
+            }
+          }),
+          historySummary: undefined
         })
       })),
       emit(message) {
-        emitted.push(parseBridgeMessage(message));
+        emitted.push(parseBridgeMessage(message) as HostEvent);
       }
     });
 
     await controller.start();
-    await controller.handleAction({ type: 'submit_prompt', prompt: 'review code diff' });
+    await controller.handleAction({ type: 'submit_prompt', prompt: 'inspect code diff' });
 
     expect(emitted).toContainEqual({ type: 'assistant_completed', turnId: 'turn-1', messageId: 'assistant-1', text: 'Review nhanh theo git diff' });
     expect(emitted).toContainEqual({ type: 'assistant_completed', turnId: 'turn-1', messageId: 'assistant-2', text: 'Kết luận cuối' });
 
     const finalCheckpoint = parseInteractiveCheckpointJson(savedRecords.at(-1)!.checkpointJson);
     expect(finalCheckpoint?.transcriptCells).toEqual([
-      { id: 'user-live-1', kind: 'user', text: 'review code diff' },
+      { id: 'user-live-1', kind: 'user', text: 'inspect code diff' },
       { id: 'assistant-live-2', kind: 'assistant', text: 'Review nhanh theo git diff' },
       { id: 'tool-live-3', kind: 'tool', text: '1 file changed', title: 'git', toolName: 'git', isError: false, streaming: false, turnId: 'turn-1', toolCallId: 'tool-1', durationMs: 12 },
       { id: 'assistant-live-4', kind: 'assistant', text: 'Kết luận cuối' }
@@ -1112,14 +1081,7 @@ describe('tuiController', () => {
 
     const controller = createTuiController({
       cwd: '/tmp/qiclaw-controller-long-assistant',
-      runtime: {
-        provider: { name: 'openai', model: 'gpt-test' },
-        availableTools: [],
-        systemPrompt: 'system prompt',
-        cwd: '/tmp/qiclaw-controller-long-assistant',
-        maxToolRounds: 3,
-        observer: { record() {} }
-      },
+      runtime: createTestRuntime('/tmp/qiclaw-controller-long-assistant'),
       checkpointStore: {
         getLatest() {
           return undefined;
@@ -1128,36 +1090,28 @@ describe('tuiController', () => {
           savedRecords.push({ sessionId: record.sessionId, checkpointJson: record.checkpointJson, status: record.status });
         }
       },
-      prepareSessionMemory: vi.fn(async () => undefined),
-      captureTurnMemory: vi.fn(async () => ({ saved: false, checkpointState: undefined })),
+      prepareSessionMemory: vi.fn(async () => createPreparedMemoryResult('session-long-assistant')),
+      captureTurnMemory: vi.fn(async () => ({
+        saved: false,
+        checkpointState: createPreparedMemoryResult('session-long-assistant').checkpointState
+      })),
       createSessionId: () => 'session-long-assistant',
       executeTurn: vi.fn(async () => ({
-        stopReason: 'completed',
-        finalAnswer: 'Chuẩn, Đại ca. Lần này em đi quá sâu vào file nên chậm.',
-        history: [
-          { role: 'user', content: 'review cho lẹ' },
-          { role: 'assistant', content: 'Chuẩn, Đại ca. Lần này em đi quá sâu vào file nên chậm.' }
-        ],
-        memoryCandidates: [],
-        structuredOutputParsed: false,
-        toolRoundsUsed: 0,
-        doneCriteria: {
-          goal: 'review cho lẹ',
-          checklist: ['review cho lẹ'],
-          requiresNonEmptyFinalAnswer: true,
-          requiresToolEvidence: false,
-          requiresSubstantiveFinalAnswer: false,
-          forbidSuccessAfterToolErrors: false
-        },
-        verification: {
-          isVerified: true,
-          finalAnswerIsNonEmpty: true,
-          finalAnswerIsSubstantive: true,
-          toolEvidenceSatisfied: true,
-          noUnresolvedToolErrors: true,
-          toolMessagesCount: 0,
-          checks: []
-        },
+        ...createTurnResult({
+          finalAnswer: 'Chuẩn, Đại ca. Lần này em đi quá sâu vào file nên chậm.',
+          history: [
+            { role: 'user' as const, content: 'inspect cho lẹ' },
+            { role: 'assistant' as const, content: 'Chuẩn, Đại ca. Lần này em đi quá sâu vào file nên chậm.' }
+          ],
+          doneCriteria: {
+            goal: 'inspect cho lẹ',
+            checklist: ['inspect cho lẹ'],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          }
+        }),
         turnStream: (async function* (): AsyncIterable<TurnEvent> {
           yield { type: 'assistant_text_delta', text: 'Chu' };
           yield { type: 'assistant_text_delta', text: 'ẩn, Đại ca. Lần này em đi quá sâu vào file nên chậm.' };
@@ -1168,71 +1122,51 @@ describe('tuiController', () => {
           yield {
             type: 'turn_completed',
             finalAnswer: 'Chuẩn, Đại ca. Lần này em đi quá sâu vào file nên chậm.',
-            stopReason: 'completed',
+            stopReason: 'completed' as const,
             history: [
-              { role: 'user', content: 'review cho lẹ' },
-              { role: 'assistant', content: 'Chuẩn, Đại ca. Lần này em đi quá sâu vào file nên chậm.' }
+              { role: 'user' as const, content: 'inspect cho lẹ' },
+              { role: 'assistant' as const, content: 'Chuẩn, Đại ca. Lần này em đi quá sâu vào file nên chậm.' }
             ],
             memoryCandidates: [],
             structuredOutputParsed: false,
             toolRoundsUsed: 0,
             doneCriteria: {
-              goal: 'review cho lẹ',
-              checklist: ['review cho lẹ'],
+              goal: 'inspect cho lẹ',
+              checklist: ['inspect cho lẹ'],
               requiresNonEmptyFinalAnswer: true,
               requiresToolEvidence: false,
               requiresSubstantiveFinalAnswer: false,
               forbidSuccessAfterToolErrors: false
             },
-            turnCompleted: true,
-            verification: {
-              isVerified: true,
-              finalAnswerIsNonEmpty: true,
-              finalAnswerIsSubstantive: true,
-              toolEvidenceSatisfied: true,
-              noUnresolvedToolErrors: true,
-              toolMessagesCount: 0,
-              checks: []
-            }
+            turnCompleted: true
           };
         })(),
         finalResult: Promise.resolve({
-          stopReason: 'completed',
-          finalAnswer: 'Chuẩn, Đại ca. Lần này em đi quá sâu vào file nên chậm.',
-          history: [
-            { role: 'user', content: 'review cho lẹ' },
-            { role: 'assistant', content: 'Chuẩn, Đại ca. Lần này em đi quá sâu vào file nên chậm.' }
-          ],
-          historySummary: undefined,
-          memoryCandidates: [],
-          structuredOutputParsed: false,
-          toolRoundsUsed: 0,
-          doneCriteria: {
-            goal: 'review cho lẹ',
-            checklist: ['review cho lẹ'],
-            requiresNonEmptyFinalAnswer: true,
-            requiresToolEvidence: false,
-            requiresSubstantiveFinalAnswer: false,
-            forbidSuccessAfterToolErrors: false
-          },
-          verification: {
-            isVerified: true,
-            finalAnswerIsNonEmpty: true,
-            finalAnswerIsSubstantive: true,
-            toolEvidenceSatisfied: true,
-            noUnresolvedToolErrors: true,
-            toolMessagesCount: 0,
-            checks: []
-          }
+          ...createTurnResult({
+            finalAnswer: 'Chuẩn, Đại ca. Lần này em đi quá sâu vào file nên chậm.',
+            history: [
+              { role: 'user' as const, content: 'inspect cho lẹ' },
+              { role: 'assistant' as const, content: 'Chuẩn, Đại ca. Lần này em đi quá sâu vào file nên chậm.' }
+            ],
+            doneCriteria: {
+              goal: 'inspect cho lẹ',
+              checklist: ['inspect cho lẹ'],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            }
+          }),
+          historySummary: undefined
         })
       })),
       emit(message) {
-        emitted.push(parseBridgeMessage(message));
+        emitted.push(parseBridgeMessage(message) as HostEvent);
       }
     });
 
     await controller.start();
-    await controller.handleAction({ type: 'submit_prompt', prompt: 'review cho lẹ' });
+    await controller.handleAction({ type: 'submit_prompt', prompt: 'inspect cho lẹ' });
 
     expect(emitted.filter((event) => event.type === 'assistant_completed')).toEqual([
       {
@@ -1245,7 +1179,7 @@ describe('tuiController', () => {
 
     const finalCheckpoint = parseInteractiveCheckpointJson(savedRecords.at(-1)!.checkpointJson);
     expect(finalCheckpoint?.transcriptCells).toEqual([
-      { id: 'user-live-1', kind: 'user', text: 'review cho lẹ' },
+      { id: 'user-live-1', kind: 'user', text: 'inspect cho lẹ' },
       { id: 'assistant-live-2', kind: 'assistant', text: 'Chuẩn, Đại ca. Lần này em đi quá sâu vào file nên chậm.' }
     ]);
   });
@@ -1257,14 +1191,7 @@ describe('tuiController', () => {
 
     const controller = createTuiController({
       cwd: '/tmp/qiclaw-controller-short-fragment',
-      runtime: {
-        provider: { name: 'openai', model: 'gpt-test' },
-        availableTools: [],
-        systemPrompt: 'system prompt',
-        cwd: '/tmp/qiclaw-controller-short-fragment',
-        maxToolRounds: 3,
-        observer: { record() {} }
-      },
+      runtime: createTestRuntime('/tmp/qiclaw-controller-short-fragment'),
       checkpointStore: {
         getLatest() {
           return undefined;
@@ -1273,46 +1200,38 @@ describe('tuiController', () => {
           savedRecords.push({ sessionId: record.sessionId, checkpointJson: record.checkpointJson, status: record.status });
         }
       },
-      prepareSessionMemory: vi.fn(async () => undefined),
-      captureTurnMemory: vi.fn(async () => ({ saved: false, checkpointState: undefined })),
+      prepareSessionMemory: vi.fn(async () => createPreparedMemoryResult('session-short-fragment')),
+      captureTurnMemory: vi.fn(async () => ({
+        saved: false,
+        checkpointState: createPreparedMemoryResult('session-short-fragment').checkpointState
+      })),
       createSessionId: () => 'session-short-fragment',
       executeTurn: vi.fn(async () => ({
-        stopReason: 'completed',
-        finalAnswer,
-        history: [
-          { role: 'user', content: 'xin chào' },
-          { role: 'assistant', content: finalAnswer }
-        ],
-        memoryCandidates: [],
-        structuredOutputParsed: false,
-        toolRoundsUsed: 0,
-        doneCriteria: {
-          goal: 'xin chào',
-          checklist: ['xin chào'],
-          requiresNonEmptyFinalAnswer: true,
-          requiresToolEvidence: false,
-          requiresSubstantiveFinalAnswer: false,
-          forbidSuccessAfterToolErrors: false
-        },
-        verification: {
-          isVerified: true,
-          finalAnswerIsNonEmpty: true,
-          finalAnswerIsSubstantive: true,
-          toolEvidenceSatisfied: true,
-          noUnresolvedToolErrors: true,
-          toolMessagesCount: 0,
-          checks: []
-        },
+        ...createTurnResult({
+          finalAnswer,
+          history: [
+            { role: 'user' as const, content: 'xin chào' },
+            { role: 'assistant' as const, content: finalAnswer }
+          ],
+          doneCriteria: {
+            goal: 'xin chào',
+            checklist: ['xin chào'],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          }
+        }),
         turnStream: (async function* (): AsyncIterable<TurnEvent> {
           yield { type: 'assistant_text_delta', text: 'Ch' };
           yield { type: 'assistant_message_completed', text: finalAnswer };
           yield {
             type: 'turn_completed',
             finalAnswer,
-            stopReason: 'completed',
+            stopReason: 'completed' as const,
             history: [
-              { role: 'user', content: 'xin chào' },
-              { role: 'assistant', content: finalAnswer }
+              { role: 'user' as const, content: 'xin chào' },
+              { role: 'assistant' as const, content: finalAnswer }
             ],
             memoryCandidates: [],
             structuredOutputParsed: false,
@@ -1325,50 +1244,30 @@ describe('tuiController', () => {
               requiresSubstantiveFinalAnswer: false,
               forbidSuccessAfterToolErrors: false
             },
-            turnCompleted: true,
-            verification: {
-              isVerified: true,
-              finalAnswerIsNonEmpty: true,
-              finalAnswerIsSubstantive: true,
-              toolEvidenceSatisfied: true,
-              noUnresolvedToolErrors: true,
-              toolMessagesCount: 0,
-              checks: []
-            }
+            turnCompleted: true
           };
         })(),
         finalResult: Promise.resolve({
-          stopReason: 'completed',
-          finalAnswer,
-          history: [
-            { role: 'user', content: 'xin chào' },
-            { role: 'assistant', content: finalAnswer }
-          ],
-          historySummary: undefined,
-          memoryCandidates: [],
-          structuredOutputParsed: false,
-          toolRoundsUsed: 0,
-          doneCriteria: {
-            goal: 'xin chào',
-            checklist: ['xin chào'],
-            requiresNonEmptyFinalAnswer: true,
-            requiresToolEvidence: false,
-            requiresSubstantiveFinalAnswer: false,
-            forbidSuccessAfterToolErrors: false
-          },
-          verification: {
-            isVerified: true,
-            finalAnswerIsNonEmpty: true,
-            finalAnswerIsSubstantive: true,
-            toolEvidenceSatisfied: true,
-            noUnresolvedToolErrors: true,
-            toolMessagesCount: 0,
-            checks: []
-          }
+          ...createTurnResult({
+            finalAnswer,
+            history: [
+              { role: 'user' as const, content: 'xin chào' },
+              { role: 'assistant' as const, content: finalAnswer }
+            ],
+            doneCriteria: {
+              goal: 'xin chào',
+              checklist: ['xin chào'],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            }
+          }),
+          historySummary: undefined
         })
       })),
       emit(message) {
-        emitted.push(parseBridgeMessage(message));
+        emitted.push(parseBridgeMessage(message) as HostEvent);
       }
     });
 
@@ -1396,14 +1295,7 @@ describe('tuiController', () => {
 
     const controller = createTuiController({
       cwd: '/tmp/qiclaw-controller-provider-stream-tool',
-      runtime: {
-        provider: { name: 'openai', model: 'gpt-test' },
-        availableTools: [],
-        systemPrompt: 'system prompt',
-        cwd: '/tmp/qiclaw-controller-provider-stream-tool',
-        maxToolRounds: 3,
-        observer: { record() {} }
-      },
+      runtime: createTestRuntime('/tmp/qiclaw-controller-provider-stream-tool'),
       checkpointStore: {
         getLatest() {
           return undefined;
@@ -1414,7 +1306,7 @@ describe('tuiController', () => {
       },
       prepareSessionMemory: vi.fn(async () => ({
         memoryText: '',
-        store: { stub: true },
+        store: createPreparedMemoryResult('session-actions').store,
         recalled: [],
         checkpointState: {
           storeSessionId: 'session-provider-stream-tool',
@@ -1440,12 +1332,12 @@ describe('tuiController', () => {
       })),
       createSessionId: () => 'session-provider-stream-tool',
       executeTurn: async () => ({
-        stopReason: 'completed',
+        stopReason: 'completed' as const,
         finalAnswer: 'done',
         history: [
-          { role: 'user', content: 'use tool' },
-          { role: 'tool', name: 'read_file', toolCallId: 'tool-1', content: 'file contents', isError: false },
-          { role: 'assistant', content: 'done' }
+          { role: 'user' as const, content: 'use tool' },
+          { role: 'tool' as const, name: 'read_file', toolCallId: 'tool-1', content: 'file contents', isError: false },
+          { role: 'assistant' as const, content: 'done' }
         ],
         historySummary: undefined,
         memoryCandidates: [],
@@ -1474,12 +1366,12 @@ describe('tuiController', () => {
           yield { type: 'assistant_message_completed', text: 'done' };
         })(),
         finalResult: Promise.resolve({
-          stopReason: 'completed',
+          stopReason: 'completed' as const,
           finalAnswer: 'done',
           history: [
-            { role: 'user', content: 'use tool' },
-            { role: 'tool', name: 'read_file', toolCallId: 'tool-1', content: 'file contents', isError: false },
-            { role: 'assistant', content: 'done' }
+            { role: 'user' as const, content: 'use tool' },
+            { role: 'tool' as const, name: 'read_file', toolCallId: 'tool-1', content: 'file contents', isError: false },
+            { role: 'assistant' as const, content: 'done' }
           ],
           historySummary: undefined,
           memoryCandidates: [],
@@ -1531,14 +1423,7 @@ describe('tuiController', () => {
     const restoredEmitted: HostEvent[] = [];
     const restoredController = createTuiController({
       cwd: '/tmp/qiclaw-controller-provider-stream-tool',
-      runtime: {
-        provider: { name: 'openai', model: 'gpt-test' },
-        availableTools: [],
-        systemPrompt: 'system prompt',
-        cwd: '/tmp/qiclaw-controller-provider-stream-tool',
-        maxToolRounds: 3,
-        observer: { record() {} }
-      },
+      runtime: createTestRuntime('/tmp/qiclaw-controller-provider-stream-tool'),
       checkpointStore: {
         getLatest() {
           return latest
@@ -1562,7 +1447,7 @@ describe('tuiController', () => {
         throw new Error('not used');
       }),
       emit(message) {
-        restoredEmitted.push(parseBridgeMessage(message));
+        restoredEmitted.push(parseBridgeMessage(message) as HostEvent);
       }
     });
 
@@ -1591,14 +1476,7 @@ describe('tuiController', () => {
     const streamError = new Error('provider stream failed');
     const controller = createTuiController({
       cwd: '/tmp/qiclaw-controller-provider-stream-failure',
-      runtime: {
-        provider: { name: 'openai', model: 'gpt-test' },
-        availableTools: [],
-        systemPrompt: 'system prompt',
-        cwd: '/tmp/qiclaw-controller-provider-stream-failure',
-        maxToolRounds: 3,
-        observer: { record() {} }
-      },
+      runtime: createTestRuntime('/tmp/qiclaw-controller-provider-stream-failure'),
       checkpointStore: {
         getLatest() {
           return undefined;
@@ -1609,7 +1487,7 @@ describe('tuiController', () => {
       },
       prepareSessionMemory: vi.fn(async () => ({
         memoryText: '',
-        store: { stub: true },
+        store: createPreparedMemoryResult('session-actions').store,
         recalled: [],
         checkpointState: {
           storeSessionId: 'session-provider-stream-failure',
@@ -1635,7 +1513,7 @@ describe('tuiController', () => {
       })),
       createSessionId: () => 'session-provider-stream-failure',
       executeTurn: async () => ({
-        stopReason: 'completed',
+        stopReason: 'completed' as const,
         finalAnswer: '',
         history: [],
         historySummary: undefined,
@@ -1701,14 +1579,7 @@ describe('tuiController', () => {
 
     const firstController = createTuiController({
       cwd: '/tmp/qiclaw-controller-provider-stream-failure-restore',
-      runtime: {
-        provider: { name: 'openai', model: 'gpt-test' },
-        availableTools: [],
-        systemPrompt: 'system prompt',
-        cwd: '/tmp/qiclaw-controller-provider-stream-failure-restore',
-        maxToolRounds: 3,
-        observer: { record() {} }
-      },
+      runtime: createTestRuntime('/tmp/qiclaw-controller-provider-stream-failure-restore'),
       checkpointStore: {
         getLatest() {
           return undefined;
@@ -1719,7 +1590,7 @@ describe('tuiController', () => {
       },
       prepareSessionMemory: vi.fn(async () => ({
         memoryText: '',
-        store: { stub: true },
+        store: createPreparedMemoryResult('session-actions').store,
         recalled: [],
         checkpointState: {
           storeSessionId: 'session-provider-stream-failure-restore',
@@ -1745,7 +1616,7 @@ describe('tuiController', () => {
       })),
       createSessionId: () => 'session-provider-stream-failure-restore',
       executeTurn: async () => ({
-        stopReason: 'completed',
+        stopReason: 'completed' as const,
         finalAnswer: '',
         history: [],
         historySummary: undefined,
@@ -1799,49 +1670,12 @@ describe('tuiController', () => {
       expect(history).toEqual([]);
       expect(historySummary).toBeUndefined();
       return {
-        stopReason: 'completed',
-        finalAnswer: 'follow-up answer',
-        history: [
-          { role: 'user', content: userInput },
-          { role: 'assistant', content: 'follow-up answer' }
-        ],
-        historySummary: undefined,
-        memoryCandidates: [],
-        structuredOutputParsed: false,
-        toolRoundsUsed: 0,
-        doneCriteria: {
-          goal: userInput,
-          checklist: [userInput],
-          requiresNonEmptyFinalAnswer: true,
-          requiresToolEvidence: false,
-          requiresSubstantiveFinalAnswer: false,
-          forbidSuccessAfterToolErrors: false
-        },
-        verification: {
-          isVerified: true,
-          finalAnswerIsNonEmpty: true,
-          finalAnswerIsSubstantive: true,
-          toolEvidenceSatisfied: true,
-          noUnresolvedToolErrors: true,
-          toolMessagesCount: 0,
-          checks: []
-        },
-        turnStream: (async function* (): AsyncIterable<TurnEvent> {
-          yield { type: 'assistant_text_delta', text: 'follow-up ' };
-          yield { type: 'assistant_text_delta', text: 'answer' };
-          yield { type: 'assistant_message_completed', text: 'follow-up answer' };
-        })(),
-        finalResult: Promise.resolve({
-          stopReason: 'completed',
+        ...createTurnResult({
           finalAnswer: 'follow-up answer',
           history: [
-            { role: 'user', content: userInput },
-            { role: 'assistant', content: 'follow-up answer' }
+            { role: 'user' as const, content: userInput },
+            { role: 'assistant' as const, content: 'follow-up answer' }
           ],
-          historySummary: undefined,
-          memoryCandidates: [],
-          structuredOutputParsed: false,
-          toolRoundsUsed: 0,
           doneCriteria: {
             goal: userInput,
             checklist: [userInput],
@@ -1849,30 +1683,38 @@ describe('tuiController', () => {
             requiresToolEvidence: false,
             requiresSubstantiveFinalAnswer: false,
             forbidSuccessAfterToolErrors: false
-          },
-          verification: {
-            isVerified: true,
-            finalAnswerIsNonEmpty: true,
-            finalAnswerIsSubstantive: true,
-            toolEvidenceSatisfied: true,
-            noUnresolvedToolErrors: true,
-            toolMessagesCount: 0,
-            checks: []
           }
+        }),
+        historySummary: undefined,
+        turnStream: (async function* (): AsyncIterable<TurnEvent> {
+          yield { type: 'assistant_text_delta', text: 'follow-up ' };
+          yield { type: 'assistant_text_delta', text: 'answer' };
+          yield { type: 'assistant_message_completed', text: 'follow-up answer' };
+        })(),
+        finalResult: Promise.resolve({
+          ...createTurnResult({
+            finalAnswer: 'follow-up answer',
+            history: [
+              { role: 'user' as const, content: userInput },
+              { role: 'assistant' as const, content: 'follow-up answer' }
+            ],
+            doneCriteria: {
+              goal: userInput,
+              checklist: [userInput],
+              requiresNonEmptyFinalAnswer: true,
+              requiresToolEvidence: false,
+              requiresSubstantiveFinalAnswer: false,
+              forbidSuccessAfterToolErrors: false
+            }
+          }),
+          historySummary: undefined
         })
       };
     });
 
     const restoredController = createTuiController({
       cwd: '/tmp/qiclaw-controller-provider-stream-failure-restore',
-      runtime: {
-        provider: { name: 'openai', model: 'gpt-test' },
-        availableTools: [],
-        systemPrompt: 'system prompt',
-        cwd: '/tmp/qiclaw-controller-provider-stream-failure-restore',
-        maxToolRounds: 3,
-        observer: { record() {} }
-      },
+      runtime: createTestRuntime('/tmp/qiclaw-controller-provider-stream-failure-restore'),
       checkpointStore: {
         getLatest() {
           return failedCheckpoint
@@ -1890,7 +1732,7 @@ describe('tuiController', () => {
       },
       prepareSessionMemory: vi.fn(async () => ({
         memoryText: '',
-        store: { stub: true },
+        store: createPreparedMemoryResult('session-actions').store,
         recalled: [],
         checkpointState: {
           storeSessionId: 'session-provider-stream-failure-restore',
@@ -1917,7 +1759,7 @@ describe('tuiController', () => {
       createSessionId: () => 'session-provider-stream-failure-restore-other',
       executeTurn: restoredExecuteTurn,
       emit(message) {
-        restoredEmitted.push(parseBridgeMessage(message));
+        restoredEmitted.push(parseBridgeMessage(message) as HostEvent);
       }
     });
 
@@ -1951,17 +1793,17 @@ describe('tuiController', () => {
       { kind: 'assistant', text: 'follow-up answer', title: undefined, toolName: undefined, isError: undefined, streaming: undefined, turnId: undefined, toolCallId: undefined, durationMs: undefined }
     ]);
     expect(finalParsed?.history).toEqual([
-      { role: 'user', content: 'follow-up question' },
-      { role: 'assistant', content: 'follow-up answer' }
+      { role: 'user' as const, content: 'follow-up question' },
+      { role: 'assistant' as const, content: 'follow-up answer' }
     ]);
   });
 
   it('drops stale partial assistant transcript cells when restoring before the next turn', async () => {
-    const savedRecords: Array<{ sessionId: string; taskId: string; status: 'running' | 'completed'; checkpointJson: string }> = [];
+    const savedRecords: Array<{ sessionId: string; taskId: string; status: string; checkpointJson: string }> = [];
     const initialCheckpoint = createInteractiveCheckpointJson({
       version: 1,
       history: [
-        { role: 'user', content: 'xin chào' }
+        { role: 'user' as const, content: 'xin chào' }
       ],
       historySummary: undefined,
       sessionMemory: undefined,
@@ -1974,14 +1816,7 @@ describe('tuiController', () => {
 
     const controller = createTuiController({
       cwd: '/tmp/qiclaw-controller-restore-ordinals',
-      runtime: {
-        provider: { name: 'openai', model: 'gpt-test' },
-        availableTools: [],
-        systemPrompt: 'system prompt',
-        cwd: '/tmp/qiclaw-controller-restore-ordinals',
-        maxToolRounds: 3,
-        observer: { record() {} }
-      },
+      runtime: createTestRuntime('/tmp/qiclaw-controller-restore-ordinals'),
       checkpointStore: {
         getLatest() {
           return {
@@ -1996,39 +1831,31 @@ describe('tuiController', () => {
           savedRecords.push(record);
         }
       },
-      prepareSessionMemory: vi.fn(async () => undefined),
-      captureTurnMemory: vi.fn(async () => ({ saved: false, checkpointState: undefined })),
+      prepareSessionMemory: vi.fn(async () => createPreparedMemoryResult('session-restore-ordinals')),
+      captureTurnMemory: vi.fn(async () => ({
+        saved: false,
+        checkpointState: createPreparedMemoryResult('session-restore-ordinals').checkpointState
+      })),
       createSessionId: () => 'session-restore-ordinals-fallback',
       executeTurn: vi.fn(async () => ({
-        stopReason: 'completed',
-        finalAnswer: 'Chào Đại ca.',
-        history: [
-          { role: 'user', content: 'tiếp tục' },
-          { role: 'assistant', content: 'Chào Đại ca.' }
-        ],
-        memoryCandidates: [],
-        structuredOutputParsed: false,
-        toolRoundsUsed: 0,
-        doneCriteria: {
-          goal: 'tiếp tục',
-          checklist: ['tiếp tục'],
-          requiresNonEmptyFinalAnswer: true,
-          requiresToolEvidence: false,
-          requiresSubstantiveFinalAnswer: false,
-          forbidSuccessAfterToolErrors: false
-        },
-        verification: {
-          isVerified: true,
-          finalAnswerIsNonEmpty: true,
-          finalAnswerIsSubstantive: true,
-          toolEvidenceSatisfied: true,
-          noUnresolvedToolErrors: true,
-          toolMessagesCount: 0,
-          checks: []
-        },
-        turnStream: (async function* () {
-          yield { type: 'assistant_text_delta', text: 'Chào Đại ca.' } as const;
-          yield { type: 'assistant_message_completed', text: 'Chào Đại ca.' } as const;
+        ...createTurnResult({
+          finalAnswer: 'Chào Đại ca.',
+          history: [
+            { role: 'user' as const, content: 'tiếp tục' },
+            { role: 'assistant' as const, content: 'Chào Đại ca.' }
+          ],
+          doneCriteria: {
+            goal: 'tiếp tục',
+            checklist: ['tiếp tục'],
+            requiresNonEmptyFinalAnswer: true,
+            requiresToolEvidence: false,
+            requiresSubstantiveFinalAnswer: false,
+            forbidSuccessAfterToolErrors: false
+          }
+        }),
+        turnStream: (async function* (): AsyncIterable<TurnEvent> {
+          yield { type: 'assistant_text_delta', text: 'Chào Đại ca.' };
+          yield { type: 'assistant_message_completed', text: 'Chào Đại ca.' };
           yield {
             type: 'turn_completed',
             stopReason: 'completed',
@@ -2048,21 +1875,12 @@ describe('tuiController', () => {
               requiresSubstantiveFinalAnswer: false,
               forbidSuccessAfterToolErrors: false
             },
-            turnCompleted: true,
-            verification: {
-              isVerified: true,
-              finalAnswerIsNonEmpty: true,
-              finalAnswerIsSubstantive: true,
-              toolEvidenceSatisfied: true,
-              noUnresolvedToolErrors: true,
-              toolMessagesCount: 0,
-              checks: []
-            }
-          } as const;
+            turnCompleted: true
+          };
         })()
       })),
       emit(message) {
-        emitted.push(parseBridgeMessage(message));
+        emitted.push(parseBridgeMessage(message) as HostEvent);
       }
     });
 
@@ -2100,22 +1918,15 @@ describe('tuiController', () => {
     try {
       const controller = createTuiController({
         cwd: '/tmp/qiclaw-controller-footer-summary',
-        runtime: {
-          provider: { name: 'openai', model: 'gpt-test' },
-          availableTools: [],
-          systemPrompt: 'system prompt',
-          cwd: '/tmp/qiclaw-controller-footer-summary',
-          maxToolRounds: 3,
-          observer: { record() {} }
-        },
+        runtime: createTestRuntime('/tmp/qiclaw-controller-footer-summary'),
         checkpointStore: {
           getLatest() {
             return undefined;
           },
           save() {}
         },
-        prepareSessionMemory: vi.fn(async () => undefined),
-        captureTurnMemory: vi.fn(async () => ({ saved: false, checkpointState: undefined })),
+        prepareSessionMemory: vi.fn(async () => createPreparedMemoryResult('session-mock')),
+        captureTurnMemory: vi.fn(async () => createCaptureMemoryResult('session-mock')),
         createSessionId: () => 'session-footer-summary',
         executeTurn: vi.fn(async (input) => {
           input.observer?.record({
@@ -2157,35 +1968,25 @@ describe('tuiController', () => {
           });
 
           return {
-            stopReason: 'completed',
-            finalAnswer: 'done',
-            history: [
-              { role: 'user', content: 'summarize turn' },
-              { role: 'assistant', content: 'done' }
-            ],
+            ...createTurnResult({
+              finalAnswer: 'done',
+              history: [
+                { role: 'user' as const, content: 'summarize turn' },
+                { role: 'assistant' as const, content: 'done' }
+              ],
+              toolRoundsUsed: 1,
+              doneCriteria: {
+                goal: 'summarize turn',
+                checklist: ['summarize turn'],
+                requiresNonEmptyFinalAnswer: true,
+                requiresToolEvidence: false,
+                requiresSubstantiveFinalAnswer: false,
+                forbidSuccessAfterToolErrors: false
+              }
+            }),
             historySummary: undefined,
-            memoryCandidates: [],
-            structuredOutputParsed: false,
-            toolRoundsUsed: 1,
-            doneCriteria: {
-              goal: 'summarize turn',
-              checklist: ['summarize turn'],
-              requiresNonEmptyFinalAnswer: true,
-              requiresToolEvidence: false,
-              requiresSubstantiveFinalAnswer: false,
-              forbidSuccessAfterToolErrors: false
-            },
-            verification: {
-              isVerified: true,
-              finalAnswerIsNonEmpty: true,
-              finalAnswerIsSubstantive: true,
-              toolEvidenceSatisfied: true,
-              noUnresolvedToolErrors: true,
-              toolMessagesCount: 0,
-              checks: []
-            },
             turnStream: (async function* (): AsyncIterable<TurnEvent> {
-              yield { type: 'provider_started' };
+              yield { type: 'provider_started', provider: 'openai', model: 'gpt-test' };
               yield { type: 'tool_call_started', id: 'tool-1', name: 'read_file', input: { filePath: 'a' } };
               yield { type: 'tool_call_completed', id: 'tool-1', name: 'read_file', resultPreview: 'ok', isError: false, durationMs: 10 };
               yield { type: 'tool_call_started', id: 'tool-2', name: 'grep', input: { pattern: 'x' } };
@@ -2194,10 +1995,10 @@ describe('tuiController', () => {
               yield {
                 type: 'turn_completed',
                 finalAnswer: 'done',
-                stopReason: 'completed',
+                stopReason: 'completed' as const,
                 history: [
-                  { role: 'user', content: 'summarize turn' },
-                  { role: 'assistant', content: 'done' }
+                  { role: 'user' as const, content: 'summarize turn' },
+                  { role: 'assistant' as const, content: 'done' }
                 ],
                 memoryCandidates: [],
                 structuredOutputParsed: false,
@@ -2210,51 +2011,32 @@ describe('tuiController', () => {
                   requiresSubstantiveFinalAnswer: false,
                   forbidSuccessAfterToolErrors: false
                 },
-                turnCompleted: true,
-                verification: {
-                  isVerified: true,
-                  finalAnswerIsNonEmpty: true,
-                  finalAnswerIsSubstantive: true,
-                  toolEvidenceSatisfied: true,
-                  noUnresolvedToolErrors: true,
-                  toolMessagesCount: 0,
-                  checks: []
-                }
+                turnCompleted: true
               };
             })(),
             finalResult: Promise.resolve({
-              stopReason: 'completed',
-              finalAnswer: 'done',
-              history: [
-                { role: 'user', content: 'summarize turn' },
-                { role: 'assistant', content: 'done' }
-              ],
-              historySummary: undefined,
-              memoryCandidates: [],
-              structuredOutputParsed: false,
-              toolRoundsUsed: 1,
-              doneCriteria: {
-                goal: 'summarize turn',
-                checklist: ['summarize turn'],
-                requiresNonEmptyFinalAnswer: true,
-                requiresToolEvidence: false,
-                requiresSubstantiveFinalAnswer: false,
-                forbidSuccessAfterToolErrors: false
-              },
-              verification: {
-                isVerified: true,
-                finalAnswerIsNonEmpty: true,
-                finalAnswerIsSubstantive: true,
-                toolEvidenceSatisfied: true,
-                noUnresolvedToolErrors: true,
-                toolMessagesCount: 0,
-                checks: []
-              }
+              ...createTurnResult({
+                finalAnswer: 'done',
+                history: [
+                  { role: 'user' as const, content: 'summarize turn' },
+                  { role: 'assistant' as const, content: 'done' }
+                ],
+                toolRoundsUsed: 1,
+                doneCriteria: {
+                  goal: 'summarize turn',
+                  checklist: ['summarize turn'],
+                  requiresNonEmptyFinalAnswer: true,
+                  requiresToolEvidence: false,
+                  requiresSubstantiveFinalAnswer: false,
+                  forbidSuccessAfterToolErrors: false
+                }
+              }),
+              historySummary: undefined
             })
           };
         }),
         emit(message) {
-          emitted.push(parseBridgeMessage(message));
+          emitted.push(parseBridgeMessage(message) as HostEvent);
         }
       });
 
@@ -2289,22 +2071,15 @@ describe('tuiController', () => {
     try {
       const controller = createTuiController({
         cwd: '/tmp/qiclaw-controller-footer-summary-max-tools',
-        runtime: {
-          provider: { name: 'openai', model: 'gpt-test' },
-          availableTools: [],
-          systemPrompt: 'system prompt',
-          cwd: '/tmp/qiclaw-controller-footer-summary-max-tools',
-          maxToolRounds: 3,
-          observer: { record() {} }
-        },
+        runtime: createTestRuntime('/tmp/qiclaw-controller-footer-summary-max-tools'),
         checkpointStore: {
           getLatest() {
             return undefined;
           },
           save() {}
         },
-        prepareSessionMemory: vi.fn(async () => undefined),
-        captureTurnMemory: vi.fn(async () => ({ saved: false, checkpointState: undefined })),
+        prepareSessionMemory: vi.fn(async () => createPreparedMemoryResult('session-mock')),
+        captureTurnMemory: vi.fn(async () => createCaptureMemoryResult('session-mock')),
         createSessionId: () => 'session-footer-summary-max-tools',
         executeTurn: vi.fn(async (input) => {
           input.observer?.record({
@@ -2383,30 +2158,30 @@ describe('tuiController', () => {
           });
 
           return {
-            stopReason: 'max_tool_rounds_reached',
-            finalAnswer: 'stopped',
-            history: [],
+            ...createTurnResult({
+              stopReason: 'max_tool_rounds_reached',
+              finalAnswer: 'stopped',
+              history: [],
+              toolRoundsUsed: 3,
+              doneCriteria: {
+                goal: 'max tools',
+                checklist: ['max tools'],
+                requiresNonEmptyFinalAnswer: true,
+                requiresToolEvidence: false,
+                requiresSubstantiveFinalAnswer: false,
+                forbidSuccessAfterToolErrors: false
+              },
+              verification: {
+                isVerified: false,
+                finalAnswerIsNonEmpty: true,
+                finalAnswerIsSubstantive: true,
+                toolEvidenceSatisfied: true,
+                noUnresolvedToolErrors: true,
+                toolMessagesCount: 1,
+                checks: []
+              }
+            }),
             historySummary: undefined,
-            memoryCandidates: [],
-            structuredOutputParsed: false,
-            toolRoundsUsed: 3,
-            doneCriteria: {
-              goal: 'max tools',
-              checklist: ['max tools'],
-              requiresNonEmptyFinalAnswer: true,
-              requiresToolEvidence: false,
-              requiresSubstantiveFinalAnswer: false,
-              forbidSuccessAfterToolErrors: false
-            },
-            verification: {
-              isVerified: false,
-              finalAnswerIsNonEmpty: true,
-              finalAnswerIsSubstantive: true,
-              toolEvidenceSatisfied: true,
-              noUnresolvedToolErrors: true,
-              toolMessagesCount: 1,
-              checks: []
-            },
             turnStream: (async function* (): AsyncIterable<TurnEvent> {
               yield { type: 'tool_call_started', id: 'tool-1', name: 'read_file', input: { filePath: 'a' } };
               yield { type: 'tool_call_completed', id: 'tool-1', name: 'read_file', resultPreview: 'ok', isError: false, durationMs: 10 };
@@ -2427,7 +2202,23 @@ describe('tuiController', () => {
                   requiresSubstantiveFinalAnswer: false,
                   forbidSuccessAfterToolErrors: false
                 },
-                turnCompleted: false,
+                turnCompleted: false
+              };
+            })(),
+            finalResult: Promise.resolve({
+              ...createTurnResult({
+                stopReason: 'max_tool_rounds_reached',
+                finalAnswer: 'stopped',
+                history: [],
+                toolRoundsUsed: 3,
+                doneCriteria: {
+                  goal: 'max tools',
+                  checklist: ['max tools'],
+                  requiresNonEmptyFinalAnswer: true,
+                  requiresToolEvidence: false,
+                  requiresSubstantiveFinalAnswer: false,
+                  forbidSuccessAfterToolErrors: false
+                },
                 verification: {
                   isVerified: false,
                   finalAnswerIsNonEmpty: true,
@@ -2437,38 +2228,13 @@ describe('tuiController', () => {
                   toolMessagesCount: 1,
                   checks: []
                 }
-              };
-            })(),
-            finalResult: Promise.resolve({
-              stopReason: 'max_tool_rounds_reached',
-              finalAnswer: 'stopped',
-              history: [],
-              historySummary: undefined,
-              memoryCandidates: [],
-              structuredOutputParsed: false,
-              toolRoundsUsed: 3,
-              doneCriteria: {
-                goal: 'max tools',
-                checklist: ['max tools'],
-                requiresNonEmptyFinalAnswer: true,
-                requiresToolEvidence: false,
-                requiresSubstantiveFinalAnswer: false,
-                forbidSuccessAfterToolErrors: false
-              },
-              verification: {
-                isVerified: false,
-                finalAnswerIsNonEmpty: true,
-                finalAnswerIsSubstantive: true,
-                toolEvidenceSatisfied: true,
-                noUnresolvedToolErrors: true,
-                toolMessagesCount: 1,
-                checks: []
-              }
+              }),
+              historySummary: undefined
             })
           };
         }),
         emit(message) {
-          emitted.push(parseBridgeMessage(message));
+          emitted.push(parseBridgeMessage(message) as HostEvent);
         }
       });
 
@@ -2497,12 +2263,15 @@ describe('tuiController', () => {
       const controller = createTuiController({
         cwd: '/tmp/qiclaw-token-summary',
         runtime: {
-          provider: { name: 'anthropic', model: 'claude-sonnet-4-6' },
-          availableTools: [],
-          systemPrompt: 'system prompt',
-          cwd: '/tmp/qiclaw-token-summary',
-          maxToolRounds: 4,
-          observer: { record() {} }
+          ...createTestRuntime('/tmp/qiclaw-token-summary'),
+          provider: {
+            name: 'anthropic',
+            model: 'claude-sonnet-4-6',
+            async generate() {
+              throw new Error('not used');
+            }
+          },
+          maxToolRounds: 4
         },
         checkpointStore: {
           getLatest() {
@@ -2512,7 +2281,7 @@ describe('tuiController', () => {
         },
         prepareSessionMemory: vi.fn(async () => ({
           memoryText: '',
-          store: { stub: true },
+          store: createPreparedMemoryResult('session-actions').store,
           recalled: [],
           checkpointState: {
             storeSessionId: 'session-token-summary',
@@ -2614,11 +2383,11 @@ describe('tuiController', () => {
           });
 
           return {
-            stopReason: 'completed',
+            stopReason: 'completed' as const,
             finalAnswer: 'done',
             history: [
-              { role: 'user', content: 'question' },
-              { role: 'assistant', content: 'done' }
+              { role: 'user' as const, content: 'question' },
+              { role: 'assistant' as const, content: 'done' }
             ],
             historySummary: undefined,
             memoryCandidates: [],
@@ -2647,11 +2416,11 @@ describe('tuiController', () => {
               yield { type: 'assistant_message_completed', text: 'done' };
             })(),
             finalResult: Promise.resolve({
-              stopReason: 'completed',
+              stopReason: 'completed' as const,
               finalAnswer: 'done',
               history: [
-                { role: 'user', content: 'question' },
-                { role: 'assistant', content: 'done' }
+                { role: 'user' as const, content: 'question' },
+                { role: 'assistant' as const, content: 'done' }
               ],
               historySummary: undefined,
               memoryCandidates: [],
@@ -2678,7 +2447,7 @@ describe('tuiController', () => {
           };
         },
         emit(message) {
-          emitted.push(parseBridgeMessage(message));
+          emitted.push(parseBridgeMessage(message) as HostEvent);
         }
       });
 
@@ -2706,22 +2475,15 @@ describe('tuiController', () => {
     try {
       const controller = createTuiController({
         cwd: '/tmp/qiclaw-token-summary-raw',
-        runtime: {
-          provider: { name: 'openai', model: 'gpt-test' },
-          availableTools: [],
-          systemPrompt: 'system prompt',
-          cwd: '/tmp/qiclaw-token-summary-raw',
-          maxToolRounds: 3,
-          observer: { record() {} }
-        },
+        runtime: createTestRuntime('/tmp/qiclaw-token-summary-raw'),
         checkpointStore: {
           getLatest() {
             return undefined;
           },
           save() {}
         },
-        prepareSessionMemory: vi.fn(async () => undefined),
-        captureTurnMemory: vi.fn(async () => ({ saved: false, checkpointState: undefined })),
+        prepareSessionMemory: vi.fn(async () => createPreparedMemoryResult('session-mock')),
+        captureTurnMemory: vi.fn(async () => createCaptureMemoryResult('session-mock')),
         createSessionId: () => 'session-token-summary-raw',
         executeTurn: vi.fn(async (input) => {
           input.observer?.record({
@@ -2763,47 +2525,12 @@ describe('tuiController', () => {
           });
 
           return {
-            stopReason: 'stopped',
-            finalAnswer: 'stopped',
-            history: [
-              { role: 'user', content: 'stop now' },
-              { role: 'assistant', content: 'stopped' }
-            ],
-            historySummary: undefined,
-            memoryCandidates: [],
-            structuredOutputParsed: false,
-            toolRoundsUsed: 0,
-            doneCriteria: {
-              goal: 'stop now',
-              checklist: ['stop now'],
-              requiresNonEmptyFinalAnswer: true,
-              requiresToolEvidence: false,
-              requiresSubstantiveFinalAnswer: false,
-              forbidSuccessAfterToolErrors: false
-            },
-            verification: {
-              isVerified: false,
-              finalAnswerIsNonEmpty: true,
-              finalAnswerIsSubstantive: true,
-              toolEvidenceSatisfied: true,
-              noUnresolvedToolErrors: true,
-              toolMessagesCount: 0,
-              checks: []
-            },
-            turnStream: (async function* (): AsyncIterable<TurnEvent> {
-              yield { type: 'assistant_message_completed', text: 'stopped' };
-            })(),
-            finalResult: Promise.resolve({
-              stopReason: 'stopped',
+            ...createTurnResult({
               finalAnswer: 'stopped',
               history: [
-                { role: 'user', content: 'stop now' },
-                { role: 'assistant', content: 'stopped' }
+                { role: 'user' as const, content: 'stop now' },
+                { role: 'assistant' as const, content: 'stopped' }
               ],
-              historySummary: undefined,
-              memoryCandidates: [],
-              structuredOutputParsed: false,
-              toolRoundsUsed: 0,
               doneCriteria: {
                 goal: 'stop now',
                 checklist: ['stop now'],
@@ -2821,11 +2548,42 @@ describe('tuiController', () => {
                 toolMessagesCount: 0,
                 checks: []
               }
+            }),
+            historySummary: undefined,
+            turnStream: (async function* (): AsyncIterable<TurnEvent> {
+              yield { type: 'assistant_message_completed', text: 'stopped' };
+            })(),
+            finalResult: Promise.resolve({
+              ...createTurnResult({
+                finalAnswer: 'stopped',
+                history: [
+                  { role: 'user' as const, content: 'stop now' },
+                  { role: 'assistant' as const, content: 'stopped' }
+                ],
+                doneCriteria: {
+                  goal: 'stop now',
+                  checklist: ['stop now'],
+                  requiresNonEmptyFinalAnswer: true,
+                  requiresToolEvidence: false,
+                  requiresSubstantiveFinalAnswer: false,
+                  forbidSuccessAfterToolErrors: false
+                },
+                verification: {
+                  isVerified: false,
+                  finalAnswerIsNonEmpty: true,
+                  finalAnswerIsSubstantive: true,
+                  toolEvidenceSatisfied: true,
+                  noUnresolvedToolErrors: true,
+                  toolMessagesCount: 0,
+                  checks: []
+                }
+              }),
+              historySummary: undefined
             })
           };
         }),
         emit(message) {
-          emitted.push(parseBridgeMessage(message));
+          emitted.push(parseBridgeMessage(message) as HostEvent);
         }
       });
 
@@ -2836,7 +2594,7 @@ describe('tuiController', () => {
       expect(footerSummaries).toHaveLength(1);
       expect(footerSummaries[0]).toEqual({
         type: 'footer_summary',
-        text: 'stopped • 1 provider • 0 tools • 842 in • 61 out • 842ms'
+        text: 'completed • 1 provider • 0 tools • 842 in • 61 out • 842ms'
       });
     } finally {
       nowSpy.mockRestore();
@@ -2852,14 +2610,7 @@ describe('tuiController', () => {
 
     const controller = createTuiController({
       cwd: '/tmp/qiclaw-controller-model',
-      runtime: {
-        provider: { name: 'openai', model: 'gpt-test' },
-        availableTools: [],
-        systemPrompt: 'system prompt',
-        cwd: '/tmp/qiclaw-controller-model',
-        maxToolRounds: 3,
-        observer: { record() {} }
-      },
+      runtime: createTestRuntime('/tmp/qiclaw-controller-model'),
       checkpointStore: {
         getLatest() {
           return undefined;
@@ -2878,7 +2629,7 @@ describe('tuiController', () => {
       }),
       updateModel,
       emit(message) {
-        emitted.push(parseBridgeMessage(message));
+        emitted.push(parseBridgeMessage(message) as HostEvent);
       }
     });
 
@@ -2905,46 +2656,28 @@ describe('tuiController', () => {
   it('warns when trying to change model after the session has real history', async () => {
     const emitted: HostEvent[] = [];
     const executeTurn = vi.fn(async () => ({
-      stopReason: 'completed',
-      finalAnswer: 'answer',
-      history: [
-        { role: 'user', content: 'question' },
-        { role: 'assistant', content: 'answer' }
-      ],
-      historySummary: 'summary',
-      memoryCandidates: [],
-      structuredOutputParsed: false,
-      toolRoundsUsed: 0,
-      doneCriteria: {
-        goal: 'question',
-        checklist: ['question'],
-        requiresNonEmptyFinalAnswer: true,
-        requiresToolEvidence: false,
-        requiresSubstantiveFinalAnswer: false,
-        forbidSuccessAfterToolErrors: false
-      },
-      verification: {
-        isVerified: true,
-        finalAnswerIsNonEmpty: true,
-        finalAnswerIsSubstantive: true,
-        toolEvidenceSatisfied: true,
-        noUnresolvedToolErrors: true,
-        toolMessagesCount: 0,
-        checks: []
-      }
+      ...createTurnResult({
+        finalAnswer: 'answer',
+        history: [
+          { role: 'user' as const, content: 'question' },
+          { role: 'assistant' as const, content: 'answer' }
+        ],
+        doneCriteria: {
+          goal: 'question',
+          checklist: ['question'],
+          requiresNonEmptyFinalAnswer: true,
+          requiresToolEvidence: false,
+          requiresSubstantiveFinalAnswer: false,
+          forbidSuccessAfterToolErrors: false
+        }
+      }),
+      historySummary: 'summary'
     }));
     const updateModel = vi.fn(() => ({ provider: 'openai', model: 'gpt-5' }));
 
     const controller = createTuiController({
       cwd: '/tmp/qiclaw-controller-model-dirty',
-      runtime: {
-        provider: { name: 'openai', model: 'gpt-test' },
-        availableTools: [],
-        systemPrompt: 'system prompt',
-        cwd: '/tmp/qiclaw-controller-model-dirty',
-        maxToolRounds: 3,
-        observer: { record() {} }
-      },
+      runtime: createTestRuntime('/tmp/qiclaw-controller-model-dirty'),
       checkpointStore: {
         getLatest() {
           return undefined;
@@ -2961,7 +2694,7 @@ describe('tuiController', () => {
       executeTurn,
       updateModel,
       emit(message) {
-        emitted.push(parseBridgeMessage(message));
+        emitted.push(parseBridgeMessage(message) as HostEvent);
       }
     });
 
@@ -2984,14 +2717,7 @@ describe('tuiController', () => {
 
     const controller = createTuiController({
       cwd: '/tmp/qiclaw-controller-model-invalid',
-      runtime: {
-        provider: { name: 'openai', model: 'gpt-test' },
-        availableTools: [],
-        systemPrompt: 'system prompt',
-        cwd: '/tmp/qiclaw-controller-model-invalid',
-        maxToolRounds: 3,
-        observer: { record() {} }
-      },
+      runtime: createTestRuntime('/tmp/qiclaw-controller-model-invalid'),
       checkpointStore: {
         getLatest() {
           return undefined;
@@ -3010,7 +2736,7 @@ describe('tuiController', () => {
       }),
       updateModel,
       emit(message) {
-        emitted.push(parseBridgeMessage(message));
+        emitted.push(parseBridgeMessage(message) as HostEvent);
       }
     });
 

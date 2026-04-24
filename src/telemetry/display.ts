@@ -142,6 +142,20 @@ export function createCompactCliTelemetryObserver(
         pendingFooter = createPendingFooterState(pendingFooter?.durationMs, event.data);
         return;
       }
+
+      if (event.type === 'specialist_selected') {
+        options.writeActivityLine(formatSpecialistSelectedLine(event.data.kind));
+        return;
+      }
+
+      if (event.type === 'specialist_parse_failed') {
+        options.writeActivityLine(formatSpecialistParseFailedLine(event.data.kind));
+        return;
+      }
+
+      if (event.type === 'specialist_failed') {
+        options.writeActivityLine(formatSpecialistFailedLine(event.data.kind));
+      }
     },
     flushPendingFooter() {
       if (!pendingFooter) {
@@ -267,6 +281,17 @@ function formatToolCompletionStatus(
   return data.isError ? 'fail' : 'done';
 }
 
+function formatSpecialistSelectedLine(kind: 'research' | 'debug' | 'review'): string {
+  return `· using ${kind} specialist`;
+}
+
+function formatSpecialistParseFailedLine(kind: 'research' | 'debug' | 'review'): string {
+  return `· ${kind} specialist fell back to unstructured output`;
+}
+
+function formatSpecialistFailedLine(kind: 'research' | 'debug' | 'review'): string {
+  return `· ${kind} specialist failed`;
+}
 
 function formatFooterLine(
   summary: TurnSummaryTelemetryData,

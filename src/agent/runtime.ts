@@ -6,6 +6,7 @@ import { getBuiltinTools, type Tool } from '../tools/registry.js';
 import { resolveBuiltinAgentPackage } from './specRegistry.js';
 import type { AgentCapabilityClass, ResolvedAgentPackage } from './spec.js';
 import { renderAgentSystemPrompt } from './specPrompt.js';
+import type { SpecialistToolPolicy } from '../specialist/types.js';
 
 export interface AgentRuntime {
   provider: ModelProvider;
@@ -50,8 +51,16 @@ export function createAgentRuntime(options: CreateAgentRuntimeOptions): AgentRun
 }
 
 function filterToolsForSpec(tools: Tool[], resolvedPackage: ResolvedAgentPackage): Tool[] {
-  const allowedCapabilityClasses = resolvedPackage.effectivePolicy.allowedCapabilityClasses ?? [];
-  const allowedToolNames = new Set(allowedCapabilityClasses.flatMap((capabilityClass) => builtinToolNamesByCapabilityClass[capabilityClass] ?? []));
+  return filterToolsByPolicy(tools, {
+    allowedCapabilityClasses: resolvedPackage.effectivePolicy.allowedCapabilityClasses ?? []
+  });
+}
 
-  return tools.filter((tool) => allowedToolNames.has(tool.name));
+export function filterToolsByPolicy(tools: Tool[], policy: SpecialistToolPolicy): Tool[] {
+  const capabilityToolNames = new Set(
+    policy.allowedCapabilityClasses.flatMap((capabilityClass) => builtinToolNamesByCapabilityClass[capabilityClass] ?? [])
+  );
+  const explicitlyAllowedToolNames = new Set(policy.allowedToolNames ?? []);
+
+  return tools.filter((tool) => capabilityToolNames.has(tool.name) || explicitlyAllowedToolNames.has(tool.name));
 }

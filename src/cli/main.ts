@@ -46,6 +46,7 @@ import { createRepl } from './repl.js';
 import { createTelemetryEvent } from '../telemetry/observer.js';
 import type { Message } from '../core/types.js';
 import { createTuiController, type TuiController } from './tuiController.js';
+import { runSpecialistAwareTurn } from '../specialist/entrypoint.js';
 import { launchTui as launchTuiFrontend, type TuiLaunchOptions } from './tuiLauncher.js';
 import { parseBridgeMessage, type HostEvent } from './tuiProtocol.js';
 
@@ -329,7 +330,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
             promptLabel: '> ',
             readLine: options.readLine,
             async runTurn(userInput) {
-              return executeTurn({
+              return runSpecialistAwareTurn({
                 provider: runtime.provider,
                 availableTools: runtime.availableTools,
                 baseSystemPrompt: runtime.systemPrompt,
@@ -338,7 +339,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
                 maxToolRounds: runtime.maxToolRounds,
                 resolvedPackage: runtime.resolvedPackage,
                 observer: cliObserver.observer
-              });
+              }, executeTurn);
             },
             async onTurnEvent(event) {
               handleCliTurnEvent(event, assistantBlockWriter, 'compact', {
@@ -515,7 +516,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
               preparedBlueprint = undefined;
             }
 
-            const result = await executeTurn({
+            const result = await runSpecialistAwareTurn({
               provider: runtime.provider,
               availableTools: runtime.availableTools,
               baseSystemPrompt: runtime.systemPrompt,
@@ -529,7 +530,7 @@ export function buildCli(options: BuildCliOptions = {}): Cli {
               memoryText: preparedMemory?.memoryText ?? '',
               blueprintText: preparedBlueprint?.blueprintText ?? '',
               sessionId
-            });
+            }, executeTurn);
             const settledResultPromise = (result.finalResult
               ? result.finalResult
               : Promise.resolve(result))

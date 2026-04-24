@@ -32,6 +32,10 @@ export function createTaskContract(input: CreateTaskContractInput): TaskContract
 function buildExpectedEvidence(criteria: DoneCriteria): string[] {
   const evidence: string[] = [];
 
+  if (requiresStructuredSpecialistArtifact(criteria)) {
+    evidence.push('structured specialist artifact required');
+  }
+
   if (criteria.requiresToolEvidence) {
     evidence.push('at least one successful tool result');
   }
@@ -45,4 +49,12 @@ function buildExpectedEvidence(criteria: DoneCriteria): string[] {
   }
 
   return evidence;
+}
+
+function requiresStructuredSpecialistArtifact(criteria: DoneCriteria): boolean {
+  if (criteria.doneCriteriaShape === 'specialist_artifact') {
+    return true;
+  }
+
+  return criteria.evidenceRequirement?.includes('specialist artifact') ?? false;
 }

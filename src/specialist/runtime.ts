@@ -23,7 +23,7 @@ export async function executeSpecialistTurn(input: ExecuteSpecialistTurnInput): 
     baseSystemPrompt: definition.systemPrompt,
     userInput: renderSpecialistBrief(input.brief),
     cwd: input.cwd,
-    maxToolRounds: 2,
+    maxToolRounds: 10,
     observer: input.observer,
     history: []
   });
@@ -61,12 +61,23 @@ function formatArtifactForUser(artifact: SpecialistArtifact): string {
         ...artifact.likelyCauses.slice(0, 3).map((cause) => `- ${cause.title}`),
         ...artifact.proposedFixes.slice(0, 2).map((fix) => `Suggested fix: ${fix}`)
       ].join('\n');
-    case 'review':
+    case 'review': {
+      const mainFinding = artifact.findings.find((finding) => finding.severity === 'high')
+        ?? artifact.findings[0];
+      const secondaryFinding = artifact.findings.find((finding) => finding !== mainFinding);
+
       return [
-        artifact.summary,
-        ...artifact.blockingIssues.slice(0, 3).map((issue) => `Blocking: ${issue}`),
-        ...artifact.nonBlockingIssues.slice(0, 2).map((issue) => `Non-blocking: ${issue}`),
-        `Verdict: ${artifact.verdict}`
-      ].join('\n');
+        `Verdict: ${artifact.verdict}`,
+        `Summary: ${artifact.summary}`,
+        mainFinding ? `Main issue: ${mainFinding.title}` : undefined,
+        mainFinding ? `Why it matters: ${mainFinding.details}` : undefined,
+        secondaryFinding ? `Also check: ${secondaryFinding.title}` : undefined,
+        artifact.blockingIssues.length > 0 ? `Blocking: ${artifact.blockingIssues.join('; ')}` : undefined,
+        artifact.nonBlockingIssues.length > 0 && !secondaryFinding
+          ? `Also check: ${artifact.nonBlockingIssues.join('; ')}`
+          : undefined,
+        artifact.suggestedNextSteps[0] ? `Next step: ${artifact.suggestedNextSteps[0]}` : undefined
+      ].filter((line): line is string => Boolean(line && line.length > 0)).join('\n');
+    }
   }
 }

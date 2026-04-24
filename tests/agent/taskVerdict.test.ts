@@ -7,16 +7,24 @@ import { createTaskContract } from '../../src/agent/taskContract.js';
 import { createTaskVerdict } from '../../src/agent/taskVerdict.js';
 import { verifyAgentTurn } from '../../src/agent/verifier.js';
 
+function buildInspectionCompletionSpec() {
+  return {
+    completionMode: 'tool_verified_answer',
+    doneCriteriaShape: 'inspection',
+    evidenceRequirement: 'tool evidence + substantive answer',
+    stopVsDoneDistinction: 'stop only counts when inspection evidence is present',
+    maxToolRounds: 3,
+    requiresToolEvidence: true,
+    requiresSubstantiveFinalAnswer: true,
+    forbidSuccessAfterToolErrors: true
+  };
+}
+
 function buildContract(goal: string) {
   return createTaskContract({
     taskId: 'task-123',
     userInput: goal,
-    criteria: buildDoneCriteria(goal, {
-      maxToolRounds: 3,
-      requiresToolEvidence: true,
-      requiresSubstantiveFinalAnswer: true,
-      forbidSuccessAfterToolErrors: true
-    }),
+    criteria: buildDoneCriteria(goal, buildInspectionCompletionSpec()),
     createdAt: '2026-04-23T10:00:00.000Z'
   });
 }
@@ -38,12 +46,7 @@ describe('createTaskVerdict', () => {
     ] satisfies Array<Message | ToolResultMessage>;
 
     const verification = verifyAgentTurn({
-      criteria: buildDoneCriteria('Inspect the file and explain the result', {
-        maxToolRounds: 3,
-        requiresToolEvidence: true,
-        requiresSubstantiveFinalAnswer: true,
-        forbidSuccessAfterToolErrors: true
-      }),
+      criteria: buildDoneCriteria('Inspect the file and explain the result', buildInspectionCompletionSpec()),
       finalAnswer: 'The file contains one line.',
       history: history as Message[]
     });
@@ -79,12 +82,7 @@ describe('createTaskVerdict', () => {
     ] satisfies Array<Message | ToolResultMessage>;
 
     const verification = verifyAgentTurn({
-      criteria: buildDoneCriteria('Inspect the file and explain the result', {
-        maxToolRounds: 3,
-        requiresToolEvidence: true,
-        requiresSubstantiveFinalAnswer: true,
-        forbidSuccessAfterToolErrors: true
-      }),
+      criteria: buildDoneCriteria('Inspect the file and explain the result', buildInspectionCompletionSpec()),
       finalAnswer: 'Done.',
       history: history as Message[]
     });
@@ -105,12 +103,7 @@ describe('createTaskVerdict', () => {
   it('fails when required tool evidence is missing even if the answer is non-empty', () => {
     const contract = buildContract('Inspect the file and explain the result');
     const verification = verifyAgentTurn({
-      criteria: buildDoneCriteria('Inspect the file and explain the result', {
-        maxToolRounds: 3,
-        requiresToolEvidence: true,
-        requiresSubstantiveFinalAnswer: true,
-        forbidSuccessAfterToolErrors: true
-      }),
+      criteria: buildDoneCriteria('Inspect the file and explain the result', buildInspectionCompletionSpec()),
       finalAnswer: 'I checked it.',
       history: [{ role: 'user', content: 'Inspect the file and explain the result' }]
     });
@@ -131,12 +124,7 @@ describe('createTaskVerdict', () => {
   it('fails when the final answer is meta-only and substantive content is required', () => {
     const contract = buildContract('Inspect the file and explain the result');
     const verification = verifyAgentTurn({
-      criteria: buildDoneCriteria('Inspect the file and explain the result', {
-        maxToolRounds: 3,
-        requiresToolEvidence: true,
-        requiresSubstantiveFinalAnswer: true,
-        forbidSuccessAfterToolErrors: true
-      }),
+      criteria: buildDoneCriteria('Inspect the file and explain the result', buildInspectionCompletionSpec()),
       finalAnswer: 'Done.',
       history: [
         { role: 'user', content: 'Inspect the file and explain the result' },
@@ -166,12 +154,7 @@ describe('createTaskVerdict', () => {
   it('returns inconclusive when max tool rounds are reached', () => {
     const contract = buildContract('Inspect the file and explain the result');
     const verification = verifyAgentTurn({
-      criteria: buildDoneCriteria('Inspect the file and explain the result', {
-        maxToolRounds: 3,
-        requiresToolEvidence: true,
-        requiresSubstantiveFinalAnswer: true,
-        forbidSuccessAfterToolErrors: true
-      }),
+      criteria: buildDoneCriteria('Inspect the file and explain the result', buildInspectionCompletionSpec()),
       finalAnswer: 'Still working.',
       history: [{ role: 'user', content: 'Inspect the file and explain the result' }],
       turnCompleted: false

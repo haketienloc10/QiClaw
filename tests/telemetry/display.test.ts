@@ -656,6 +656,86 @@ describe('createCompactCliTelemetryObserver', () => {
     expect(lines).toEqual(['· Read inspect secret.txt']);
   });
 
+  it('renders specialist selection as a compact activity line', () => {
+    const lines: string[] = [];
+    const observer = createCompactCliTelemetryObserver({
+      writeActivityLine(text) {
+        lines.push(text);
+      },
+      writeFooterLine(text) {
+        lines.push(text);
+      }
+    });
+
+    observer.record(createTelemetryEvent('specialist_selected', 'provider_decision', {
+      turnId: 'turn-specialist',
+      providerRound: 1,
+      toolRound: 0,
+      sessionId: 'session-1',
+      kind: 'review',
+      routeReason: 'explicit',
+      matchedRule: '/review',
+      contextChars: 128,
+      historyMessageCount: 4
+    }));
+
+    expect(lines).toEqual(['· using review specialist']);
+  });
+
+  it('renders specialist parse fallback as a compact activity line', () => {
+    const lines: string[] = [];
+    const observer = createCompactCliTelemetryObserver({
+      writeActivityLine(text) {
+        lines.push(text);
+      },
+      writeFooterLine(text) {
+        lines.push(text);
+      }
+    });
+
+    observer.record(createTelemetryEvent('specialist_parse_failed', 'response_composition', {
+      turnId: 'turn-specialist',
+      providerRound: 1,
+      toolRound: 0,
+      sessionId: 'session-1',
+      kind: 'debug',
+      routeReason: 'heuristic',
+      matchedRule: 'debug_keywords',
+      contextChars: 128,
+      historyMessageCount: 4,
+      fallbackReason: 'invalid_json'
+    }));
+
+    expect(lines).toEqual(['· debug specialist fell back to unstructured output']);
+  });
+
+  it('renders explicit specialist failure as a compact activity line', () => {
+    const lines: string[] = [];
+    const observer = createCompactCliTelemetryObserver({
+      writeActivityLine(text) {
+        lines.push(text);
+      },
+      writeFooterLine(text) {
+        lines.push(text);
+      }
+    });
+
+    observer.record(createTelemetryEvent('specialist_failed', 'completion_check', {
+      turnId: 'turn-specialist',
+      providerRound: 1,
+      toolRound: 0,
+      sessionId: 'session-1',
+      kind: 'review',
+      routeReason: 'explicit',
+      matchedRule: '/review',
+      contextChars: 128,
+      historyMessageCount: 4,
+      failureReason: 'execution_error'
+    }));
+
+    expect(lines).toEqual(['· review specialist failed']);
+  });
+
   it('renders a minimal footer from turn summary and omits zero tools', () => {
     const lines: string[] = [];
     const observer = createCompactCliTelemetryObserver({

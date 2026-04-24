@@ -88,11 +88,32 @@ export async function runSpecialistOrchestrator<TMainResult = unknown>(
   );
 
   const startedAt = Date.now();
-  const result = await input.executeSpecialistTurn({
-    brief,
-    availableTools: specialistTools,
-    observer
-  });
+  let result: Awaited<ReturnType<typeof input.executeSpecialistTurn>>;
+
+  try {
+    result = await input.executeSpecialistTurn({
+      brief,
+      availableTools: specialistTools,
+      observer
+    });
+  } catch (error) {
+    observer.record(
+      createTelemetryEvent('specialist_failed', 'completion_check', {
+        turnId: input.parentTaskId ?? 'specialist',
+        providerRound: 0,
+        toolRound: 0,
+        sessionId: input.sessionId,
+        parentTaskId: input.parentTaskId,
+        kind: routeDecision.specialist,
+        routeReason: routeDecision.reason,
+        matchedRule: routeDecision.matchedRule,
+        contextChars,
+        historyMessageCount: input.history.length,
+        failureReason: error instanceof Error && error.message.length > 0 ? error.message : 'specialist_execution_failed'
+      })
+    );
+    throw error;
+  }
 
   if (!result.parsed) {
     observer.record(

@@ -7,6 +7,9 @@ describe('routeSpecialist', () => {
     const decision = routeSpecialist('Find and analyze the auth flow in this codebase.');
 
     expect(decision.kind).toBe('specialist');
+    if (decision.kind !== 'specialist') {
+      throw new Error('expected specialist route');
+    }
     expect(decision.specialist).toBe('research');
     expect(decision.reason).toBe('heuristic');
   });
@@ -15,6 +18,9 @@ describe('routeSpecialist', () => {
     const decision = routeSpecialist('Investigate this stack trace and find the root cause of the crash.');
 
     expect(decision.kind).toBe('specialist');
+    if (decision.kind !== 'specialist') {
+      throw new Error('expected specialist route');
+    }
     expect(decision.specialist).toBe('debug');
     expect(decision.reason).toBe('heuristic');
   });
@@ -23,6 +29,9 @@ describe('routeSpecialist', () => {
     const decision = routeSpecialist('Please review this patch and check invariants for regressions.');
 
     expect(decision.kind).toBe('specialist');
+    if (decision.kind !== 'specialist') {
+      throw new Error('expected specialist route');
+    }
     expect(decision.specialist).toBe('review');
     expect(decision.reason).toBe('heuristic');
   });
@@ -31,6 +40,9 @@ describe('routeSpecialist', () => {
     const decision = routeSpecialist('/review Find and analyze this module for issues.');
 
     expect(decision.kind).toBe('specialist');
+    if (decision.kind !== 'specialist') {
+      throw new Error('expected specialist route');
+    }
     expect(decision.specialist).toBe('review');
     expect(decision.reason).toBe('explicit');
   });

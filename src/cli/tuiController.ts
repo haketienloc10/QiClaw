@@ -26,6 +26,7 @@ import { buildSlashCommandCatalog, normalizeSlashCommandInput, resolveSlashComma
 import { runDirectCommand, type DirectCommandRequest } from './directCommands.js';
 import { mapTurnEventToBridgeEvent, createTranscriptSeed } from './tuiTranscriptMapper.js';
 import { serializeBridgeMessage, type FrontendAction, type HostEvent, type TranscriptCell } from './tuiProtocol.js';
+import { runSpecialistAwareTurn } from '../specialist/entrypoint.js';
 
 export interface TuiControllerOptions {
   cwd: string;
@@ -445,7 +446,7 @@ export function createTuiController(options: TuiControllerOptions): TuiControlle
     }
 
     try {
-      const result = await executeTurn({
+      const result = await runSpecialistAwareTurn({
         provider: options.runtime.provider,
         availableTools: options.runtime.availableTools,
         baseSystemPrompt: options.runtime.systemPrompt,
@@ -459,7 +460,7 @@ export function createTuiController(options: TuiControllerOptions): TuiControlle
         memoryText: preparedMemory?.memoryText ?? '',
         blueprintText: preparedBlueprint?.blueprintText ?? '',
         sessionId
-      });
+      }, executeTurn);
       const resultWithSummary = result as RunAgentTurnResult & {
         historySummary?: string;
         turnStream?: AsyncIterable<TurnEvent>;

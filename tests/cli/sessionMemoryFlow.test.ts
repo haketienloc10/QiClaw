@@ -126,6 +126,8 @@ describe('interactive session memory flow', () => {
           { role: 'assistant', content: 'I will remember that you use neovim.' }
         ],
         historySummary: 'editor preference stored',
+        memoryCandidates: [],
+        structuredOutputParsed: false,
         toolRoundsUsed: 0,
         doneCriteria: {
           goal: input.userInput,
@@ -260,7 +262,6 @@ describe('interactive session memory flow', () => {
             { role: 'user', content: input.userInput },
             { role: 'assistant', content: finalAnswer }
           ],
-          memoryCandidates: [],
           structuredOutputParsed: false,
           historySummary: 'editor preference stored',
           toolRoundsUsed: 0,
@@ -838,6 +839,8 @@ describe('interactive session memory flow', () => {
           { role: 'assistant', content: 'I will remember that you deploy to staging first.' }
         ],
         historySummary: 'staging deployment preference stored',
+        memoryCandidates: [],
+        structuredOutputParsed: false,
         toolRoundsUsed: 0,
         doneCriteria: {
           goal: input.userInput,
@@ -1118,8 +1121,6 @@ describe('interactive session memory flow', () => {
       runTurn: async (input) => {
         runInputs.push({
           historyLength: input.history?.length ?? 0,
-          memoryCandidates: [],
-          structuredOutputParsed: false,
           historySummary: input.historySummary
         });
 
@@ -1197,6 +1198,8 @@ describe('interactive session memory flow', () => {
           stopReason: 'completed',
           finalAnswer: 'one-shot answer',
           history: [],
+          memoryCandidates: [],
+          structuredOutputParsed: false,
           toolRoundsUsed: 0,
           doneCriteria: {
             goal: input.userInput,
